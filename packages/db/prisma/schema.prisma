@@ -1,0 +1,224 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated"
+  moduleFormat = "esm"
+  runtime  = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────── Auth (NextAuth / Auth.js) ─────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  nickname      String?
+  role          Role      @default(PLAYER)
+  createdAt     DateTime  @default(now())
+
+  accounts     Account[]
+  sessions     Session[]
+  stats        PlayerStats?
+  results      SessionResult[]
+  entries      TournamentEntry[]
+  tournaments  Tournament[]      @relation("TournamentCreator")
+  leaderboard  LeaderboardEntry[]
+}
+
+enum Role {
+  PLAYER
+  ADMIN
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ───────────────────────── Game content ─────────────────────────
+
+enum MonumentCategory {
+  ancient
+  religious
+  tower
+  statue
+  skyscraper
+  bridge
+  landmark
+}
+
+/// Editable copy of the monument catalogue (admin page). The server merges this
+/// table over the built-in dataset at boot, so new monuments can be added without a deploy.
+model Monument {
+  id          String           @id
+  name        String
+  country     String
+  heightM     Float
+  heightNote  String           @default("")
+  category    MonumentCategory
+  tier        Int              @default(2)
+  funFact     String           @default("")
+  /// Original SVG silhouette: path in a (w × 100) box, ground at y=100.
+  silhouetteW Float            @default(30)
+  silhouetteD String           @default("")
+  imageUrl    String?
+  imageAttribution String?
+  enabled     Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+// ───────────────────────── Results & stats ─────────────────────────
+
+/// One player's result for one 10-round session (public level room or tournament stage).
+model SessionResult {
+  id           String   @id @default(cuid())
+  sessionId    String
+  roomId       String
+  levelId      Int
+  /// "user:<id>" or "guest:<id>" — stable identity key used by leaderboards.
+  playerKey    String
+  userId       String?
+  nickname     String
+  points       Int
+  rank         Int
+  playersCount Int
+  roundsPlayed Int
+  avgError     Float
+  bestError    Float
+  won          Boolean
+  tournamentId String?
+  stage        Int?
+  createdAt    DateTime @default(now())
+
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tournament Tournament? @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId])
+  @@index([playerKey, createdAt])
+  @@index([createdAt])
+  @@index([tournamentId, stage])
+}
+
+/// Denormalised per-identity aggregate used by the profile page.
+model PlayerStats {
+  playerKey    String   @id
+  userId       String?  @unique
+  nickname     String
+  gamesPlayed  Int      @default(0)
+  wins         Int      @default(0)
+  totalPoints  Int      @default(0)
+  roundsPlayed Int      @default(0)
+  errorSum     Float    @default(0)
+  bestError    Float?
+  updatedAt    DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+/// Point ledger for global leaderboards (daily / weekly / all-time are SUM() over createdAt windows).
+model LeaderboardEntry {
+  id        String   @id @default(cuid())
+  playerKey String
+  userId    String?
+  nickname  String
+  points    Int
+  levelId   Int
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([playerKey])
+}
+
+// ───────────────────────── Tournaments ─────────────────────────
+
+enum TournamentStatus {
+  SCHEDULED
+  REGISTRATION
+  QUALIFYING
+  FINAL
+  FINISHED
+  CANCELLED
+}
+
+model Tournament {
+  id          String           @id @default(cuid())
+  name        String
+  levelId     Int
+  startsAt    DateTime
+  status      TournamentStatus @default(SCHEDULED)
+  /// Qualifying: players are split into rooms of up to `qualifyingRoomSize`; `advanceCount` advance.
+  qualifyingRounds   Int @default(5)
+  finalRounds        Int @default(10)
+  advanceCount       Int @default(8)
+  qualifyingRoomSize Int @default(20)
+  isPrivate   Boolean @default(false)
+  inviteCode  String? @unique
+  isRecurring Boolean @default(false)
+  createdById String?
+  createdBy   User?  @relation("TournamentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  finishedAt  DateTime?
+  winnerKey   String?
+  winnerName  String?
+
+  entries TournamentEntry[]
+  results SessionResult[]
+
+  @@index([startsAt, status])
+}
+
+model TournamentEntry {
+  id           String   @id @default(cuid())
+  tournamentId String
+  playerKey    String
+  userId       String?
+  nickname     String
+  registeredAt DateTime @default(now())
+  qualifyingPoints Int  @default(0)
+  qualifyingAvgError Float?
+  advanced     Boolean  @default(false)
+  finalPoints  Int      @default(0)
+  finalRank    Int?
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  user       User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([tournamentId, playerKey])
+}

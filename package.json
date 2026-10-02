@@ -1,0 +1,21 @@
+{
+  "name": "monumental",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @monumental/web --filter @monumental/server dev",
+    "dev:web": "pnpm --filter @monumental/web dev",
+    "dev:server": "pnpm --filter @monumental/server dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @monumental/db generate",
+    "db:push": "pnpm --filter @monumental/db push",
+    "db:migrate": "pnpm --filter @monumental/db migrate",
+    "db:seed": "pnpm --filter @monumental/db seed"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

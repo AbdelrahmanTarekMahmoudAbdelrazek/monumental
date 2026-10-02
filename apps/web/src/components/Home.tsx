@@ -1,0 +1,154 @@
+"use client";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { LEVELS, MONUMENTS } from "@monumental/shared";
+import { getNickname, setNickname as persistNickname, randomNickname } from "@/lib/identity";
+
+interface Overview { levels: { levelId: number; players: number; phase: string; roundIndex: number }[]; offline?: boolean }
+
+export default function Home({ signedInNickname }: { signedInNickname?: string | null }) {
+  const router = useRouter();
+  const [nick, setNick] = useState("");
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [code, setCode] = useState("");
+  const [codeLevel, setCodeLevel] = useState(3);
+
+  useEffect(() => { setNick(signedInNickname ?? getNickname()); }, [signedInNickname]);
+  useEffect(() => {
+    let alive = true;
+    const load = () => fetch("/api/rooms").then((r) => r.json()).then((d) => alive && setOverview(d)).catch(() => {});
+    load();
+    const id = setInterval(load, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const saveNick = () => { if (!signedInNickname) persistNickname(nick || randomNickname()); };
+  const play = (lvl: number) => { saveNick(); router.push(`/play/${lvl}`); };
+  const joinPrivate = (e: React.FormEvent) => {
+    e.preventDefault();
+    const c = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (c.length < 4) return;
+    saveNick();
+    router.push(`/play/room/${encodeURIComponent(`p:${c}:${codeLevel}`)}`);
+  };
+  const createPrivate = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const c = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    setCode(c);
+  };
+
+  return (
+    <div className="mx-auto max-w-6xl px-3 md:px-4">
+      {/* hero */}
+      <section className="mt-6 grid gap-6 md:mt-10 md:grid-cols-[1.2fr_1fr] md:items-center">
+        <div>
+          <h1 className="font-display text-4xl font-black leading-tight tracking-tight md:text-6xl">
+            How tall is the <span className="text-brand-500">Taj Mahal</span>…<br />next to the <span className="text-ink-500 dark:text-ink-300">Great Pyramid</span>?
+          </h1>
+          <p className="mt-4 max-w-xl text-ink-600 dark:text-ink-200">
+            Drag the monument to the height you think is right. Everyone in the room plays the same round on the same clock — closest guess takes 3 points. {MONUMENTS.length} monuments, {LEVELS.length} levels, hourly tournaments.
+          </p>
+          <div className="mt-5 flex flex-wrap items-end gap-3">
+            <div>
+              <label className="label">Your nickname</label>
+              <input className="input w-56" value={nick} maxLength={20} disabled={!!signedInNickname} onChange={(e) => setNick(e.target.value)} onBlur={saveNick} placeholder="Nickname" />
+            </div>
+            <button className="btn-primary" onClick={() => play(1)}>Play now →</button>
+            <Link href="/solo" className="btn-ghost" onClick={saveNick}>Practice solo</Link>
+          </div>
+          {overview?.offline && <p className="mt-3 text-xs font-semibold text-rose-500">Game server is offline — multiplayer unavailable. Practice mode still works.</p>}
+        </div>
+        <HeroArt />
+      </section>
+
+      {/* levels */}
+      <section className="mt-10">
+        <div className="flex items-end justify-between">
+          <h2 className="text-xl font-black">Choose a level</h2>
+          <span className="text-xs text-ink-500 dark:text-ink-300">Live rooms · {overview?.levels.reduce((a, l) => a + l.players, 0) ?? 0} players online</span>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {LEVELS.map((l) => {
+            const live = overview?.levels.find((x) => x.levelId === l.id);
+            return (
+              <button key={l.id} onClick={() => play(l.id)} className="card group text-left transition hover:-translate-y-0.5 hover:shadow-xl">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-brand-600">Level {l.id}</div>
+                    <div className="text-lg font-black">{l.name}</div>
+                  </div>
+                  <div className="text-right text-xs text-ink-500 dark:text-ink-300">
+                    <div className="font-bold text-ink-800 dark:text-ink-50">{l.timerSec}s</div>
+                    <div>{{ full: "grid + ruler", ruler: "ruler", none: "no helpers", silhouette: "silhouettes" }[l.helpers]}</div>
+                  </div>
+                </div>
+                <p className="mt-2 text-sm text-ink-600 dark:text-ink-200">{l.tagline}</p>
+                <div className="mt-3 flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1 text-ink-500 dark:text-ink-300"><span className={`inline-block h-2 w-2 rounded-full ${live?.players ? "bg-emerald-500" : "bg-ink-300"}`} />{live?.players ?? 0} playing{live && live.roundIndex >= 0 && live.phase !== "finished" ? ` · round ${live.roundIndex + 1}` : ""}</span>
+                  <span className="font-bold text-brand-600 group-hover:underline">Join →</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* private rooms */}
+      <section className="mt-10 grid gap-4 md:grid-cols-2">
+        <form onSubmit={joinPrivate} className="card">
+          <h3 className="text-lg font-black">Private room with friends</h3>
+          <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">Share a code — everyone with it lands in the same room, rounds in sync.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <input className="input w-36 uppercase tracking-widest" placeholder="CODE" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={10} />
+            <select className="input w-40" value={codeLevel} onChange={(e) => setCodeLevel(Number(e.target.value))}>
+              {LEVELS.map((l) => <option key={l.id} value={l.id}>L{l.id} {l.name}</option>)}
+            </select>
+            <button className="btn-primary" type="submit">Join</button>
+            <button className="btn-ghost" type="button" onClick={createPrivate}>New code</button>
+          </div>
+          {code && <p className="mt-2 text-xs text-ink-500 dark:text-ink-300">Invite link: <code className="rounded bg-ink-100 px-1 dark:bg-ink-800">{typeof window !== "undefined" ? window.location.origin : ""}/play/room/{`p:${code}:${codeLevel}`}</code></p>}
+        </form>
+        <div className="card">
+          <h3 className="text-lg font-black">Tournaments</h3>
+          <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">Hourly open tournaments with qualifiers and a final, or schedule a private one for your group.</p>
+          <Link href="/tournaments" className="btn-primary mt-3">See tournaments →</Link>
+        </div>
+      </section>
+
+      <section className="mt-10 grid gap-3 text-sm text-ink-600 dark:text-ink-200 sm:grid-cols-3">
+        <div className="card"><b className="text-ink-900 dark:text-ink-50">Scoring</b><br />Error = |your % − real %|. Closest gets 3, 2nd and 3rd get 1. Ties share points. Scored on the server.</div>
+        <div className="card"><b className="text-ink-900 dark:text-ink-50">Difficulty</b><br />Famous → obscure monuments, wide → razor-thin ratios, 30s → 8s timers, grid → ruler → nothing → silhouettes.</div>
+        <div className="card"><b className="text-ink-900 dark:text-ink-50">Fair play</b><br />The real answer never leaves the server until the reveal. Timers run on the server clock.</div>
+      </section>
+    </div>
+  );
+}
+
+function HeroArt() {
+  const base = MONUMENTS.find((m) => m.id === "great_pyramid")!;
+  const target = MONUMENTS.find((m) => m.id === "taj_mahal")!;
+  const ppm = 1.1;
+  const groundY = 180;
+  const bh = base.heightM * ppm, bw = (base.silhouette.w / 100) * bh;
+  const th = target.heightM * ppm, tw = (target.silhouette.w / 100) * th;
+  return (
+    <div className="relative overflow-hidden rounded-3xl shadow-xl ring-1 ring-ink-900/10 dark:ring-white/10">
+      <svg viewBox="0 0 420 220" className="block w-full">
+        <defs>
+          <linearGradient id="hsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" className="[stop-color:#bfe3ff] dark:[stop-color:#0d1b3a]" /><stop offset="1" className="[stop-color:#fff3e0] dark:[stop-color:#2b2446]" /></linearGradient>
+          <linearGradient id="hg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" className="[stop-color:#c9b28a] dark:[stop-color:#3a3350]" /><stop offset="1" className="[stop-color:#a98e63] dark:[stop-color:#241f36]" /></linearGradient>
+        </defs>
+        <rect width="420" height={groundY} fill="url(#hsky)" />
+        <rect y={groundY} width="420" height="40" fill="url(#hg)" />
+        <g transform={`translate(${110 - bw / 2} ${groundY - bh}) scale(${bh / 100})`}><path d={base.silhouette.d} className="fill-ink-800 dark:fill-ink-200" /></g>
+        <g transform={`translate(${300 - tw / 2} ${groundY - th}) scale(${th / 100})`}><path d={target.silhouette.d} className="fill-brand-500" /></g>
+        <line x1={300 - tw / 2 - 12} x2={300 + tw / 2 + 12} y1={groundY - th} y2={groundY - th} className="stroke-brand-600" strokeDasharray="5 4" strokeWidth="1.5" />
+        <circle cx="300" cy={groundY - th} r="9" className="fill-brand-500 stroke-white" strokeWidth="2.5" />
+        <text x="300" y={groundY - th - 16} textAnchor="middle" className="fill-ink-800 text-[11px] font-bold dark:fill-ink-50">Your guess: 53%</text>
+        <text x="110" y={groundY + 26} textAnchor="middle" className="fill-ink-900 text-[10px] font-semibold dark:fill-ink-50">Great Pyramid · 138.5 m</text>
+        <text x="300" y={groundY + 26} textAnchor="middle" className="fill-ink-900 text-[10px] font-semibold dark:fill-ink-50">Taj Mahal · ?</text>
+      </svg>
+    </div>
+  );
+}
