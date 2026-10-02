@@ -12,15 +12,25 @@ DATABASE_URL=postgresql://… pnpm migrate      # prisma migrate deploy — appl
 DATABASE_URL=postgresql://… ADMIN_EMAIL=you@example.com pnpm seed
 ```
 
-## 2. Socket server → Railway
+## 2. Socket server → Railway (recommended: server + Postgres + Redis in one project)
 
-1. New project → *Deploy from GitHub repo* → root directory `/` (monorepo).
-2. Settings → Build: `corepack enable && pnpm install --frozen-lockfile && pnpm db:generate && pnpm --filter @monumental/server build`
-   Start: `node apps/server/dist/index.js`
-   (Alternatively use `apps/server/Dockerfile`.)
-3. Variables (see `apps/server/.env.example`):
-   `PORT` (Railway injects), `CORS_ORIGINS=https://your-app.vercel.app`, `SOCKET_JWT_SECRET`, `DATABASE_URL`, `REDIS_URL`, `TOURNAMENTS_ENABLED=true`, `HOURLY_TOURNAMENT_LEVEL=3`.
-4. Generate a domain; note `https://xxx.up.railway.app`. Health check: `/health`.
+1. railway.com → **New Project → Deploy from GitHub repo** → pick the repo. Railway creates one service for it.
+2. In the project, **+ Create → Database → PostgreSQL**, then **+ Create → Database → Redis**.
+3. Open the repo service → **Variables** → add:
+   - `RAILWAY_DOCKERFILE_PATH` = `apps/server/Dockerfile`
+   - `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (reference to the Postgres service)
+   - `REDIS_URL` = `${{Redis.REDIS_URL}}`
+   - `SOCKET_JWT_SECRET` = a long random string (`openssl rand -hex 32`)
+   - `CORS_ORIGINS` = `https://<your-vercel-domain>` (fill in after step 3; comma-separate several)
+   - `TOURNAMENTS_ENABLED` = `true`, `HOURLY_TOURNAMENT_LEVEL` = `3`
+4. **Settings → Networking → Generate Domain** (port 4000). Note the URL, e.g. `https://monumental-server-production.up.railway.app`.
+5. Redeploy. Health check: `https://…up.railway.app/health` → `{"ok":true,"db":true,"store":"redis"}`.
+6. Run the migration + seed once from your Mac against the Railway database (Postgres service → **Connect** → copy the *public* `DATABASE_PUBLIC_URL`):
+   ```bash
+   cd ~/monumental
+   DATABASE_URL="postgresql://…railway…" pnpm db:migrate
+   DATABASE_URL="postgresql://…railway…" pnpm db:seed
+   ```
 
 ### … or Fly.io
 
