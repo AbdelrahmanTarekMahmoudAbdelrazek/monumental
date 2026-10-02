@@ -10,6 +10,7 @@ COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
 COPY packages/db/package.json packages/db/
 RUN pnpm install --frozen-lockfile --filter @monumental/server...
+COPY tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/server ./apps/server
 RUN pnpm --filter @monumental/db generate && pnpm --filter @monumental/server build
