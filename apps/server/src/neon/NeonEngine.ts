@@ -39,6 +39,9 @@ interface Car {
   wins: number;
   /** Bot brain: re-think counter. */
   think: number;
+  /** Nose position before this tick's move (for swept collision, so fast cars can't skip through a trail). */
+  hx: number;
+  hy: number;
   /** Smoothed steering −1…1. */
   steer: number;
   /** When a crashed car comes back (0 = not waiting). */
@@ -63,6 +66,21 @@ export interface NeonEvents {
 
 const BOT_NAMES = ["Blaze", "Volt", "Nova", "Comet", "Rex", "Zippy", "Turbo Tom", "Pixel", "Bolt", "Echo"];
 const CELL = 120;
+
+/** Distance² between segments pq and ab (0 when they cross). */
+function segSeg2(px: number, py: number, qx: number, qy: number, ax: number, ay: number, bx: number, by: number) {
+  const d1x = qx - px, d1y = qy - py, d2x = bx - ax, d2y = by - ay;
+  const den = d1x * d2y - d1y * d2x;
+  if (den !== 0) {
+    const t = ((ax - px) * d2y - (ay - py) * d2x) / den;
+    const u = ((ax - px) * d1y - (ay - py) * d1x) / den;
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return 0;
+  }
+  return Math.min(
+    segDist2(px, py, ax, ay, bx, by), segDist2(qx, qy, ax, ay, bx, by),
+    segDist2(ax, ay, px, py, qx, qy), segDist2(bx, by, px, py, qx, qy),
+  );
+}
 
 /** Distance² from point p to segment ab. */
 function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
@@ -237,6 +255,8 @@ export class NeonEngine {
         c.fuel = Math.min(1, Math.max(0, c.fuel + (boosting ? -NEON.BOOST_DRAIN : NEON.BOOST_REFILL) * dt));
         const v = NEON.SPEED * (boosting ? NEON.BOOST_MULT : 1) * (c.power === "turbo" ? NEON.TURBO_MULT : 1);
         // ease steering in and out so curves are smooth instead of snapping
+        c.hx = c.x + Math.cos(c.a) * NEON.HEAD;
+        c.hy = c.y + Math.sin(c.a) * NEON.HEAD;
         const want = c.aim !== null ? aimTurn(c.a, c.aim) : c.turn;
         c.steer += (want - c.steer) * Math.min(1, dt * NEON.STEER_EASE);
         c.a += c.steer * NEON.TURN * dt;
@@ -306,26 +326,44 @@ export class NeonEngine {
     return -1;
   }
 
+  /**
+   * Only the NOSE of a car crashes: it dies when its nose (swept from last tick to this one, so it can't
+   * tunnel through a thin trail) touches another car's trail, or leaves the arena. Side-swipes, cars
+   * bumping into each other and your own trail are all safe.
+   */
   private collide() {
     const S = this.size;
     const dead: [Car, Car | null, string][] = [];
     this.cars.forEach((c, ci) => {
       if (!c.alive) return;
-      if (c.x < NEON.CAR_R || c.y < NEON.CAR_R || c.x > S - NEON.CAR_R || c.y > S - NEON.CAR_R) { dead.push([c, null, "hit the wall"]); return; }
+      const nx = c.x + Math.cos(c.a) * NEON.HEAD, ny = c.y + Math.sin(c.a) * NEON.HEAD;
+      if (nx < 0 || ny < 0 || nx > S || ny > S) { dead.push([c, null, "hit the wall"]); return; }
       if (c.power === "shield") return;
-      const hit = this.trailHit(c.x, c.y, NEON.CAR_R * 0.75 + NEON.TRAIL_W / 2, ci);
+      const hit = this.noseHit(c.hx, c.hy, nx, ny, NEON.TRAIL_W / 2 + NEON.NOSE_R, ci);
       if (hit >= 0) dead.push([c, this.cars[hit], ""]);
     });
-    // head-on
-    for (let i = 0; i < this.cars.length; i++) for (let j = i + 1; j < this.cars.length; j++) {
-      const a = this.cars[i], b = this.cars[j];
-      if (!a.alive || !b.alive) continue;
-      if (Math.hypot(a.x - b.x, a.y - b.y) < NEON.CAR_R * 1.8) {
-        if (a.power !== "shield") dead.push([a, b, "crashed head-on"]);
-        if (b.power !== "shield") dead.push([b, a, "crashed head-on"]);
+    for (const [c, k, why] of dead) if (c.alive) this.kill(c, k, why);
+  }
+
+  /** Which other car's trail does the swept nose segment touch (or −1). */
+  private noseHit(px: number, py: number, qx: number, qy: number, r: number, self: number): number {
+    const r2 = r * r;
+    const x0 = Math.floor((Math.min(px, qx) - r) / CELL), x1 = Math.floor((Math.max(px, qx) + r) / CELL);
+    const y0 = Math.floor((Math.min(py, qy) - r) / CELL), y1 = Math.floor((Math.max(py, qy) + r) / CELL);
+    for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+      const cell = this.grid.get(gx * 10007 + gy);
+      if (!cell) continue;
+      for (let k = 0; k < cell.length; k += 2) {
+        const ci = cell[k], i = cell[k + 1];
+        if (ci === self) continue;
+        const car = this.cars[ci];
+        if (!car || !car.alive) continue;
+        const a = car.trail[i - 1], b = car.trail[i];
+        if (!a || !b) continue;
+        if (segSeg2(px, py, qx, qy, a.x, a.y, b.x, b.y) < r2) return ci;
       }
     }
-    for (const [c, k, why] of dead) if (c.alive) this.kill(c, k, why);
+    return -1;
   }
 
   private kill(c: Car, killer: Car | null, why: string) {
@@ -478,7 +516,7 @@ export class NeonEngine {
     return {
       id, nickname, isBot, connections: 0, color, x: 0, y: 0, a: 0, turn: 0, boost: false, fuel: 1,
       alive: false, trail: [], len: NEON.START_LEN, power: null, powerUntil: 0, score: 0, kills: 0, wins: 0, think: 0,
-      steer: 0, respawnAt: 0, lifeKills: 0, best: 0, aim: null,
+      steer: 0, respawnAt: 0, lifeKills: 0, best: 0, aim: null, hx: 0, hy: 0,
     };
   }
 

@@ -10,6 +10,10 @@ export const NEON = {
   /** 30 ticks per second. */
   TICK_MS: 33,
   CAR_R: 11,
+  /** Distance from the car's centre to its nose — only the nose crashes into trails. */
+  HEAD: 13,
+  /** Extra reach of the nose (on top of half the trail width). */
+  NOSE_R: 2,
   TRAIL_W: 8,
   SPEED: 230,
   BOOST_MULT: 1.75,

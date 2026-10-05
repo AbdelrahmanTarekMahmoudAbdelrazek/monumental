@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { NEON, NEON_COLORS, NEON_POWERS, aimTurn, type NeonCarSnap, type NeonMeta } from "@monumental/shared";
-import { useNeon, type NeonWorld } from "@/lib/useNeon";
+import { useNeon } from "@/lib/useNeon";
 import { sfx } from "@/lib/sound";
 
 type Act = ReturnType<typeof useNeon>["act"];
@@ -31,45 +31,6 @@ function simulate(c: NeonCarSnap, secs: number, turn: number, boost: boolean, ai
 }
 const angDiff = (a: number, b: number) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
 
-function lerpAngle(a: number, b: number, t: number) {
-  let d = b - a;
-  while (d > Math.PI) d -= 2 * Math.PI;
-  while (d < -Math.PI) d += 2 * Math.PI;
-  return a + d * t;
-}
-
-/**
- * Renders the world a little in the past (INTERP_MS) and blends the two snapshots around that moment,
- * so motion stays smooth even when packets arrive unevenly. Also reports, per car, how many trail
- * points are "from the future" so the trail never pokes out ahead of the car.
- */
-function interpolate(w: NeonWorld, now: number): { cars: DrawCar[]; ahead: Map<string, number> } {
-  const buf = w.buf;
-  const ahead = new Map<string, number>();
-  if (!buf.length) return { cars: [], ahead };
-  const target = now - w.offset - NEON.INTERP_MS;
-  let i = buf.length - 1;
-  while (i > 0 && buf[i - 1].t > target) i--;
-  // buf[i-1] ≤ target < buf[i] (or clamp at the ends)
-  const b = buf[i];
-  const a = i > 0 ? buf[i - 1] : b;
-  const span = b.t - a.t;
-  const t = span > 0 ? Math.min(1, Math.max(0, (target - a.t) / span)) : 1;
-  for (let k = i; k < buf.length; k++) for (const c of buf[k].cars) if (c.alive) ahead.set(c.id, (ahead.get(c.id) ?? 0) + 1);
-  const am = new Map(a.cars.map((c) => [c.id, c]));
-  const latest = new Map(buf[buf.length - 1].cars.map((c) => [c.id, c]));
-  const cars = b.cars.map((c) => {
-    const p = am.get(c.id);
-    const l = latest.get(c.id) ?? c;
-    // HUD-ish fields always come from the newest snapshot
-    const base = { ...c, fuel: l.fuel, power: l.power, powerMs: l.powerMs, respawnMs: l.respawnMs, len: l.len };
-    if (!p || !p.alive || !c.alive) return { ...base, ang: c.a / 1000, steer: c.st / 100 };
-    return { ...base, x: p.x + (c.x - p.x) * t, y: p.y + (c.y - p.y) * t, ang: lerpAngle(p.a / 1000, c.a / 1000, t), steer: (p.st + (c.st - p.st) * t) / 100 };
-  });
-  // cars that only exist in newer snapshots
-  for (const [id, c] of latest) if (!cars.some((x) => x.id === id)) cars.push({ ...c, alive: false, ang: c.a / 1000, steer: 0 });
-  return { cars, ahead };
-}
 
 export default function NeonGame({ code, userToken }: { code: string; userToken: string | null }) {
   const g = useNeon(code, userToken);
@@ -161,7 +122,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
     let cam = { x: 0, y: 0, init: false };
     let hudAt = 0;
     // own-car prediction: base = the server state we extrapolate from; err = smoothly-decaying correction
-    const pred = { tick: -1, base: null as NeonCarSnap | null, baseAt: 0, errX: 0, errY: 0, errA: 0, alive: false };
+    const preds = new Map<string, { tick: number; base: NeonCarSnap | null; baseAt: number; errX: number; errY: number; errA: number; alive: boolean }>();
     const look = { x: 0, y: 0 };
     const smoke: { x: number; y: number; vx: number; vy: number; life: number }[] = [];
     let smokeAcc = 0;
@@ -179,45 +140,53 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       const now = performance.now();
       const dtFrame = Math.min(0.1, (now - lastFrame) / 1000);
       lastFrame = now;
-      const { cars, ahead } = interpolate(w, now);
       const size = m?.size ?? 2600;
       const colorOf = (id: string) => NEON_COLORS[(m?.players.find((p) => p.id === id)?.color ?? 0) % NEON_COLORS.length];
 
-      // ── predict my car from the newest server state + my current keys ──
+      // ── bring EVERY car to "now": extrapolate from the newest server state (mine with my live input,
+      //    others assuming they keep steering the same way). Everyone is drawn on the same clock, so what
+      //    you see touching is what the server sees touching. Corrections fade in instead of jumping. ──
       const LEAD = 0.05;
       const kk = keys.current;
       const turnNow = (kk.right ? 1 : 0) - (kk.left ? 1 : 0);
       const boostNow = kk.boost || kk.mouseBoost;
       const aimNow = turnNow !== 0 ? null : kk.aim;
-      const srv = w.cur?.cars.find((c) => c.id === meRef.current);
-      let myPath: number[] = [];
+      const paths = new Map<string, number[]>();
       let mineDraw: DrawCar | null = null;
-      if (srv && srv.alive && w.cur) {
-        const elapsed = Math.min(0.3, (now - w.curAt) / 1000 + LEAD);
-        myPath = [];
-        const ext = simulate(srv, elapsed, turnNow, boostNow, aimNow, myPath);
-        if (w.cur.tick !== pred.tick) {
-          // a new server state arrived: carry over the visual difference so the car never jumps
-          if (pred.base && pred.alive) {
-            const old = simulate(pred.base, Math.min(0.3, (now - pred.baseAt) / 1000 + LEAD), turnNow, boostNow, aimNow);
-            const dx = old.x + pred.errX - ext.x, dy = old.y + pred.errY - ext.y;
-            if (Math.hypot(dx, dy) < 120) { pred.errX = dx; pred.errY = dy; pred.errA = angDiff(old.a + pred.errA, ext.a); }
-            else { pred.errX = pred.errY = pred.errA = 0; }
-          } else { pred.errX = pred.errY = pred.errA = 0; }
-          pred.tick = w.cur.tick; pred.base = srv; pred.baseAt = w.curAt;
+      const drawCars: DrawCar[] = [];
+      const decay = Math.exp(-dtFrame / 0.09);
+      const elapsed = Math.min(0.3, (now - w.curAt) / 1000 + LEAD);
+      for (const srv of w.cur?.cars ?? []) {
+        let pr = preds.get(srv.id);
+        if (!pr) { pr = { tick: -1, base: null, baseAt: 0, errX: 0, errY: 0, errA: 0, alive: false }; preds.set(srv.id, pr); }
+        if (!srv.alive || !w.cur) {
+          pr.alive = false; pr.base = null;
+          drawCars.push({ ...srv, ang: srv.a / 1000, steer: 0 });
+          continue;
         }
-        pred.alive = true;
-        const decay = Math.exp(-dtFrame / 0.09);
-        pred.errX *= decay; pred.errY *= decay; pred.errA *= decay;
-        const base = cars.find((c) => c.id === srv.id);
-        mineDraw = { ...(base ?? srv), x: ext.x + pred.errX, y: ext.y + pred.errY, ang: ext.a + pred.errA, steer: ext.st, alive: true };
-        // blend the correction into the predicted trail tail too
-        for (let i = 0; i < myPath.length; i += 2) { const f = (i + 2) / myPath.length; myPath[i] += pred.errX * f; myPath[i + 1] += pred.errY * f; }
-      } else {
-        pred.alive = false;
-        pred.base = null;
+        const isMe = srv.id === meRef.current;
+        const turn = isMe ? turnNow : srv.st / 100;
+        const boost = isMe ? boostNow : srv.boosting;
+        const aim = isMe ? aimNow : null;
+        const path: number[] = [];
+        const ext = simulate(srv, elapsed, turn, boost, aim, path);
+        if (w.cur.tick !== pr.tick) {
+          if (pr.base && pr.alive) {
+            const old = simulate(pr.base, Math.min(0.3, (now - pr.baseAt) / 1000 + LEAD), isMe ? turnNow : pr.base.st / 100, isMe ? boostNow : pr.base.boosting, aim);
+            const dx = old.x + pr.errX - ext.x, dy = old.y + pr.errY - ext.y;
+            if (Math.hypot(dx, dy) < 120) { pr.errX = dx; pr.errY = dy; pr.errA = angDiff(old.a + pr.errA, ext.a); }
+            else { pr.errX = pr.errY = pr.errA = 0; }
+          } else { pr.errX = pr.errY = pr.errA = 0; }
+          pr.tick = w.cur.tick; pr.base = srv; pr.baseAt = w.curAt;
+        }
+        pr.alive = true;
+        pr.errX *= decay; pr.errY *= decay; pr.errA *= decay;
+        for (let i = 0; i < path.length; i += 2) { const f = (i + 2) / path.length; path[i] += pr.errX * f; path[i + 1] += pr.errY * f; }
+        paths.set(srv.id, path);
+        const d: DrawCar = { ...srv, x: ext.x + pr.errX, y: ext.y + pr.errY, ang: ext.a + pr.errA, steer: ext.st, alive: true };
+        drawCars.push(d);
+        if (isMe) mineDraw = d;
       }
-      const drawCars = mineDraw ? cars.map((c) => (c.id === mineDraw!.id ? mineDraw! : c)) : cars;
       const trace = (window as unknown as { __ndTrace?: number[][] }).__ndTrace;
       if (trace && mineDraw) trace.push([now, mineDraw.x, mineDraw.y]);
 
@@ -298,15 +267,14 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
         if (!c.alive) continue;
         const tr = w.trails.get(c.id);
         if (!tr || tr.length < 2) continue;
-        const isMine = c === mineDraw;
+
         const col = colorOf(c.id);
         ctx.beginPath();
         ctx.moveTo(tr[0], tr[1]);
         // skip points newer than the moment we're drawing, then end exactly at the car
-        const end = isMine ? tr.length : tr.length - 2 * (ahead.get(c.id) ?? 0);
-        if (end < 2) continue;
-        for (let i = 2; i < end; i += 2) ctx.lineTo(tr[i], tr[i + 1]);
-        if (isMine) for (let i = 0; i < myPath.length; i += 4) ctx.lineTo(myPath[i], myPath[i + 1]);
+        for (let i = 2; i < tr.length; i += 2) ctx.lineTo(tr[i], tr[i + 1]);
+        const pth = paths.get(c.id) ?? [];
+        for (let i = 0; i < pth.length; i += 4) ctx.lineTo(pth[i], pth[i + 1]);
         ctx.lineTo(c.x, c.y);
         ctx.strokeStyle = col.trail + "33";
         ctx.lineWidth = NEON.TRAIL_W * 2.6;
