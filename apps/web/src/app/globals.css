@@ -24,3 +24,5 @@ html.dark body { background-image: radial-gradient(60% 50% at 50% -10%, rgba(249
 @keyframes slideL { from { transform: translateX(-24px); opacity: 0 } to { transform: none; opacity: 1 } }
 @keyframes slideR { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }
 @keyframes glow { 0%, 100% { opacity: .2 } 50% { opacity: .6 } }
+@keyframes riverFlow { from { transform: translateX(0) } to { transform: translateX(-160px) } }
+@keyframes sway { 0%, 100% { transform: rotate(-4deg) } 50% { transform: rotate(4deg) } }

@@ -56,6 +56,7 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
             </div>
             <button className="btn-primary" onClick={() => play(12)}>Play Mixed →</button>
             <button className="btn-ghost" onClick={() => play(25)}>Which is more?</button>
+            <Link href="/host" className="btn-ghost" onClick={saveNick}>Host a game</Link>
             <Link href="/solo" className="btn-ghost" onClick={saveNick}>Practice solo</Link>
           </div>
           {overview?.offline && <p className="mt-3 text-xs font-semibold text-rose-500">Game server is offline — multiplayer unavailable. Practice mode still works.</p>}
@@ -86,7 +87,7 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
             <h2 className="text-xl font-black">Which is more?</h2>
-            <p className="text-sm text-ink-500 dark:text-ink-300">Two cards, one tap. Higher IMDb rating, taller celebrity, older invention, bigger country, more people.</p>
+            <p className="text-sm text-ink-500 dark:text-ink-300">Two cards, one tap. Higher IMDb rating, taller celebrity, older invention, bigger country, more people, longer river, heavier animal.</p>
           </div>
           <Link href="/duel" className="btn-ghost text-sm" onClick={saveNick}>Solo streak →</Link>
         </div>
@@ -103,7 +104,10 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
       <section className="mt-10 grid gap-4 md:grid-cols-2">
         <form onSubmit={joinPrivate} className="card">
           <h3 className="text-lg font-black">Private room with friends</h3>
-          <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">Share a code — everyone with it lands in the same room, rounds in sync.</p>
+          <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
+            Best option: <Link href="/host" className="font-bold text-brand-600 hover:underline">host a game</Link> — choose the game, categories, time per round and number of rounds, share the invite link, and start when everyone is in.
+            Or use a quick code below (starts automatically).
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <input className="input w-36 uppercase tracking-widest" placeholder="CODE" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={10} />
             <select className="input w-40" value={codeLevel} onChange={(e) => setCodeLevel(Number(e.target.value))}>

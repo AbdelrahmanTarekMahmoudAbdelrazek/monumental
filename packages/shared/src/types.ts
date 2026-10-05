@@ -140,4 +140,13 @@ export interface RoomState {
   result?: RoundResult;
   sessionResult?: SessionResult;
   tournament?: { id: string; name: string; stage: number; stageName: string };
+  /** Host-run custom rooms only. */
+  custom?: {
+    hostId: string;
+    settings: import("./custom").CustomRoomSettings;
+    /** Effective level config (template level with the host's overrides). */
+    level: LevelConfig;
+    /** True while the room waits for the host to press Start. */
+    waiting: boolean;
+  };
 }

@@ -47,3 +47,13 @@ Namespace: default (`/`). Transports: websocket, polling. Types live in `package
 ## REST (web app)
 
 `GET /api/socket-token` · `GET /api/leaderboard?period=daily|weekly|alltime` · `GET|PATCH /api/profile` · `GET|POST /api/tournaments` · `GET /api/tournaments/:id` · `POST|DELETE /api/tournaments/:id/register` · `GET|POST|PUT|DELETE /api/admin/monuments` (ADMIN) · `GET /api/monuments` · `GET /api/rooms` (proxy) · `/api/auth/*` (Auth.js)
+
+## Host-run custom rooms
+
+| event | payload | ack | notes |
+| --- | --- | --- | --- |
+| `create_room` | `{ settings, nickname, guestId?, userToken? }` | `{ ok, roomId?: "c:ABC123", error? }` | Creator becomes host. Settings: `name, kind ("size"\|"duel"), baseLevelId, helpers, duelCats[], timerSec (5–90), rounds (1–30), revealSec (3–20)` — normalised server-side. Invite link: `/r/ABC123`. |
+| `host_start` | – | `{ ok, error? }` | Host only; starts a 5 s countdown. Works again after a game ends ("Play again"). |
+| `host_update` | `{ settings }` | `{ ok, error? }` | Host only, while waiting / between games. |
+
+`RoomState.custom = { hostId, settings, level, waiting }`. Custom rooms never auto-start or auto-restart. If the host leaves for 15 s, hosting passes to the next connected player. Empty rooms close after 15 min.

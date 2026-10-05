@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getLevel, sizeQuestion, GROUP_LABEL, groupOf, DUEL_MAP } from "@monumental/shared";
 import DuelStage from "./DuelStage";
+import CustomLobby from "./CustomLobby";
 import { useRoom } from "@/lib/useRoom";
 import { useCatalog } from "@/lib/catalog";
 import { sfx } from "@/lib/sound";
@@ -18,7 +19,9 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
   const [lockError, setLockError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const level = useMemo(() => (state ? getLevel(state.levelId) : getLevel(levelId ?? 1)), [state, levelId]);
+  const level = useMemo(() => state?.custom?.level ?? (state ? getLevel(state.levelId) : getLevel(levelId ?? 1)), [state, levelId]);
+  const customWaiting = !!state?.custom?.waiting;
+  const revealTotalMs = (state?.custom?.settings.revealSec ?? 8) * 1000;
   const round = state?.round;
   const isDuel = level.kind === "duel";
   const base = round && !isDuel ? catalog.get(round.baseId) : null;
@@ -77,18 +80,18 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 p-3 md:flex-row md:p-4">
       {/* stage */}
-      <div className="relative flex flex-1 flex-col overflow-hidden rounded-3xl shadow-xl ring-1 ring-ink-900/10 dark:ring-white/10" style={{ height: "min(72vh, 640px)", minHeight: 380 }}>
+      <div className="relative flex flex-1 flex-col overflow-hidden rounded-3xl shadow-xl ring-1 ring-ink-900/10 dark:ring-white/10" style={{ height: customWaiting ? "auto" : "min(72vh, 640px)", minHeight: customWaiting ? 620 : 380 }}>
         {/* top bar */}
         <div className="pointer-events-none absolute left-3 top-3 z-10 hidden items-center gap-3 sm:flex">
           <div className="rounded-full bg-white/85 px-3 py-1 text-xs font-bold shadow backdrop-blur dark:bg-ink-900/80">
-            L{level.id} · {level.name}
+            {state?.custom ? `🔒 ${level.name}` : `L${level.id} · ${level.name}`}
             {state && state.roundIndex >= 0 && <span className="ml-2 text-ink-500 dark:text-ink-300">Round {state.roundIndex + 1}/{state.roundsPerSession}</span>}
           </div>
           {!connected && <span className="rounded-full bg-rose-500 px-2 py-1 text-xs font-bold text-white">reconnecting…</span>}
         </div>
         <div className="absolute right-3 top-3 z-10">
           {state?.phase === "round" && <TimerRing endsAt={state.phaseEndsAt} totalMs={level.timerSec * 1000} />}
-          {state?.phase === "reveal" && <TimerRing endsAt={state.phaseEndsAt} totalMs={8000} />}
+          {state?.phase === "reveal" && <TimerRing endsAt={state.phaseEndsAt} totalMs={revealTotalMs} />}
         </div>
 
         {duelA && duelB ? (
@@ -126,8 +129,14 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
         )}
 
         {isDuel && lockError && <div className="absolute bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full bg-rose-500 px-3 py-1 text-xs font-semibold text-white">{lockError}</div>}
-        {state?.phase === "lobby" && <LobbyOverlay state={state} level={level} />}
-        {state?.phase === "finished" && sessionResult && <SessionEndOverlay result={sessionResult} me={playerId} state={state} />}
+        {state && customWaiting ? (
+          <CustomLobby state={state} me={playerId} sessionResult={sessionResult} onStart={room.hostStart} onUpdate={room.hostUpdate} />
+        ) : (
+          <>
+            {state?.phase === "lobby" && <LobbyOverlay state={state} level={level} />}
+            {state?.phase === "finished" && sessionResult && <SessionEndOverlay result={sessionResult} me={playerId} state={state} />}
+          </>
+        )}
 
         {toast && <div className="absolute bottom-20 left-1/2 z-20 -translate-x-1/2 animate-rise rounded-full bg-ink-900 px-4 py-2 text-sm font-semibold text-white shadow-xl dark:bg-white dark:text-ink-900">
           {toast} {tournamentMsg?.roomId && <Link href={`/play/room/${encodeURIComponent(tournamentMsg.roomId)}`} className="ml-2 underline">Join →</Link>}

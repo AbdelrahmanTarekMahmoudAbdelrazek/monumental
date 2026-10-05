@@ -7,6 +7,7 @@ import type { AppSessionUser } from "@/lib/auth";
 const nav = [
   { href: "/", label: "Play" },
   { href: "/duel", label: "Which is more?" },
+  { href: "/host", label: "Host a game" },
   { href: "/tournaments", label: "Tournaments" },
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/profile", label: "Profile" },
@@ -22,7 +23,7 @@ export default function Header({ user }: { user: AppSessionUser | null }) {
           <Logo />
           <span className="font-display text-lg font-black tracking-tight">How Big<span className="text-brand-500">?</span></span>
         </Link>
-        <nav className="ml-2 hidden items-center gap-1 text-sm font-semibold sm:flex">
+        <nav className="ml-2 hidden items-center gap-1 whitespace-nowrap text-sm font-semibold sm:flex">
           {nav.map((n) => (
             <Link key={n.href} href={n.href} className={`rounded-full px-3 py-1.5 transition ${path === n.href ? "bg-brand-500/15 text-brand-700 dark:text-brand-300" : "text-ink-600 hover:bg-ink-100 dark:text-ink-200 dark:hover:bg-ink-800"}`}>{n.label}</Link>
           ))}
@@ -38,9 +39,9 @@ export default function Header({ user }: { user: AppSessionUser | null }) {
           )}
         </div>
       </div>
-      <nav className="flex justify-around border-t border-ink-900/5 text-xs font-semibold sm:hidden dark:border-white/10">
+      <nav className="flex gap-1 overflow-x-auto whitespace-nowrap border-t border-ink-900/5 px-2 text-xs font-semibold sm:hidden dark:border-white/10 [scrollbar-width:none]">
         {nav.map((n) => (
-          <Link key={n.href} href={n.href} className={`px-3 py-2 ${path === n.href ? "text-brand-600" : "text-ink-500 dark:text-ink-300"}`}>{n.label}</Link>
+          <Link key={n.href} href={n.href} className={`shrink-0 px-3 py-2 ${path === n.href ? "text-brand-600" : "text-ink-500 dark:text-ink-300"}`}>{n.label}</Link>
         ))}
       </nav>
     </header>

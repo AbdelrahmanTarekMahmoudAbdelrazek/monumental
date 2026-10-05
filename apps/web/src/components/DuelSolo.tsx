@@ -8,7 +8,7 @@ import DuelStage from "./DuelStage";
  * Solo streak: keep picking the right side; one wrong answer ends the run.
  * Best streak per category is remembered in this browser.
  */
-const ALL: DuelCategoryId[] = ["movies", "celebs", "older", "area", "population"];
+const ALL: DuelCategoryId[] = ["movies", "celebs", "older", "area", "population", "rivers", "heavier"];
 
 function loadBest(key: string) {
   try { return Number(localStorage.getItem(`howbig:best:${key}`) ?? 0) || 0; } catch { return 0; }

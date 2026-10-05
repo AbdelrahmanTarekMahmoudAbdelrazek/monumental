@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RoomState, RoundResult, RoundStartPayload, SessionResult } from "@monumental/shared";
+import type { RoomState, RoundResult, RoundStartPayload, SessionResult, CustomRoomSettings } from "@monumental/shared";
 import { getSocket, noteServerNow, syncClock } from "./socket";
 import { getGuestId, getNickname } from "./identity";
 
@@ -17,6 +17,9 @@ export interface RoomHook {
   lockGuess: (guessPct: number) => Promise<{ ok: boolean; error?: string }>;
   /** Duel rounds: tap a side (final answer). */
   pickSide: (side: "a" | "b") => Promise<{ ok: boolean; error?: string }>;
+  /** Custom rooms (host only). */
+  hostStart: () => Promise<{ ok: boolean; error?: string }>;
+  hostUpdate: (settings: Partial<CustomRoomSettings>) => Promise<{ ok: boolean; error?: string }>;
   myLocked: boolean;
 }
 
@@ -140,5 +143,14 @@ export function useRoom(target: { roomId?: string; levelId?: number }, userToken
     });
   }, []);
 
-  return { state, playerId, connected, error, lastResult, sessionResult, tournamentMsg, sendGuess, lockGuess, pickSide, myLocked };
+  const hostStart = useCallback(
+    () => new Promise<{ ok: boolean; error?: string }>((res) => getSocket().emit("host_start", res)),
+    [],
+  );
+  const hostUpdate = useCallback(
+    (settings: Partial<CustomRoomSettings>) => new Promise<{ ok: boolean; error?: string }>((res) => getSocket().emit("host_update", { settings }, res)),
+    [],
+  );
+
+  return { state, playerId, connected, error, lastResult, sessionResult, tournamentMsg, sendGuess, lockGuess, pickSide, hostStart, hostUpdate, myLocked };
 }

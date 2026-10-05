@@ -79,3 +79,54 @@ describe("socket e2e", () => {
     c.close();
   });
 });
+
+describe("custom host rooms", () => {
+  it("host creates a room, guests join via link, only the host can start, settings apply", async () => {
+    const host = connect();
+    const guest = connect();
+    const created = await new Promise<any>((r) =>
+      host.emit("create_room", { settings: { kind: "duel", duelCats: ["area"], timerSec: 5, rounds: 2, revealSec: 3, name: "Friday quiz" }, nickname: "Hosty", guestId: "guest_host_12345" }, r),
+    );
+    expect(created.ok).toBe(true);
+    expect(created.roomId).toMatch(/^c:[A-Z0-9]{6}$/);
+
+    const jh = await new Promise<any>((r) => host.emit("join_room", { roomId: created.roomId, nickname: "Hosty", guestId: "guest_host_12345" }, r));
+    expect(jh.ok).toBe(true);
+    expect(jh.state.custom.waiting).toBe(true);
+    expect(jh.state.custom.hostId).toBe("guest:guest_host_12345");
+    expect(jh.state.custom.level.timerSec).toBe(5);
+    expect(jh.state.custom.level.name).toBe("Friday quiz");
+
+    const jg = await new Promise<any>((r) => guest.emit("join_room", { roomId: created.roomId, nickname: "Gus", guestId: "guest_gus_12345" }, r));
+    expect(jg.ok).toBe(true);
+    // it does NOT auto-start
+    await new Promise((r) => setTimeout(r, 1500));
+    // guest can't start or change settings
+    expect((await new Promise<any>((r) => guest.emit("host_start", r))).ok).toBe(false);
+    expect((await new Promise<any>((r) => guest.emit("host_update", { settings: { rounds: 9 } }, r))).ok).toBe(false);
+    // host changes settings while waiting
+    const upd = await new Promise<any>((r) => host.emit("host_update", { settings: { kind: "duel", duelCats: ["rivers"], timerSec: 5, rounds: 1, revealSec: 3 } }, r));
+    expect(upd.ok).toBe(true);
+    const roundStart = once<any>(guest, "round_start");
+    expect((await new Promise<any>((r) => host.emit("host_start", r))).ok).toBe(true);
+    const rs = await roundStart;
+    expect(rs.kind).toBe("duel");
+    expect(rs.baseId.startsWith("rivers:")).toBe(true);
+    expect(rs.timerSec).toBe(5);
+    // after the single round, session ends and the room waits again (no auto restart)
+    const end = await once<any>(guest, "session_end");
+    expect(end.levelId).toBe(25);
+    await new Promise((r) => setTimeout(r, 300));
+    const st = await new Promise<any>((r) => guest.emit("join_room", { roomId: created.roomId, nickname: "Gus", guestId: "guest_gus_12345" }, r));
+    expect(st.state.phase).toBe("finished");
+    expect(st.state.custom.waiting).toBe(true);
+    host.close(); guest.close();
+  }, 60_000);
+
+  it("unknown custom room codes are rejected", async () => {
+    const c = connect();
+    const r = await new Promise<any>((res) => c.emit("join_room", { roomId: "c:NOPE99", nickname: "X", guestId: "guest_x_12345" }, res));
+    expect(r.ok).toBe(false);
+    c.close();
+  });
+});

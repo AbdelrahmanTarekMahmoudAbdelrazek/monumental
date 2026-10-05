@@ -1,5 +1,5 @@
 import type { Server } from "socket.io";
-import { LEVELS, type ClientToServerEvents, type ServerToClientEvents, type SessionResult } from "@monumental/shared";
+import { LEVELS, DUEL_TEMPLATE_LEVEL, type ClientToServerEvents, type ServerToClientEvents, type SessionResult, type CustomRoomSettings } from "@monumental/shared";
 import { RoomEngine, type EngineOptions, type EnginePlayer } from "./RoomEngine.js";
 import { getCatalog } from "../catalog.js";
 import { persistSession } from "../persistence.js";
@@ -25,6 +25,15 @@ export class RoomManager {
   onSessionEnd(hook: SessionEndHook) { this.sessionEndHooks.push(hook); }
 
   publicRoomId(levelId: number) { return `level:${levelId}`; }
+
+  /** Host-run room with a fresh short code: c:ABC123. */
+  createCustom(hostKey: string, settings: CustomRoomSettings): RoomEngine {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let id = "";
+    do { id = "c:" + Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join(""); } while (this.rooms.has(id));
+    const levelId = settings.kind === "duel" ? DUEL_TEMPLATE_LEVEL : settings.baseLevelId;
+    return this.create({ roomId: id, levelId, loop: true, custom: { hostKey, settings } });
+  }
 
   get(roomId: string) { return this.rooms.get(roomId); }
 

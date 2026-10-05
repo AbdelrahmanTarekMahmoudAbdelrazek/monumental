@@ -79,4 +79,13 @@ export interface ClientToServerEvents {
   leave_room: () => void;
   submit_guess: (p: SubmitGuessPayload, ack?: (a: { ok: boolean; error?: string }) => void) => void;
   ping_time: (p: { t0: number }, ack: (a: { t0: number; t1: number }) => void) => void;
+  /** Create a host-run room. The creator becomes host. */
+  create_room: (
+    p: { settings: Partial<import("./custom").CustomRoomSettings>; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; roomId?: string; error?: string }) => void,
+  ) => void;
+  /** Host only: start the game (or play again after it ends). */
+  host_start: (ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** Host only: change settings while waiting / between games. */
+  host_update: (p: { settings: Partial<import("./custom").CustomRoomSettings> }, ack: (a: { ok: boolean; error?: string }) => void) => void;
 }

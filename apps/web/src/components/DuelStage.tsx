@@ -27,6 +27,8 @@ const PALETTES: Record<string, [string, string][]> = {
   celebs: [["#3a1d0b", "#b8661c"], ["#0b2a3a", "#1f7aa6"], ["#2a0b3a", "#8a2fb0"], ["#0b3a22", "#1fa66b"], ["#3a0b1d", "#c23a5c"]],
   older: [["#3a2a0b", "#a67c1f"], ["#2a1f14", "#7a5a36"], ["#14262a", "#36707a"], ["#2a1414", "#7a3636"]],
   area: [["#0b2a3a", "#1f6ba6"], ["#0b3a2a", "#1fa67c"], ["#1d1a3a", "#4a3fb0"], ["#3a2a0b", "#b0801f"]],
+  rivers: [["#06243a", "#0e6aa6"], ["#08302a", "#159a7a"], ["#0b1d3a", "#2f5fc4"], ["#062a33", "#0f8a9e"]],
+  heavier: [["#2a2316", "#8a6a2a"], ["#1e2a16", "#5a7a2a"], ["#2a1a16", "#8a4a2a"], ["#16222a", "#3a5a6a"]],
   population: [["#3a0b26", "#b01f6b"], ["#0b263a", "#1f6bb0"], ["#26300b", "#6b8a1f"], ["#3a1a0b", "#b0521f"]],
 };
 function palette(item: DuelItem): [string, string] {
@@ -192,6 +194,31 @@ function CardArt({ item, outline }: { item: DuelItem; outline: string | null }) 
       <svg viewBox="0 0 100 100" className="pointer-events-none absolute inset-0 m-auto h-[85%] w-[85%] opacity-[.14]" aria-hidden>
         <text x="50" y="66" textAnchor="middle" fontSize="54" fontWeight="900" fill="white">{initials}</text>
         {Array.from({ length: 11 }, (_, i) => <rect key={i} x="2" y={4 + i * 9} width={i % 5 === 0 ? 10 : 5} height="1.2" fill="white" />)}
+      </svg>
+    );
+  }
+  if (item.cat === "rivers") {
+    // flowing water: layered animated waves
+    return (
+      <svg viewBox="0 0 200 200" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full opacity-[.18]" aria-hidden>
+        {[40, 75, 110, 145, 180].map((y, i) => (
+          <path key={y} d={`M-40,${y} C0,${y - 18} 40,${y + 18} 80,${y} S160,${y - 18} 200,${y} S280,${y + 18} 320,${y}`} fill="none" stroke="white" strokeWidth={6 - i * 0.6} strokeLinecap="round" style={{ animation: `riverFlow ${6 + i}s linear infinite` }} />
+        ))}
+      </svg>
+    );
+  }
+  if (item.cat === "heavier") {
+    // balance scale
+    return (
+      <svg viewBox="0 0 100 100" className="pointer-events-none absolute inset-0 m-auto h-[70%] w-[70%] opacity-[.13]" aria-hidden>
+        <rect x="48" y="14" width="4" height="66" fill="white" />
+        <rect x="30" y="80" width="40" height="6" rx="2" fill="white" />
+        <circle cx="50" cy="14" r="4" fill="white" />
+        <g style={{ transformOrigin: "50px 20px", animation: "sway 4s ease-in-out infinite" }}>
+          <rect x="12" y="18" width="76" height="3" fill="white" />
+          <path d="M14,21 L6,46 L22,46 Z M86,21 L78,46 L94,46 Z" fill="none" stroke="white" strokeWidth="1.5" />
+          <path d="M2,46 C2,54 26,54 26,46 Z M74,46 C74,54 98,54 98,46 Z" fill="white" />
+        </g>
       </svg>
     );
   }

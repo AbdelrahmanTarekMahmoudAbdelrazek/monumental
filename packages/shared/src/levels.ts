@@ -37,7 +37,9 @@ export const DUEL_LEVELS: LevelConfig[] = [
   { id: 22, name: "Which is older?", tagline: "Pyramids, inventions, apps and brands — which came first?", timerSec: 10, tiers: [1, 2, 3], ratioBand: { minLog2: 0, maxLog2: 99 }, helpers: "none", roundsPerSession: 10, mode: "duel", kind: "duel", duelCats: ["older"] },
   { id: 23, name: "Bigger country", tagline: "Which country covers more land?", timerSec: 10, tiers: [1, 2, 3], ratioBand: { minLog2: 0, maxLog2: 99 }, helpers: "none", roundsPerSession: 10, mode: "duel", kind: "duel", duelCats: ["area"] },
   { id: 24, name: "More people", tagline: "Which country has the bigger population?", timerSec: 10, tiers: [1, 2, 3], ratioBand: { minLog2: 0, maxLog2: 99 }, helpers: "none", roundsPerSession: 10, mode: "duel", kind: "duel", duelCats: ["population"] },
-  { id: 25, name: "Duel Mix", tagline: "All five duels shuffled, 7 seconds each", timerSec: 7, tiers: [1, 2, 3], ratioBand: { minLog2: 0, maxLog2: 99 }, helpers: "none", roundsPerSession: 12, mode: "duel", kind: "duel", duelCats: ["movies", "celebs", "older", "area", "population"] },
+  { id: 26, name: "Longer river", tagline: "From the Nile to the Thames — which river runs longer?", timerSec: 10, tiers: [1, 2, 3], ratioBand: { minLog2: 0, maxLog2: 99 }, helpers: "none", roundsPerSession: 10, mode: "duel", kind: "duel", duelCats: ["rivers"] },
+  { id: 27, name: "Which is heavier?", tagline: "Blue whales, hippos, house cats — which weighs more?", timerSec: 10, tiers: [1, 2, 3], ratioBand: { minLog2: 0, maxLog2: 99 }, helpers: "none", roundsPerSession: 10, mode: "duel", kind: "duel", duelCats: ["heavier"] },
+  { id: 25, name: "Duel Mix", tagline: "Every duel shuffled, 7 seconds each", timerSec: 7, tiers: [1, 2, 3], ratioBand: { minLog2: 0, maxLog2: 99 }, helpers: "none", roundsPerSession: 12, mode: "duel", kind: "duel", duelCats: ["movies", "celebs", "older", "area", "population", "rivers", "heavier"] },
 ];
 LEVELS.push(...DUEL_LEVELS);
 

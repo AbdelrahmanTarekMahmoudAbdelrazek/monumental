@@ -12,6 +12,8 @@ import {
   LOBBY_SECONDS,
   REVEAL_SECONDS,
   INTERMISSION_SECONDS,
+  buildCustomLevel,
+  type CustomRoomSettings,
   type LevelConfig,
   type RoomPhase,
   type RoomState,
@@ -55,6 +57,8 @@ export interface EngineOptions {
   roundsPerSession?: number;
   lobbySeconds?: number;
   tournament?: { id: string; name: string; stage: number; stageName: string };
+  /** Host-run room: waits for the host to press Start, never auto-restarts. */
+  custom?: { hostKey: string; settings: CustomRoomSettings };
   /** When set only these playerKeys may join (tournament rooms). */
   allowedPlayers?: Set<string>;
   catalog: () => Monument[];
@@ -84,7 +88,7 @@ export interface EngineEvents {
  */
 export class RoomEngine {
   readonly roomId: string;
-  readonly level: LevelConfig;
+  level: LevelConfig;
   readonly opts: EngineOptions;
   phase: RoomPhase = "lobby";
   phaseEndsAt = 0;
@@ -101,12 +105,16 @@ export class RoomEngine {
   private started = false;
   destroyed = false;
   private now: () => number;
+  private revealMs: number;
+  private hostTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: EngineOptions, private ev: EngineEvents) {
     this.opts = opts;
     this.roomId = opts.roomId;
-    this.level = getLevel(opts.levelId);
+    this.level = opts.custom ? buildCustomLevel(opts.custom.settings) : getLevel(opts.levelId);
     this.roundsPerSession = opts.roundsPerSession ?? this.level.roundsPerSession;
+    this.revealMs = (opts.custom?.settings.revealSec ?? REVEAL_SECONDS) * 1000;
+    if (opts.custom) this.scheduleIdle(); // a room nobody ever joins disappears
     this.now = opts.now ?? (() => Date.now());
   }
 
@@ -138,6 +146,10 @@ export class RoomEngine {
     ep.connections++;
     ep.lastSeen = this.now();
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+    if (this.opts.custom) {
+      if (p.playerKey === this.opts.custom.hostKey && this.hostTimer) { clearTimeout(this.hostTimer); this.hostTimer = null; }
+      return ep; // custom rooms wait for the host
+    }
     if (!this.started) this.startLobby();
     return ep;
   }
@@ -170,6 +182,46 @@ export class RoomEngine {
       }
     }
     if (this.connectedCount() === 0) this.scheduleIdle();
+    // Host left: give them 15 s to come back (page refresh), then hand over to the next player.
+    if (this.opts.custom && playerKey === this.opts.custom.hostKey && !this.hostTimer) {
+      this.hostTimer = setTimeout(() => {
+        this.hostTimer = null;
+        const c = this.opts.custom!;
+        const host = this.players.get(c.hostKey);
+        if (host && host.connections > 0) return;
+        const next = [...this.players.values()].find((x) => x.connections > 0);
+        if (next) { c.hostKey = next.playerKey; this.broadcastState(); }
+      }, 15_000);
+    }
+  }
+
+  // ───────────────────────── host controls (custom rooms) ─────────────────────────
+
+  get isWaiting() {
+    return !!this.opts.custom && (this.phase === "finished" || (this.phase === "lobby" && this.phaseEndsAt === 0));
+  }
+
+  hostStart(by: string): { ok: boolean; error?: string } {
+    const c = this.opts.custom;
+    if (!c) return { ok: false, error: "Not a custom room" };
+    if (by !== c.hostKey) return { ok: false, error: "Only the host can start" };
+    if (!this.isWaiting) return { ok: false, error: "A game is already running" };
+    if (this.connectedCount() === 0) return { ok: false, error: "Nobody is in the room" };
+    this.startLobby();
+    return { ok: true };
+  }
+
+  hostUpdate(by: string, settings: CustomRoomSettings): { ok: boolean; error?: string } {
+    const c = this.opts.custom;
+    if (!c) return { ok: false, error: "Not a custom room" };
+    if (by !== c.hostKey) return { ok: false, error: "Only the host can change settings" };
+    if (!this.isWaiting) return { ok: false, error: "Wait for the current game to finish" };
+    c.settings = settings;
+    this.level = buildCustomLevel(settings);
+    this.roundsPerSession = this.level.roundsPerSession;
+    this.revealMs = settings.revealSec * 1000;
+    this.broadcastState();
+    return { ok: true };
   }
 
   connectedCount() {
@@ -180,7 +232,8 @@ export class RoomEngine {
 
   private scheduleIdle() {
     if (this.idleTimer || !this.opts.loop) return;
-    this.idleTimer = setTimeout(() => this.ev.onIdle(this), 120_000);
+    // custom rooms linger longer so a host can share the link before anyone joins
+    this.idleTimer = setTimeout(() => this.ev.onIdle(this), this.opts.custom ? 15 * 60_000 : 120_000);
   }
 
   // ───────────────────────── guesses ─────────────────────────
@@ -226,12 +279,14 @@ export class RoomEngine {
     this.round = null;
     this.lastResult = null;
     for (const p of this.players.values()) { p.totalPoints = 0; p.errors = []; p.eligibleFrom = 0; }
+    if (this.opts.custom) this.roundsPerSession = this.level.roundsPerSession;
     const seed = `${this.roomId}:${this.sessionId}`;
     this.pairs = this.isDuel
       ? pickDuelPairs(this.level.duelCats ?? [], this.level.tiers, this.roundsPerSession, seed).map((p) => ({ baseId: p.aId, targetId: p.bId }))
       : pickSessionPairs(this.level, this.opts.catalog(), this.roundsPerSession, seed);
     this.roundsPerSession = Math.min(this.roundsPerSession, this.pairs.length);
-    const lobby = (this.opts.lobbySeconds ?? LOBBY_SECONDS) * 1000;
+    if (this.opts.custom) this.roundsPerSession = Math.min(this.level.roundsPerSession, this.pairs.length);
+    const lobby = (this.opts.lobbySeconds ?? (this.opts.custom ? 5 : LOBBY_SECONDS)) * 1000;
     this.phaseEndsAt = this.now() + lobby;
     this.broadcastState();
     this.setTimer(lobby, () => this.startRound());
@@ -239,6 +294,7 @@ export class RoomEngine {
 
   private startRound() {
     if (this.connectedCount() === 0 && this.opts.loop) {
+      if (this.opts.custom) { this.phase = "lobby"; this.phaseEndsAt = 0; this.round = null; this.broadcastState(); this.scheduleIdle(); return; }
       // nobody here — go back to an (unstarted) lobby and wait
       this.started = false;
       this.phase = "lobby";
@@ -321,11 +377,11 @@ export class RoomEngine {
   private finishRound(result: RoundResult) {
     this.lastResult = result;
     this.phase = "reveal";
-    this.phaseEndsAt = this.now() + REVEAL_SECONDS * 1000;
+    this.phaseEndsAt = this.now() + this.revealMs;
     this.ev.emit("round_result", result);
     this.broadcastState();
     const last = this.roundIndex >= this.roundsPerSession - 1;
-    this.setTimer(REVEAL_SECONDS * 1000, () => (last ? this.endSession() : this.startRound()));
+    this.setTimer(this.revealMs, () => (last ? this.endSession() : this.startRound()));
   }
 
   private endDuelRound(r: LiveRound, eligible: EnginePlayer[]) {
@@ -387,7 +443,7 @@ export class RoomEngine {
     this.lastSession = result;
     this.phase = "finished";
     this.round = null;
-    this.phaseEndsAt = this.now() + INTERMISSION_SECONDS * 1000;
+    this.phaseEndsAt = this.opts.custom ? 0 : this.now() + INTERMISSION_SECONDS * 1000;
     this.ev.emit("session_end", result);
     this.broadcastState();
     this.ev.onSessionEnd(this, result, players);
@@ -395,7 +451,10 @@ export class RoomEngine {
     // drop disconnected seats now that the session is over
     for (const [k, p] of this.players) if (p.connections === 0) this.players.delete(k);
 
-    if (this.opts.loop) {
+    if (this.opts.custom) {
+      // host decides when to play again
+      if (this.connectedCount() === 0) this.scheduleIdle();
+    } else if (this.opts.loop) {
       this.setTimer(INTERMISSION_SECONDS * 1000, () => {
         if (this.connectedCount() === 0) { this.started = false; this.phase = "lobby"; this.phaseEndsAt = 0; this.scheduleIdle(); return; }
         this.startLobby();
@@ -435,6 +494,9 @@ export class RoomEngine {
       result: this.phase === "reveal" ? this.lastResult ?? undefined : undefined,
       sessionResult: this.phase === "finished" ? this.lastSession ?? undefined : undefined,
       tournament: this.opts.tournament,
+      custom: this.opts.custom
+        ? { hostId: this.opts.custom.hostKey, settings: this.opts.custom.settings, level: this.level, waiting: this.isWaiting }
+        : undefined,
     };
   }
 
@@ -445,6 +507,7 @@ export class RoomEngine {
 
   destroy() {
     this.destroyed = true;
+    if (this.hostTimer) clearTimeout(this.hostTimer);
     if (this.timer) clearTimeout(this.timer);
     if (this.idleTimer) clearTimeout(this.idleTimer);
   }
