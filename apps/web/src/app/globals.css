@@ -26,3 +26,4 @@ html.dark body { background-image: radial-gradient(60% 50% at 50% -10%, rgba(249
 @keyframes glow { 0%, 100% { opacity: .2 } 50% { opacity: .6 } }
 @keyframes riverFlow { from { transform: translateX(0) } to { transform: translateX(-160px) } }
 @keyframes sway { 0%, 100% { transform: rotate(-4deg) } 50% { transform: rotate(4deg) } }
+@keyframes tileFlip { 0% { transform: rotateY(90deg) scale(.9); opacity: .4 } 60% { transform: rotateY(-12deg) scale(1.05); opacity: 1 } 100% { transform: none; opacity: 1 } }

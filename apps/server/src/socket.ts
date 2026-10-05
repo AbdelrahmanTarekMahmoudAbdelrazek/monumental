@@ -1,11 +1,12 @@
 import type { Socket } from "socket.io";
 import { z } from "zod";
-import { normaliseCustomSettings, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings } from "@monumental/shared";
+import { normaliseCustomSettings, normaliseShakSettings, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
+import type { ShakManager } from "./shak/ShakManager.js";
 import { resolveIdentity, type Identity } from "./auth.js";
 import type { RoomManager, IO } from "./room/RoomManager.js";
 import type { LiveStore } from "./store.js";
 
-type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string }>;
+type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string }>;
 
 const joinSchema = z.object({
   roomId: z.string().max(64).optional(),
@@ -23,7 +24,7 @@ const guessSchema = z.object({
   lock: z.boolean().default(false),
 });
 
-export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore) {
+export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager) {
   io.on("connection", (socket: Sock) => {
     // naive per-socket rate limit for guesses (drag streams are throttled client-side to ~10/s)
     let guessBudget = 40;
@@ -112,8 +113,75 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       }
     });
 
+    // ───────── أشك (Shak) dominoes ─────────
+    const idSchema = z.object({ nickname: z.string().max(40).default("Player"), guestId: z.string().max(64).optional(), userToken: z.string().max(2048).optional() });
+    const shakTable = () => (socket.data.shak && shak ? shak.get(socket.data.shak) : undefined);
+    const shakLeave = () => {
+      const t = shakTable();
+      if (t && socket.data.identity) t.leave(socket.data.identity.playerKey);
+      if (socket.data.shak) socket.leave(`shak:${socket.data.shak}`);
+      socket.data.shak = undefined;
+    };
+
+    socket.on("shak_create", async (raw, ack) => {
+      if (!shak) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ settings: z.record(z.string(), z.unknown()).optional() }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        if (Date.now() - lastCreate < 5000) return ack({ ok: false, error: "Slow down a little" });
+        lastCreate = Date.now();
+        const t = shak.create(identity.playerKey, normaliseShakSettings(p.settings as Partial<ShakSettings>));
+        ack({ ok: true, code: t.code });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+
+    socket.on("shak_join", async (raw, ack) => {
+      if (!shak) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ code: z.string().min(4).max(10) }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        const t = shak.get(p.code);
+        if (!t) return ack({ ok: false, error: "Table not found — ask the host for a new link" });
+        if (socket.data.shak && socket.data.shak !== t.code) shakLeave();
+        const already = socket.data.shak === t.code;
+        if (!already) {
+          const r = t.join(identity.playerKey, identity.nickname);
+          if (!r.ok) return ack(r);
+        }
+        socket.data.identity = identity;
+        socket.data.shak = t.code;
+        socket.join(`shak:${t.code}`);
+        socket.join(`player:${identity.playerKey}`);
+        ack({ ok: true, playerId: identity.playerKey, state: t.state(), hand: t.handOf(identity.playerKey) });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+
+    const shakAct = (fn: (t: NonNullable<ReturnType<typeof shakTable>>, me: string) => { ok: boolean; error?: string }) =>
+      (ack?: (a: { ok: boolean; error?: string }) => void) => {
+        const t = shakTable();
+        const me = socket.data.identity?.playerKey;
+        if (!t || !me) return ack?.({ ok: false, error: "Join a table first" });
+        if (guessBudget-- <= 0) return ack?.({ ok: false, error: "Too fast" });
+        ack?.(fn(t, me));
+      };
+    socket.on("shak_leave", () => shakLeave());
+    socket.on("shak_start", (ack) => shakAct((t, me) => t.start(me))(ack));
+    socket.on("shak_pass", (ack) => shakAct((t, me) => t.pass(me))(ack));
+    socket.on("shak_doubt", (ack) => shakAct((t, me) => t.doubt(me))(ack));
+    socket.on("shak_bot", (raw, ack) => shakAct((t, me) => (raw?.op === "remove" ? t.removeBot(me) : t.addBot(me)))(ack));
+    socket.on("shak_settings", (raw, ack) => shakAct((t, me) => t.updateSettings(me, normaliseShakSettings(raw?.settings)))(ack));
+    socket.on("shak_play", (raw, ack) => {
+      const p = z.object({ tiles: z.array(z.number().int().min(0).max(27)).max(9), number: z.number().int().min(0).max(6).optional() }).safeParse(raw);
+      if (!p.success) return ack?.({ ok: false, error: "Invalid play" });
+      shakAct((t, me) => t.play(me, p.data.tiles, p.data.number))(ack);
+    });
+
     socket.on("leave_room", () => leave());
-    socket.on("disconnect", () => { clearInterval(refill); leave(); });
+    socket.on("disconnect", () => { clearInterval(refill); leave(); shakLeave(); });
 
     function leave() {
       const { identity, roomId } = socket.data;

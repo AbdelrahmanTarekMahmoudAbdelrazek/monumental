@@ -10,6 +10,7 @@ import { registerSocketHandlers } from "./socket.js";
 import { initPersistence } from "./persistence.js";
 import { refreshCatalog, getCatalog } from "./catalog.js";
 import { TournamentScheduler } from "./tournaments/scheduler.js";
+import { ShakManager } from "./shak/ShakManager.js";
 import { LEVELS } from "@monumental/shared";
 
 export async function createServer() {
@@ -37,7 +38,8 @@ export async function createServer() {
   setInterval(() => void refreshCatalog(), 3 * 60 * 1000).unref();
 
   const rooms = new RoomManager(io, store);
-  registerSocketHandlers(io, rooms, store);
+  const shak = new ShakManager(io);
+  registerSocketHandlers(io, rooms, store, shak);
 
   let scheduler: TournamentScheduler | null = null;
   if (db && config.tournamentsEnabled) {
@@ -60,7 +62,7 @@ export async function createServer() {
   app.get("/monuments", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=60"); res.json(getCatalog()); });
   app.get("/time", (_req, res) => res.json({ now: Date.now() }));
 
-  return { app, httpServer, io, rooms, store, scheduler, db };
+  return { app, httpServer, io, rooms, store, scheduler, db, shak };
 }
 
 // Boot when run directly.

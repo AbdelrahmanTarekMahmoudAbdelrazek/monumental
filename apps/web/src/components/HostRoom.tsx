@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { DEFAULT_CUSTOM_SETTINGS, type CustomRoomSettings } from "@monumental/shared";
 import { getSocket } from "@/lib/socket";
@@ -41,6 +42,9 @@ export default function HostRoom() {
       <h1 className="text-3xl font-black">Host a game</h1>
       <p className="mt-1 text-sm text-ink-600 dark:text-ink-200">
         Set it up your way, share the invite link, and press Start when everyone is in. No schedule, no waiting for strangers.
+      </p>
+      <p className="mt-3 rounded-2xl bg-brand-500/10 px-4 py-2 text-sm">
+        Want dominoes instead? <Link href="/shak" className="font-bold text-brand-600 hover:underline">Open an أشك table →</Link>
       </p>
       <div className="card mt-5">
         <div className="mb-4">

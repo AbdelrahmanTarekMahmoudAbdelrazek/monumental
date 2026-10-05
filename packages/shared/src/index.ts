@@ -10,3 +10,4 @@ export * from "./silhouettes2";
 export * from "./catalog2";
 export * from "./duel";
 export * from "./custom";
+export * from "./shak";

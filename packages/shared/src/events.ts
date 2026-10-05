@@ -72,6 +72,10 @@ export interface ServerToClientEvents {
   session_end: (r: SessionResult) => void;
   tournament_update: (t: { tournamentId: string; status: string; stage: number; message: string; roomId?: string }) => void;
   error_msg: (e: { code: string; message: string }) => void;
+  /** أشك (Shak) dominoes. */
+  shak_state: (s: import("./shak").ShakPublicState) => void;
+  /** Your own hand (sent only to you). */
+  shak_hand: (h: { code: string; tiles: number[] }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -88,4 +92,22 @@ export interface ClientToServerEvents {
   host_start: (ack: (a: { ok: boolean; error?: string }) => void) => void;
   /** Host only: change settings while waiting / between games. */
   host_update: (p: { settings: Partial<import("./custom").CustomRoomSettings> }, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** أشك (Shak) dominoes tables. */
+  shak_create: (
+    p: { settings?: Partial<import("./shak").ShakSettings>; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; code?: string; error?: string }) => void,
+  ) => void;
+  shak_join: (
+    p: { code: string; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; error?: string; playerId?: string; state?: import("./shak").ShakPublicState; hand?: number[] }) => void,
+  ) => void;
+  shak_leave: () => void;
+  /** Host: add / remove a bot seat. */
+  shak_bot: (p: { op: "add" | "remove" }, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  shak_settings: (p: { settings: Partial<import("./shak").ShakSettings> }, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  shak_start: (ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** Play tiles face-down. `number` is required only when starting a new pile. */
+  shak_play: (p: { tiles: number[]; number?: number }, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  shak_pass: (ack: (a: { ok: boolean; error?: string }) => void) => void;
+  shak_doubt: (ack: (a: { ok: boolean; error?: string }) => void) => void;
 }
