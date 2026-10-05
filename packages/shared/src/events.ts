@@ -145,8 +145,8 @@ export interface ClientToServerEvents {
   ) => void;
   nd_leave: () => void;
   nd_act: (p: import("./neon").NeonAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
-  /** Steering: -1 left, 0 straight, 1 right. Sent on change only. */
-  nd_input: (p: { turn: number; boost: boolean }) => void;
+  /** Steering: -1 left, 0 straight, 1 right — or `aim` (radians) to steer toward the mouse. Sent on change only. */
+  nd_input: (p: { turn: number; boost: boolean; aim?: number | null }) => void;
   /** SMUGGLERS tables. */
   sm_create: (
     p: { settings?: Partial<import("./smuggle").SmuggleSettings>; nickname: string; guestId?: string; userToken?: string },

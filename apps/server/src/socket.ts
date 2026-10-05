@@ -359,7 +359,8 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       const t = ndArena();
       const me = socket.data.identity?.playerKey;
       if (!t || !me || inputBudget-- <= 0) return;
-      t.input(me, Number(raw?.turn) || 0, !!raw?.boost);
+      const aim = raw?.aim === null || raw?.aim === undefined ? null : Number(raw.aim);
+      t.input(me, Number(raw?.turn) || 0, !!raw?.boost, aim !== null && Number.isFinite(aim) ? aim : null);
     });
     const ndAction = z.discriminatedUnion("type", [
       z.object({ type: z.literal("start") }),

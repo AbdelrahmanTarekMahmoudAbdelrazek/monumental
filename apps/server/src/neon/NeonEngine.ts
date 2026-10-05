@@ -3,6 +3,7 @@ import {
   NEON_ARENAS,
   NEON_COLORS,
   NEON_POWERS,
+  aimTurn,
   type NeonAction,
   type NeonCarSnap,
   type NeonMeta,
@@ -22,7 +23,9 @@ interface Car {
   x: number;
   y: number;
   a: number;
-  turn: -1 | 0 | 1;
+  turn: number;
+  /** Mouse/touch steering target angle (null = keyboard turn). */
+  aim: number | null;
   boost: boolean;
   fuel: number;
   alive: boolean;
@@ -152,10 +155,11 @@ export class NeonEngine {
     this.pushMeta();
   }
 
-  input(id: string, turn: number, boost: boolean) {
+  input(id: string, turn: number, boost: boolean, aim: number | null = null) {
     const c = this.cars.find((x) => x.id === id);
     if (!c || c.isBot) return;
     c.turn = turn < 0 ? -1 : turn > 0 ? 1 : 0;
+    c.aim = aim !== null && Number.isFinite(aim) ? aim : null;
     c.boost = !!boost;
   }
 
@@ -211,7 +215,7 @@ export class NeonEngine {
     const p = this.spawnPoint(others);
     Object.assign(c, {
       x: p.x, y: p.y, a: Math.atan2(this.size / 2 - p.y, this.size / 2 - p.x) + (this.rnd() - 0.5) * 0.8,
-      turn: 0, steer: 0, boost: false, fuel: 1, alive: true, trail: [{ x: p.x, y: p.y }], len: NEON.START_LEN,
+      turn: 0, steer: 0, aim: null, boost: false, fuel: 1, alive: true, trail: [{ x: p.x, y: p.y }], len: NEON.START_LEN,
       power: "shield" as NeonPower, powerUntil: this.now() + NEON.SPAWN_SHIELD_MS, respawnAt: 0, lifeKills: 0,
     });
   }
@@ -233,7 +237,8 @@ export class NeonEngine {
         c.fuel = Math.min(1, Math.max(0, c.fuel + (boosting ? -NEON.BOOST_DRAIN : NEON.BOOST_REFILL) * dt));
         const v = NEON.SPEED * (boosting ? NEON.BOOST_MULT : 1) * (c.power === "turbo" ? NEON.TURBO_MULT : 1);
         // ease steering in and out so curves are smooth instead of snapping
-        c.steer += (c.turn - c.steer) * Math.min(1, dt * NEON.STEER_EASE);
+        const want = c.aim !== null ? aimTurn(c.a, c.aim) : c.turn;
+        c.steer += (want - c.steer) * Math.min(1, dt * NEON.STEER_EASE);
         c.a += c.steer * NEON.TURN * dt;
         c.x += Math.cos(c.a) * v * dt;
         c.y += Math.sin(c.a) * v * dt;
@@ -473,7 +478,7 @@ export class NeonEngine {
     return {
       id, nickname, isBot, connections: 0, color, x: 0, y: 0, a: 0, turn: 0, boost: false, fuel: 1,
       alive: false, trail: [], len: NEON.START_LEN, power: null, powerUntil: 0, score: 0, kills: 0, wins: 0, think: 0,
-      steer: 0, respawnAt: 0, lifeKills: 0, best: 0,
+      steer: 0, respawnAt: 0, lifeKills: 0, best: 0, aim: null,
     };
   }
 
@@ -498,7 +503,7 @@ export class NeonEngine {
   snapshot(full: boolean): NeonSnap {
     const t = this.now();
     const cars: NeonCarSnap[] = this.cars.map((c) => ({
-      id: c.id, x: Math.round(c.x * 10) / 10, y: Math.round(c.y * 10) / 10, a: Math.round(c.a * 100), len: Math.round(c.len),
+      id: c.id, x: Math.round(c.x * 10) / 10, y: Math.round(c.y * 10) / 10, a: Math.round(c.a * 1000), st: Math.round(c.steer * 100), len: Math.round(c.len),
       alive: c.alive, boosting: c.alive && c.boost && c.fuel > 0.02, fuel: Math.round(c.fuel * 100),
       power: c.power, powerMs: c.power ? Math.max(0, c.powerUntil - t) : 0,
       respawnMs: !c.alive && c.respawnAt ? Math.max(0, c.respawnAt - t) : 0,

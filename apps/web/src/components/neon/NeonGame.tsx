@@ -1,14 +1,35 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { NEON, NEON_COLORS, NEON_POWERS, type NeonCarSnap, type NeonMeta } from "@monumental/shared";
+import { NEON, NEON_COLORS, NEON_POWERS, aimTurn, type NeonCarSnap, type NeonMeta } from "@monumental/shared";
 import { useNeon, type NeonWorld } from "@/lib/useNeon";
 import { sfx } from "@/lib/sound";
 
 type Act = ReturnType<typeof useNeon>["act"];
 
 /** Interpolated car for drawing. */
-interface DrawCar extends NeonCarSnap { ang: number }
+interface DrawCar extends NeonCarSnap { ang: number; steer: number }
+
+/**
+ * Integrates the same physics the server uses, for `secs`, from a server state, with the local input.
+ * Used to draw your own car ahead of the network so steering feels instant.
+ */
+function simulate(c: NeonCarSnap, secs: number, turn: number, boost: boolean, aim: number | null, path?: number[]) {
+  let x = c.x, y = c.y, a = c.a / 1000, st = c.st / 100;
+  const h = 1 / 120;
+  const v = NEON.SPEED * (boost && c.fuel > 2 ? NEON.BOOST_MULT : 1) * (c.power === "turbo" ? NEON.TURBO_MULT : 1);
+  for (let left = secs; left > 1e-6; left -= h) {
+    const dt = Math.min(h, left);
+    const want = aim !== null ? aimTurn(a, aim) : turn;
+    st += (want - st) * Math.min(1, dt * NEON.STEER_EASE);
+    a += st * NEON.TURN * dt;
+    x += Math.cos(a) * v * dt;
+    y += Math.sin(a) * v * dt;
+    path?.push(x, y);
+  }
+  return { x, y, a, st };
+}
+const angDiff = (a: number, b: number) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
 
 function lerpAngle(a: number, b: number, t: number) {
   let d = b - a;
@@ -42,11 +63,11 @@ function interpolate(w: NeonWorld, now: number): { cars: DrawCar[]; ahead: Map<s
     const l = latest.get(c.id) ?? c;
     // HUD-ish fields always come from the newest snapshot
     const base = { ...c, fuel: l.fuel, power: l.power, powerMs: l.powerMs, respawnMs: l.respawnMs, len: l.len };
-    if (!p || !p.alive || !c.alive) return { ...base, ang: c.a / 100 };
-    return { ...base, x: p.x + (c.x - p.x) * t, y: p.y + (c.y - p.y) * t, ang: lerpAngle(p.a / 100, c.a / 100, t) };
+    if (!p || !p.alive || !c.alive) return { ...base, ang: c.a / 1000, steer: c.st / 100 };
+    return { ...base, x: p.x + (c.x - p.x) * t, y: p.y + (c.y - p.y) * t, ang: lerpAngle(p.a / 1000, c.a / 1000, t), steer: (p.st + (c.st - p.st) * t) / 100 };
   });
   // cars that only exist in newer snapshots
-  for (const [id, c] of latest) if (!cars.some((x) => x.id === id)) cars.push({ ...c, alive: false, ang: c.a / 100 });
+  for (const [id, c] of latest) if (!cars.some((x) => x.id === id)) cars.push({ ...c, alive: false, ang: c.a / 1000, steer: 0 });
   return { cars, ahead };
 }
 
@@ -60,9 +81,12 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
   meRef.current = me;
   const [hud, setHud] = useState<{ fuel: number; power: string | null; powerMs: number; alive: boolean; len: number; boosting: boolean; respawnMs: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const keys = useRef({ left: false, right: false, boost: false });
-  const sent = useRef({ turn: 9, boost: false });
+  /** Keyboard keys + mouse/touch steering. `aim` is the world angle toward the pointer (null = not using the pointer). */
+  const keys = useRef({ left: false, right: false, boost: false, mouseBoost: false, px: 0, py: 0, pointer: false, aim: null as number | null });
+  const sent = useRef({ turn: 9, boost: false, aim: null as number | null, at: 0 });
   const [touch, setTouch] = useState(false);
+  const touchRef = useRef(false);
+  touchRef.current = touch;
 
   // ── input ──
   useEffect(() => {
@@ -70,9 +94,14 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
     const push = () => {
       const k = keys.current;
       const turn = (k.right ? 1 : 0) - (k.left ? 1 : 0);
-      if (turn !== sent.current.turn || k.boost !== sent.current.boost) {
-        sent.current = { turn, boost: k.boost };
-        g.input(turn, k.boost);
+      const boost = k.boost || k.mouseBoost;
+      const aim = turn !== 0 ? null : k.aim; // arrow keys override the mouse
+      const sa = sent.current.aim;
+      const aimMoved = (aim === null) !== (sa === null) || (aim !== null && sa !== null && Math.abs(aim - sa) > 0.015);
+      const t = performance.now();
+      if (turn !== sent.current.turn || boost !== sent.current.boost || (aimMoved && t - sent.current.at > 40)) {
+        sent.current = { turn, boost, aim, at: t };
+        g.input(turn, boost, aim);
       }
     };
     const set = (e: KeyboardEvent, v: boolean) => {
@@ -97,6 +126,19 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
     keys.current[which] = v;
     (window as unknown as { __neonPush?: () => void }).__neonPush?.();
   };
+  const pointerAt = (e: React.PointerEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const k = keys.current;
+    k.px = e.clientX - r.left; k.py = e.clientY - r.top; k.pointer = true;
+  };
+  const onPointerMove = (e: React.PointerEvent) => { if (e.pointerType === "mouse" || e.buttons) pointerAt(e); };
+  const onPointerDown = (e: React.PointerEvent) => {
+    pointerAt(e);
+    if (e.pointerType === "mouse") { keys.current.mouseBoost = true; (window as unknown as { __neonPush?: () => void }).__neonPush?.(); }
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse") { keys.current.mouseBoost = false; (window as unknown as { __neonPush?: () => void }).__neonPush?.(); }
+  };
 
   // ── sounds on feed ──
   const lastFeed = useRef(0);
@@ -118,6 +160,11 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
     let raf = 0;
     let cam = { x: 0, y: 0, init: false };
     let hudAt = 0;
+    // own-car prediction: base = the server state we extrapolate from; err = smoothly-decaying correction
+    const pred = { tick: -1, base: null as NeonCarSnap | null, baseAt: 0, errX: 0, errY: 0, errA: 0, alive: false };
+    const look = { x: 0, y: 0 };
+    const smoke: { x: number; y: number; vx: number; vy: number; life: number }[] = [];
+    let smokeAcc = 0;
     let lastFrame = performance.now();
     const sparks: { x: number; y: number; vx: number; vy: number; c: string; life: number }[] = [];
     const seenDeaths = new Set<string>();
@@ -135,16 +182,65 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       const { cars, ahead } = interpolate(w, now);
       const size = m?.size ?? 2600;
       const colorOf = (id: string) => NEON_COLORS[(m?.players.find((p) => p.id === id)?.color ?? 0) % NEON_COLORS.length];
-      const mine = cars.find((c) => c.id === meRef.current);
-      const follow = mine?.alive ? mine : cars.find((c) => c.alive) ?? mine;
+
+      // ── predict my car from the newest server state + my current keys ──
+      const LEAD = 0.05;
+      const kk = keys.current;
+      const turnNow = (kk.right ? 1 : 0) - (kk.left ? 1 : 0);
+      const boostNow = kk.boost || kk.mouseBoost;
+      const aimNow = turnNow !== 0 ? null : kk.aim;
+      const srv = w.cur?.cars.find((c) => c.id === meRef.current);
+      let myPath: number[] = [];
+      let mineDraw: DrawCar | null = null;
+      if (srv && srv.alive && w.cur) {
+        const elapsed = Math.min(0.3, (now - w.curAt) / 1000 + LEAD);
+        myPath = [];
+        const ext = simulate(srv, elapsed, turnNow, boostNow, aimNow, myPath);
+        if (w.cur.tick !== pred.tick) {
+          // a new server state arrived: carry over the visual difference so the car never jumps
+          if (pred.base && pred.alive) {
+            const old = simulate(pred.base, Math.min(0.3, (now - pred.baseAt) / 1000 + LEAD), turnNow, boostNow, aimNow);
+            const dx = old.x + pred.errX - ext.x, dy = old.y + pred.errY - ext.y;
+            if (Math.hypot(dx, dy) < 120) { pred.errX = dx; pred.errY = dy; pred.errA = angDiff(old.a + pred.errA, ext.a); }
+            else { pred.errX = pred.errY = pred.errA = 0; }
+          } else { pred.errX = pred.errY = pred.errA = 0; }
+          pred.tick = w.cur.tick; pred.base = srv; pred.baseAt = w.curAt;
+        }
+        pred.alive = true;
+        const decay = Math.exp(-dtFrame / 0.09);
+        pred.errX *= decay; pred.errY *= decay; pred.errA *= decay;
+        const base = cars.find((c) => c.id === srv.id);
+        mineDraw = { ...(base ?? srv), x: ext.x + pred.errX, y: ext.y + pred.errY, ang: ext.a + pred.errA, steer: ext.st, alive: true };
+        // blend the correction into the predicted trail tail too
+        for (let i = 0; i < myPath.length; i += 2) { const f = (i + 2) / myPath.length; myPath[i] += pred.errX * f; myPath[i + 1] += pred.errY * f; }
+      } else {
+        pred.alive = false;
+        pred.base = null;
+      }
+      const drawCars = mineDraw ? cars.map((c) => (c.id === mineDraw!.id ? mineDraw! : c)) : cars;
+      const trace = (window as unknown as { __ndTrace?: number[][] }).__ndTrace;
+      if (trace && mineDraw) trace.push([now, mineDraw.x, mineDraw.y]);
+
+      const mine = drawCars.find((c) => c.id === meRef.current);
+      const follow = mine?.alive ? mine : drawCars.find((c) => c.alive) ?? mine;
       const zoom = Math.max(W, H) / (W < 700 ? 900 : 1300);
       if (follow) {
-        if (!cam.init) cam = { x: follow.x, y: follow.y, init: true };
-        // frame-rate independent camera easing
-        const ease = 1 - Math.pow(0.0005, dtFrame);
-        cam.x += (follow.x - cam.x) * ease;
-        cam.y += (follow.y - cam.y) * ease;
+        // look a little ahead of the car, eased so turns don't whip the camera
+        const lk = 1 - Math.exp(-dtFrame / 0.35);
+        look.x += (Math.cos(follow.ang) * 70 - look.x) * lk;
+        look.y += (Math.sin(follow.ang) * 70 - look.y) * lk;
+        const tx = follow.x + look.x, ty = follow.y + look.y;
+        if (!cam.init || Math.hypot(tx - cam.x, ty - cam.y) > 600) cam = { x: tx, y: ty, init: true };
+        else if (follow === mineDraw) { cam.x = tx; cam.y = ty; } // locked to the predicted car: zero jitter
+        else { const e = 1 - Math.exp(-dtFrame / 0.12); cam.x += (tx - cam.x) * e; cam.y += (ty - cam.y) * e; }
       } else if (!cam.init) cam = { x: size / 2, y: size / 2, init: true };
+
+      // mouse / finger steering: aim from the car (on screen) toward the pointer
+      if (kk.pointer && mineDraw) {
+        const sx = W / 2 + (mineDraw.x - cam.x) * zoom, sy = H / 2 + (mineDraw.y - cam.y) * zoom;
+        if (Math.hypot(kk.px - sx, kk.py - sy) > 14) kk.aim = Math.atan2(kk.py - sy, kk.px - sx);
+        (window as unknown as { __neonPush?: () => void }).__neonPush?.();
+      }
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = "#05070f";
@@ -198,17 +294,19 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       ctx.globalCompositeOperation = "lighter";
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      for (const c of cars) {
+      for (const c of drawCars) {
         if (!c.alive) continue;
         const tr = w.trails.get(c.id);
         if (!tr || tr.length < 2) continue;
+        const isMine = c === mineDraw;
         const col = colorOf(c.id);
         ctx.beginPath();
         ctx.moveTo(tr[0], tr[1]);
         // skip points newer than the moment we're drawing, then end exactly at the car
-        const end = tr.length - 2 * (ahead.get(c.id) ?? 0);
+        const end = isMine ? tr.length : tr.length - 2 * (ahead.get(c.id) ?? 0);
         if (end < 2) continue;
         for (let i = 2; i < end; i += 2) ctx.lineTo(tr[i], tr[i + 1]);
+        if (isMine) for (let i = 0; i < myPath.length; i += 4) ctx.lineTo(myPath[i], myPath[i + 1]);
         ctx.lineTo(c.x, c.y);
         ctx.strokeStyle = col.trail + "33";
         ctx.lineWidth = NEON.TRAIL_W * 2.6;
@@ -222,8 +320,26 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       }
       ctx.globalCompositeOperation = "source-over";
 
+      // tyre smoke when drifting hard
+      smokeAcc += dtFrame;
+      const emit = smokeAcc > 1 / 40;
+      if (emit) smokeAcc = 0;
+      for (const c of drawCars) {
+        if (!emit || !c.alive || Math.abs(c.steer) < 0.55) continue;
+        const bx = c.x - Math.cos(c.ang) * 12, by = c.y - Math.sin(c.ang) * 12;
+        for (const side of [-1, 1]) smoke.push({ x: bx - Math.sin(c.ang) * 7 * side, y: by + Math.cos(c.ang) * 7 * side, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20, life: 1 });
+      }
+      for (let i = smoke.length - 1; i >= 0; i--) {
+        const p = smoke[i];
+        p.x += p.vx * dtFrame; p.y += p.vy * dtFrame; p.life -= dtFrame / 0.7;
+        if (p.life <= 0) { smoke.splice(i, 1); continue; }
+        ctx.fillStyle = `rgba(200,210,230,${0.18 * p.life})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 5 + (1 - p.life) * 9, 0, Math.PI * 2); ctx.fill();
+      }
+      if (smoke.length > 400) smoke.splice(0, smoke.length - 400);
+
       // cars
-      for (const c of cars) {
+      for (const c of drawCars) {
         if (!c.alive) continue;
         const col = colorOf(c.id);
         ctx.save();
@@ -233,7 +349,8 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
           ctx.lineWidth = 3;
           ctx.beginPath(); ctx.arc(0, 0, NEON.CAR_R * 2, 0, Math.PI * 2); ctx.stroke();
         }
-        ctx.rotate(c.ang);
+        // drift: the body yaws into the turn a little beyond the direction of travel
+        ctx.rotate(c.ang + c.steer * 0.32);
         if (c.boosting || c.power === "turbo") {
           const fl = 10 + Math.random() * 10;
           ctx.fillStyle = c.power === "turbo" ? "#7cf" : "#ff8a00";
@@ -281,6 +398,19 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       ctx.globalCompositeOperation = "source-over";
       ctx.restore();
 
+      // aim line from the car toward the pointer (mouse only)
+      if (kk.pointer && mineDraw && !touchRef.current) {
+        const sx = W / 2 + (mineDraw.x - cam.x) * zoom, sy = H / 2 + (mineDraw.y - cam.y) * zoom;
+        ctx.strokeStyle = "rgba(255,255,255,0.12)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 8]);
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(kk.px, kk.py); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = boostNow ? "rgba(255,150,40,0.9)" : "rgba(255,255,255,0.7)";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(kk.px, kk.py, 9, 0, Math.PI * 2); ctx.stroke();
+      }
+
       // minimap
       const mm = W < 700 ? 90 : 140, pad = 12;
       const mx = W - mm - pad, my = H - mm - pad - (W < 700 ? 90 : 0);
@@ -290,7 +420,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       ctx.fillRect(mx, my, mm, mm);
       ctx.strokeRect(mx, my, mm, mm);
       const k = mm / size;
-      for (const c of cars) {
+      for (const c of drawCars) {
         if (!c.alive) continue;
         const tr = w.trails.get(c.id);
         const col = colorOf(c.id);
@@ -335,7 +465,13 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
 
   return (
     <div className="relative h-[calc(100dvh-56px)] w-full select-none overflow-hidden bg-[#05070f] text-white sm:h-[calc(100dvh-57px)]" data-testid="nd-root">
-      <canvas ref={canvas} className="absolute inset-0 h-full w-full touch-none" data-testid="nd-canvas" />
+      <canvas
+        ref={canvas} data-testid="nd-canvas"
+        className={`absolute inset-0 h-full w-full touch-none ${meta?.phase === "playing" ? "cursor-none" : ""}`}
+        onPointerMove={onPointerMove} onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+        onPointerLeave={(e) => { if (e.pointerType === "mouse") { keys.current.mouseBoost = false; (window as unknown as { __neonPush?: () => void }).__neonPush?.(); } }}
+        onContextMenu={(e) => e.preventDefault()}
+      />
 
       {/* top-left: room + feed */}
       <div className="pointer-events-none absolute left-3 top-3 max-w-[60%] space-y-1">
@@ -377,7 +513,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
               {NEON_POWERS[hud.power as keyof typeof NEON_POWERS].icon} {NEON_POWERS[hud.power as keyof typeof NEON_POWERS].label} · {(hud.powerMs / 1000).toFixed(1)}s
             </div>
           )}
-          {!touch && <div className="text-[10px] text-white/50">← → or A/D to steer · Space / ↑ to boost</div>}
+          <div className="text-[10px] text-white/50">{touch ? "Drag anywhere to steer · 🔥 to boost" : "🖱️ Move the mouse to steer · hold click to boost (or ← → and Space)"}</div>
         </div>
       )}
 
@@ -388,10 +524,8 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
 
       {/* touch controls */}
       {touch && meta?.phase !== "lobby" && (
-        <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-3">
-          <TouchBtn label="◀" onDown={() => press("left", true)} onUp={() => press("left", false)} testid="nd-left" />
-          <TouchBtn label="🔥" wide onDown={() => press("boost", true)} onUp={() => press("boost", false)} testid="nd-boost" />
-          <TouchBtn label="▶" onDown={() => press("right", true)} onUp={() => press("right", false)} testid="nd-right" />
+        <div className="pointer-events-none absolute bottom-0 right-0 p-4 pb-6">
+          <div className="pointer-events-auto"><TouchBtn label="🔥" wide onDown={() => press("boost", true)} onUp={() => press("boost", false)} testid="nd-boost" /></div>
         </div>
       )}
 
@@ -488,7 +622,7 @@ export function Rules() {
     <details className="mt-5 text-sm" open>
       <summary className="cursor-pointer font-black">How to play</summary>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-white/80">
-        <li>Your car never stops. Steer with <b>← →</b> (or A/D, or the on-screen buttons). <b>Space / ↑</b> or 🔥 = boost.</li>
+        <li>Your car never stops. <b>Move the mouse</b> and the car drives toward it — <b>hold click to boost</b>. On a phone, drag anywhere to steer and hold 🔥 to boost. (Keyboard works too: ← → and Space.)</li>
         <li>You leave a glowing trail. <b>Touch someone else&apos;s trail or a wall and you crash.</b> Your own trail is safe — cut across it any time.</li>
         <li>Grab ⛽ gas to make your trail longer. Crashed cars drop their gas.</li>
         <li>Cut in front of rivals so they hit your trail: <b>+1</b> per kill. No rounds — crash and you&apos;re back in 3 seconds with a short trail and a moment of 🛡️ protection.</li>

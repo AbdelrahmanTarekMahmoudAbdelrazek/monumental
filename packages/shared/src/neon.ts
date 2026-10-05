@@ -34,6 +34,8 @@ export const NEON = {
   /** Client renders this far in the past to always have two snapshots to blend. */
   INTERP_MS: 100,
   MAX_PLAYERS: 12,
+  /** Mouse steering: how hard the car turns per radian of difference to the pointer. */
+  AIM_GAIN: 3,
 } as const;
 
 export const NEON_ARENAS = { small: 1800, medium: 2600, large: 3400 } as const;
@@ -109,8 +111,10 @@ export interface NeonCarSnap {
   id: string;
   x: number;
   y: number;
-  /** Angle × 100. */
+  /** Angle × 1000. */
   a: number;
+  /** Smoothed steering × 100 (−100…100) — lets clients predict curves and draw drift. */
+  st: number;
   /** Trail length budget. */
   len: number;
   alive: boolean;
@@ -135,6 +139,14 @@ export interface NeonSnap {
   gasAdd?: number[];
   gasDel?: number[];
   powers?: { id: number; x: number; y: number; kind: NeonPower }[];
+}
+
+/** Steering toward an aim angle (mouse / touch): −1…1, proportional so small corrections are gentle. */
+export function aimTurn(heading: number, aim: number) {
+  let d = aim - heading;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return Math.max(-1, Math.min(1, d * NEON.AIM_GAIN));
 }
 
 export type NeonAction =

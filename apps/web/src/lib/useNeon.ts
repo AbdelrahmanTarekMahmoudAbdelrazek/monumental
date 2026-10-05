@@ -7,8 +7,9 @@ import { getGuestId, getNickname } from "./identity";
 type Ack = { ok: boolean; error?: string };
 
 export interface NeonWorld {
-  /** Latest snapshot. */
+  /** Latest snapshot and when it arrived (performance.now). */
   cur: NeonSnap | null;
+  curAt: number;
   /** Recent snapshots (oldest first) for smooth interpolation. */
   buf: NeonSnap[];
   /** local performance.now() − server time, estimated from the fastest recent arrivals. */
@@ -36,7 +37,7 @@ export function useNeon(code: string, userToken?: string | null) {
   const [me, setMe] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
-  const world = useRef<NeonWorld>({ cur: null, buf: [], offset: 0, offsets: [], trails: new Map(), gas: new Map(), powers: [], deaths: [] });
+  const world = useRef<NeonWorld>({ cur: null, curAt: 0, buf: [], offset: 0, offsets: [], trails: new Map(), gas: new Map(), powers: [], deaths: [] });
 
   useEffect(() => {
     const s = getSocket();
@@ -81,6 +82,7 @@ export function useNeon(code: string, userToken?: string | null) {
       if (sn.gasAdd) for (let i = 0; i < sn.gasAdd.length; i += 3) w.gas.set(sn.gasAdd[i], [sn.gasAdd[i + 1], sn.gasAdd[i + 2]]);
       w.powers = sn.powers ?? [];
       w.cur = sn;
+      w.curAt = t;
       w.buf.push(sn);
       if (w.buf.length > 24) w.buf.shift();
       w.offsets.push(t - sn.t);
@@ -104,6 +106,6 @@ export function useNeon(code: string, userToken?: string | null) {
   }, [code, userToken]);
 
   const act = (a: NeonAction) => new Promise<Ack>((res) => getSocket().emit("nd_act", a, res));
-  const input = (turn: number, boost: boolean) => getSocket().emit("nd_input", { turn, boost });
+  const input = (turn: number, boost: boolean, aim: number | null = null) => getSocket().emit("nd_input", { turn, boost, aim });
   return { meta, me, error, connected, world, act, input };
 }
