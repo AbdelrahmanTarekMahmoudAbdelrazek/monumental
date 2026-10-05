@@ -87,3 +87,33 @@ describe("RoomEngine", () => {
     expect(s).not.toContain("realPct");
   });
 });
+
+describe("RoomEngine duel rounds", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it("scores a duel round by correctness and speed", async () => {
+    const { getDuelItem, duelWinner } = await import("@monumental/shared");
+    const events: { event: string; payload: any }[] = [];
+    const engine = new RoomEngine(
+      { roomId: "level:22", levelId: 22, loop: true, roundsPerSession: 1, catalog: () => MONUMENTS },
+      { broadcast: (e, p) => events.push({ event: e, payload: p }), emit: (e, p) => events.push({ event: e, payload: p }), onSessionEnd: () => {}, onIdle: () => {} },
+    );
+    engine.join(P("ann")); engine.join(P("ben")); engine.join(P("cat"));
+    vi.advanceTimersByTime(LOBBY_SECONDS * 1000 + 5);
+    const rs = events.find((e) => e.event === "round_start")!.payload;
+    expect(rs.kind).toBe("duel");
+    const win = duelWinner(getDuelItem(rs.baseId), getDuelItem(rs.targetId));
+    const lose = win === "a" ? "b" : "a";
+    vi.advanceTimersByTime(500);
+    expect(engine.submitGuess("guest:ann", rs.roundId, undefined, true, win).ok).toBe(true);
+    vi.advanceTimersByTime(500);
+    expect(engine.submitGuess("guest:ben", rs.roundId, undefined, true, win).ok).toBe(true);
+    expect(engine.submitGuess("guest:cat", rs.roundId, undefined, true, lose).ok).toBe(true);
+    expect(engine.submitGuess("guest:cat", rs.roundId, undefined, true, win).ok).toBe(false); // one tap only
+    vi.advanceTimersByTime(getLevel(22).timerSec * 1000);
+    const res = events.find((e) => e.event === "round_result")!.payload;
+    const pts = Object.fromEntries(res.entries.map((e: any) => [e.playerId, e.points]));
+    expect(pts).toEqual({ "guest:ann": 3, "guest:ben": 2, "guest:cat": 0 });
+    expect(res.duel.winner).toBe(win);
+  });
+});

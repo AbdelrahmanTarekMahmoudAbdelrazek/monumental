@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LEVELS, MONUMENTS } from "@monumental/shared";
+import { LEVELS, MONUMENTS, MIXED_GROUPS, GROUP_LABEL, groupOf, type CatalogGroup, type LevelConfig } from "@monumental/shared";
 import { getNickname, setNickname as persistNickname, randomNickname } from "@/lib/identity";
 
 interface Overview { levels: { levelId: number; players: number; phase: string; roundIndex: number }[]; offline?: boolean }
@@ -44,17 +44,18 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
       <section className="mt-6 grid gap-6 md:mt-10 md:grid-cols-[1.2fr_1fr] md:items-center">
         <div>
           <h1 className="font-display text-4xl font-black leading-tight tracking-tight md:text-6xl">
-            How tall is the <span className="text-brand-500">Taj Mahal</span>…<br />next to the <span className="text-ink-500 dark:text-ink-300">Great Pyramid</span>?
+            How big is a <span className="text-brand-500">blue whale</span>…<br />next to the <span className="text-ink-500 dark:text-ink-300">Statue of Liberty</span>?
           </h1>
           <p className="mt-4 max-w-xl text-ink-600 dark:text-ink-200">
-            Drag the monument to the height you think is right. Everyone in the room plays the same round on the same clock — closest guess takes 3 points. {MONUMENTS.length} monuments, {LEVELS.length} levels, hourly tournaments.
+            Drag one thing to the size you think is right next to another — monuments, animals, mountains, rockets, planets and stars. Everyone in the room plays the same round on the same clock, and the closest guess takes 3 points. {MONUMENTS.length} things to compare, a "Which is more?" duel mode, {LEVELS.length} levels and hourly tournaments.
           </p>
           <div className="mt-5 flex flex-wrap items-end gap-3">
             <div>
               <label className="label">Your nickname</label>
               <input className="input w-56" value={nick} maxLength={20} disabled={!!signedInNickname} onChange={(e) => setNick(e.target.value)} onBlur={saveNick} placeholder="Nickname" />
             </div>
-            <button className="btn-primary" onClick={() => play(1)}>Play now →</button>
+            <button className="btn-primary" onClick={() => play(12)}>Play Mixed →</button>
+            <button className="btn-ghost" onClick={() => play(25)}>Which is more?</button>
             <Link href="/solo" className="btn-ghost" onClick={saveNick}>Practice solo</Link>
           </div>
           {overview?.offline && <p className="mt-3 text-xs font-semibold text-rose-500">Game server is offline — multiplayer unavailable. Practice mode still works.</p>}
@@ -64,34 +65,38 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
 
       {/* levels */}
       <section className="mt-10">
-        <div className="flex items-end justify-between">
-          <h2 className="text-xl font-black">Choose a level</h2>
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-xl font-black">Mixed mode</h2>
+            <p className="text-sm text-ink-500 dark:text-ink-300">Everything against everything — a giraffe vs a bus, Everest vs a moon of Mars.</p>
+          </div>
           <span className="text-xs text-ink-500 dark:text-ink-300">Live rooms · {overview?.levels.reduce((a, l) => a + l.players, 0) ?? 0} players online</span>
         </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {LEVELS.map((l) => {
-            const live = overview?.levels.find((x) => x.levelId === l.id);
-            return (
-              <button key={l.id} onClick={() => play(l.id)} className="card group text-left transition hover:-translate-y-0.5 hover:shadow-xl">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-brand-600">Level {l.id}</div>
-                    <div className="text-lg font-black">{l.name}</div>
-                  </div>
-                  <div className="text-right text-xs text-ink-500 dark:text-ink-300">
-                    <div className="font-bold text-ink-800 dark:text-ink-50">{l.timerSec}s</div>
-                    <div>{{ full: "grid + ruler", ruler: "ruler", none: "no helpers", silhouette: "silhouettes" }[l.helpers]}</div>
-                  </div>
-                </div>
-                <p className="mt-2 text-sm text-ink-600 dark:text-ink-200">{l.tagline}</p>
-                <div className="mt-3 flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-1 text-ink-500 dark:text-ink-300"><span className={`inline-block h-2 w-2 rounded-full ${live?.players ? "bg-emerald-500" : "bg-ink-300"}`} />{live?.players ?? 0} playing{live && live.roundIndex >= 0 && live.phase !== "finished" ? ` · round ${live.roundIndex + 1}` : ""}</span>
-                  <span className="font-bold text-brand-600 group-hover:underline">Join →</span>
-                </div>
-              </button>
-            );
-          })}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {MIXED_GROUPS.map((g) => (
+            <span key={g} className="rounded-full bg-white/70 px-3 py-1 text-xs font-semibold ring-1 ring-ink-900/5 dark:bg-ink-900/60 dark:ring-white/10">
+              {GROUP_ICON[g]} {GROUP_LABEL[g]} · {MONUMENTS.filter((m) => groupOf(m) === g).length}
+            </span>
+          ))}
         </div>
+        <LevelGrid levels={LEVELS.filter((l) => l.mode === "mixed")} overview={overview} play={play} />
+      </section>
+
+      <section id="duels" className="mt-10 scroll-mt-20">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-xl font-black">Which is more?</h2>
+            <p className="text-sm text-ink-500 dark:text-ink-300">Two cards, one tap. Higher IMDb rating, taller celebrity, older invention, bigger country, more people.</p>
+          </div>
+          <Link href="/duel" className="btn-ghost text-sm" onClick={saveNick}>Solo streak →</Link>
+        </div>
+        <LevelGrid levels={LEVELS.filter((l) => l.mode === "duel")} overview={overview} play={play} />
+      </section>
+
+      <section className="mt-10">
+        <h2 className="text-xl font-black">Monuments</h2>
+        <p className="text-sm text-ink-500 dark:text-ink-300">The classic game: famous landmarks first, obscure ones and razor-thin margins later.</p>
+        <LevelGrid levels={LEVELS.filter((l) => l.mode === "classic")} overview={overview} play={play} />
       </section>
 
       {/* private rooms */}
@@ -126,9 +131,9 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
 }
 
 function HeroArt() {
-  const base = MONUMENTS.find((m) => m.id === "great_pyramid")!;
-  const target = MONUMENTS.find((m) => m.id === "taj_mahal")!;
-  const ppm = 1.1;
+  const base = MONUMENTS.find((m) => m.id === "statue_of_liberty")!;
+  const target = MONUMENTS.find((m) => m.id === "blue_whale")!;
+  const ppm = 1.6;
   const groundY = 180;
   const bh = base.heightM * ppm, bw = (base.silhouette.w / 100) * bh;
   const th = target.heightM * ppm, tw = (target.silhouette.w / 100) * th;
@@ -145,10 +150,41 @@ function HeroArt() {
         <g transform={`translate(${300 - tw / 2} ${groundY - th}) scale(${th / 100})`}><path d={target.silhouette.d} className="fill-brand-500" /></g>
         <line x1={300 - tw / 2 - 12} x2={300 + tw / 2 + 12} y1={groundY - th} y2={groundY - th} className="stroke-brand-600" strokeDasharray="5 4" strokeWidth="1.5" />
         <circle cx="300" cy={groundY - th} r="9" className="fill-brand-500 stroke-white" strokeWidth="2.5" />
-        <text x="300" y={groundY - th - 16} textAnchor="middle" className="fill-ink-800 text-[11px] font-bold dark:fill-ink-50">Your guess: 53%</text>
-        <text x="110" y={groundY + 26} textAnchor="middle" className="fill-ink-900 text-[10px] font-semibold dark:fill-ink-50">Great Pyramid · 138.5 m</text>
-        <text x="300" y={groundY + 26} textAnchor="middle" className="fill-ink-900 text-[10px] font-semibold dark:fill-ink-50">Taj Mahal · ?</text>
+        <text x="300" y={groundY - th - 16} textAnchor="middle" className="fill-ink-800 text-[11px] font-bold dark:fill-ink-50">Your guess: 27%</text>
+        <text x="110" y={groundY + 26} textAnchor="middle" className="fill-ink-900 text-[10px] font-semibold dark:fill-ink-50">Statue of Liberty · 93 m</text>
+        <text x="300" y={groundY + 26} textAnchor="middle" className="fill-ink-900 text-[10px] font-semibold dark:fill-ink-50">Blue whale · ?</text>
       </svg>
+    </div>
+  );
+}
+
+const GROUP_ICON: Record<CatalogGroup, string> = { monuments: "🏛️", animal: "🐘", nature: "🏔️", vehicle: "🚀", space: "🪐" };
+
+function LevelGrid({ levels, overview, play }: { levels: LevelConfig[]; overview: Overview | null; play: (id: number) => void }) {
+  return (
+    <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {levels.map((l) => {
+        const live = overview?.levels.find((x) => x.levelId === l.id);
+        return (
+          <button key={l.id} onClick={() => play(l.id)} className="card group text-left transition hover:-translate-y-0.5 hover:shadow-xl">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-widest text-brand-600">Level {l.id}</div>
+                <div className="text-lg font-black">{l.name}</div>
+              </div>
+              <div className="text-right text-xs text-ink-500 dark:text-ink-300">
+                <div className="font-bold text-ink-800 dark:text-ink-50">{l.timerSec}s</div>
+                <div>{l.kind === "duel" ? "tap to pick" : { full: "grid + ruler", ruler: "ruler", none: "no helpers", silhouette: "silhouettes" }[l.helpers]}</div>
+              </div>
+            </div>
+            <p className="mt-2 text-sm text-ink-600 dark:text-ink-200">{l.tagline}</p>
+            <div className="mt-3 flex items-center justify-between text-xs">
+              <span className="flex items-center gap-1 text-ink-500 dark:text-ink-300"><span className={`inline-block h-2 w-2 rounded-full ${live?.players ? "bg-emerald-500" : "bg-ink-300"}`} />{live?.players ?? 0} playing{live && live.roundIndex >= 0 && live.phase !== "finished" ? ` · round ${live.roundIndex + 1}` : ""}</span>
+              <span className="font-bold text-brand-600 group-hover:underline">Join →</span>
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }

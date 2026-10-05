@@ -6,3 +6,6 @@ export * from "./events";
 export * from "./silhouettes";
 export * from "./monuments";
 export * from "./layout";
+export * from "./silhouettes2";
+export * from "./catalog2";
+export * from "./duel";

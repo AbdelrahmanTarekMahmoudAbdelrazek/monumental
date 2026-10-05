@@ -15,6 +15,8 @@ export interface RoomHook {
   /** throttled "live position" while dragging (lock=false) */
   sendGuess: (guessPct: number) => void;
   lockGuess: (guessPct: number) => Promise<{ ok: boolean; error?: string }>;
+  /** Duel rounds: tap a side (final answer). */
+  pickSide: (side: "a" | "b") => Promise<{ ok: boolean; error?: string }>;
   myLocked: boolean;
 }
 
@@ -127,5 +129,16 @@ export function useRoom(target: { roomId?: string; levelId?: number }, userToken
     });
   }, []);
 
-  return { state, playerId, connected, error, lastResult, sessionResult, tournamentMsg, sendGuess, lockGuess, myLocked };
+  const pickSide = useCallback((side: "a" | "b") => {
+    const rid = roundIdRef.current;
+    if (!rid) return Promise.resolve({ ok: false, error: "No round" });
+    return new Promise<{ ok: boolean; error?: string }>((res) => {
+      getSocket().emit("submit_guess", { roundId: rid, pick: side, lock: true }, (a) => {
+        if (a.ok) setMyLocked(true);
+        res(a);
+      });
+    });
+  }, []);
+
+  return { state, playerId, connected, error, lastResult, sessionResult, tournamentMsg, sendGuess, lockGuess, pickSide, myLocked };
 }

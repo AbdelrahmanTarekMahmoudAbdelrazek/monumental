@@ -1,5 +1,6 @@
-import type { Monument } from "./types";
+import type { CatalogGroup, Monument, MonumentCategory } from "./types";
 import { getSilhouette } from "./silhouettes";
+import { SEED2 } from "./catalog2";
 
 type Seed = Omit<Monument, "silhouette" | "image">;
 
@@ -105,7 +106,32 @@ const SEED: Seed[] = [
   { id: "willis_tower", name: "Willis Tower (Sears Tower)", country: "United States", heightM: 527, heightNote: "To the tip of the antennas; roof is 442 m.", category: "skyscraper", tier: 2, funFact: "Its design is nine bundled tubes of different heights — like cigarettes in a pack." },
 ];
 
-export const MONUMENTS: Monument[] = SEED.map((m) => ({ ...m, silhouette: getSilhouette(m.id) }));
+export const MONUMENTS: Monument[] = [...SEED, ...SEED2].map((m) => ({ ...m, silhouette: getSilhouette(m.id) }));
+
+export const MONUMENT_CATEGORIES: MonumentCategory[] = ["ancient", "religious", "tower", "statue", "skyscraper", "bridge", "landmark"];
+export const MIXED_GROUPS: CatalogGroup[] = ["monuments", "animal", "nature", "vehicle", "space"];
+
+export const GROUP_LABEL: Record<CatalogGroup, string> = {
+  monuments: "Monuments",
+  animal: "Animals",
+  nature: "Nature",
+  vehicle: "Vehicles",
+  space: "Space",
+};
+
+export function groupOf(m: Pick<Monument, "category">): CatalogGroup {
+  return m.category === "animal" || m.category === "nature" || m.category === "vehicle" || m.category === "space" ? m.category : "monuments";
+}
+
+/** "How tall is …?" / "How wide is …?" / "How long is …?" */
+export function sizeQuestion(m: Pick<Monument, "measure" | "name">): string {
+  const verb = m.measure === "diameter" ? "How wide is" : m.measure === "length" ? "How long is" : "How tall is";
+  return `${verb} ${m.name}?`;
+}
+
+export function measureWord(m: Pick<Monument, "measure">): string {
+  return m.measure === "diameter" ? "diameter" : m.measure === "length" ? "length" : "height";
+}
 
 export const MONUMENT_MAP: Record<string, Monument> = Object.fromEntries(MONUMENTS.map((m) => [m.id, m]));
 

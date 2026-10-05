@@ -43,7 +43,10 @@ export interface JoinRoomAck {
 
 export interface SubmitGuessPayload {
   roundId: string;
-  guessPct: number;
+  /** Size rounds. */
+  guessPct?: number;
+  /** Duel rounds: the side the player tapped (always locks). */
+  pick?: "a" | "b";
   lock: boolean;
 }
 
@@ -56,6 +59,7 @@ export interface RoundStartPayload {
   endsAt: number;
   serverNow: number;
   levelId: number;
+  kind?: "size" | "duel";
 }
 
 export interface ServerToClientEvents {

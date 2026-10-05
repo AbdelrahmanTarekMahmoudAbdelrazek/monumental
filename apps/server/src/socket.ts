@@ -18,7 +18,8 @@ const joinSchema = z.object({
 
 const guessSchema = z.object({
   roundId: z.string().max(32),
-  guessPct: z.number().finite(),
+  guessPct: z.number().finite().optional(),
+  pick: z.enum(["a", "b"]).optional(),
   lock: z.boolean().default(false),
 });
 
@@ -67,7 +68,7 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       if (!identity || !roomId) return ack?.({ ok: false, error: "Join a room first" });
       const engine = rooms.get(roomId);
       if (!engine) return ack?.({ ok: false, error: "Room gone" });
-      const res = engine.submitGuess(identity.playerKey, parsed.data.roundId, parsed.data.guessPct, parsed.data.lock);
+      const res = engine.submitGuess(identity.playerKey, parsed.data.roundId, parsed.data.guessPct, parsed.data.lock, parsed.data.pick);
       ack?.(res);
     });
 

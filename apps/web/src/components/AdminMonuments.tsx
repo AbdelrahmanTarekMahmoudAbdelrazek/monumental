@@ -5,7 +5,7 @@ interface Row {
   id: string; name: string; country: string; heightM: number; heightNote: string; category: string; tier: number; funFact: string;
   silhouetteW: number; silhouetteD: string; imageUrl?: string | null; imageAttribution?: string | null; enabled: boolean; source: "db" | "builtin";
 }
-const CATS = ["ancient", "religious", "tower", "statue", "skyscraper", "bridge", "landmark"];
+const CATS = ["ancient", "religious", "tower", "statue", "skyscraper", "bridge", "landmark", "animal", "nature", "vehicle", "space"];
 const EMPTY: Row = { id: "", name: "", country: "", heightM: 50, heightNote: "", category: "landmark", tier: 3, funFact: "", silhouetteW: 30, silhouetteD: "M0,0 L30,0 L30,100 L0,100 Z", enabled: true, source: "db" };
 
 export default function AdminMonuments() {
@@ -36,8 +36,8 @@ export default function AdminMonuments() {
   return (
     <div className="mx-auto max-w-5xl px-3 py-6 md:px-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div><h1 className="text-3xl font-black">Monuments admin</h1><p className="text-sm text-ink-500 dark:text-ink-300">{rows.length} monuments · edits are stored in the database and override the built-in dataset.</p></div>
-        <button className="btn-primary" onClick={() => setEdit({ ...EMPTY })}>+ Add monument</button>
+        <div><h1 className="text-3xl font-black">Catalogue admin</h1><p className="text-sm text-ink-500 dark:text-ink-300">{rows.length} items · edits are stored in the database and override the built-in dataset.</p></div>
+        <button className="btn-primary" onClick={() => setEdit({ ...EMPTY })}>+ Add item</button>
       </div>
       {status && <div className="mt-3 rounded-2xl bg-brand-500/10 p-3 text-sm">{status}</div>}
       <input className="input mt-4" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -48,7 +48,7 @@ export default function AdminMonuments() {
             <F label="id (slug)"><input className="input" value={edit.id} disabled={edit.source === "builtin" || rows.some((r) => r.id === edit.id && r.source === "db")} onChange={(e) => setEdit({ ...edit, id: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })} /></F>
             <F label="Name"><input className="input" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></F>
             <F label="Country"><input className="input" value={edit.country} onChange={(e) => setEdit({ ...edit, country: e.target.value })} /></F>
-            <F label="Height (m)"><input className="input" type="number" step="0.1" value={edit.heightM} onChange={(e) => setEdit({ ...edit, heightM: Number(e.target.value) })} /></F>
+            <F label="Size in metres (height, or diameter for space)"><input className="input" type="number" step="0.1" value={edit.heightM} onChange={(e) => setEdit({ ...edit, heightM: Number(e.target.value) })} /></F>
             <F label="Height note (what's included — antenna / pedestal?)" wide><input className="input" value={edit.heightNote} onChange={(e) => setEdit({ ...edit, heightNote: e.target.value })} /></F>
             <F label="Category"><select className="input" value={edit.category} onChange={(e) => setEdit({ ...edit, category: e.target.value })}>{CATS.map((c) => <option key={c}>{c}</option>)}</select></F>
             <F label="Difficulty tier (1 famous … 4 obscure)"><input className="input" type="number" min={1} max={4} value={edit.tier} onChange={(e) => setEdit({ ...edit, tier: Number(e.target.value) })} /></F>

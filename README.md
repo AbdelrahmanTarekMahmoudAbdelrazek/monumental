@@ -1,8 +1,10 @@
-# MONUMENTAL
+# How Big?
 
-Real-time multiplayer guessing game: a **base** monument is shown at a fixed size, a **target** monument next to it. Drag the target to the height you think is right relative to the base. Everyone in the room plays the same round on the same server clock; the closest guess takes 3 points, 2nd and 3rd take 1.
+*(formerly MONUMENTAL — internal package names still use `@monumental/*`)*
 
-86 monuments with original SVG silhouettes · 11 levels · public & private rooms · hourly + custom tournaments (qualifiers → final) · daily/weekly/all-time leaderboards · guest play or Google/email accounts · admin page for monuments · light/dark mode · synthesized SFX with mute.
+Real-time multiplayer size-guessing game: a **base** item is shown at a fixed size, a **target** item next to it — monuments, animals, mountains, vehicles, planets and stars. Drag the target to the height you think is right relative to the base. Everyone in the room plays the same round on the same server clock; the closest guess takes 3 points, 2nd and 3rd take 1.
+
+153 items with original SVG silhouettes (86 monuments + animals, nature, vehicles, space) · 11 classic levels + 4 Mixed-mode levels · public & private rooms · hourly + custom tournaments (qualifiers → final) · daily/weekly/all-time leaderboards · guest play or Google/email accounts · admin page for monuments · light/dark mode · synthesized SFX with mute.
 
 ```
 monumental/

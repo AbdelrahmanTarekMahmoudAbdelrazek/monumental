@@ -1,10 +1,12 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { getLevel } from "@monumental/shared";
+import { getLevel, sizeQuestion, GROUP_LABEL, groupOf, DUEL_MAP } from "@monumental/shared";
+import DuelStage from "./DuelStage";
 import { useRoom } from "@/lib/useRoom";
 import { useCatalog } from "@/lib/catalog";
 import { sfx } from "@/lib/sound";
+import { fmtExact } from "@/lib/format";
 import GameStage from "./GameStage";
 import { LobbyOverlay, PlayersPanel, RoundLeaderboard, SessionEndOverlay, TimerRing } from "./Hud";
 
@@ -18,12 +20,16 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
 
   const level = useMemo(() => (state ? getLevel(state.levelId) : getLevel(levelId ?? 1)), [state, levelId]);
   const round = state?.round;
-  const base = round ? catalog.get(round.baseId) : null;
-  const target = round ? catalog.get(round.targetId) : null;
+  const isDuel = level.kind === "duel";
+  const base = round && !isDuel ? catalog.get(round.baseId) : null;
+  const target = round && !isDuel ? catalog.get(round.targetId) : null;
+  const duelA = round && isDuel ? DUEL_MAP[round.baseId] ?? null : null;
+  const duelB = round && isDuel ? DUEL_MAP[round.targetId] ?? null : null;
+  const [myPick, setMyPick] = useState<"a" | "b" | null>(null);
 
   // Reset the handle to a neutral position on each new round.
   useEffect(() => {
-    if (round?.roundId) { setGuess(50); setLockError(null); sfx.roundStart(); }
+    if (round?.roundId) { setGuess(50); setLockError(null); setMyPick(null); sfx.roundStart(); }
   }, [round?.roundId]);
 
   useEffect(() => {
@@ -41,7 +47,18 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
     else setLockError(r.error ?? "Could not lock");
   };
 
+  const pick = async (side: "a" | "b") => {
+    if (myPick || state?.phase !== "round") return;
+    setMyPick(side);
+    const r = await room.pickSide(side);
+    if (!r.ok) { setMyPick(null); setLockError(r.error ?? "Could not answer"); }
+  };
+
   const myResult = lastResult?.entries.find((e) => e.playerId === playerId) ?? null;
+  const duelReveal = isDuel && state?.phase === "reveal" && lastResult?.duel ? lastResult : null;
+  const tally = duelReveal
+    ? { a: duelReveal.entries.filter((e) => e.pick === "a").length, b: duelReveal.entries.filter((e) => e.pick === "b").length }
+    : undefined;
   const reveal =
     state?.phase === "reveal" && lastResult
       ? { realPct: lastResult.realPct, guessPct: myResult?.guessPct ?? null, errorPct: myResult?.errorPct ?? null, points: myResult?.points ?? 0 }
@@ -74,7 +91,18 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
           {state?.phase === "reveal" && <TimerRing endsAt={state.phaseEndsAt} totalMs={8000} />}
         </div>
 
-        {base && target ? (
+        {duelA && duelB ? (
+          <DuelStage
+            a={duelA}
+            b={duelB}
+            myPick={duelReveal ? (myResult?.pick ?? myPick) : myPick}
+            onPick={pick}
+            winner={duelReveal?.duel?.winner ?? null}
+            disabled={state?.phase !== "round" || myLocked}
+            tally={tally}
+            className="h-full"
+          />
+        ) : base && target ? (
           <GameStage base={base} target={target} guessPct={guess} onGuessChange={onGuess} helpers={level.helpers} reveal={reveal} disabled={myLocked || state?.phase !== "round"} className="h-full" />
         ) : (
           <div className="flex h-full min-h-[320px] items-center justify-center bg-gradient-to-b from-sky-200 to-amber-50 dark:from-ink-900 dark:to-ink-800">
@@ -83,7 +111,7 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
         )}
 
         {/* lock-in bar */}
-        {state?.phase === "round" && (
+        {state?.phase === "round" && !isDuel && (
           <div className="absolute bottom-14 left-1/2 z-10 flex -translate-x-1/2 flex-col items-center gap-1">
             <button
               onClick={lock}
@@ -97,6 +125,7 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
           </div>
         )}
 
+        {isDuel && lockError && <div className="absolute bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full bg-rose-500 px-3 py-1 text-xs font-semibold text-white">{lockError}</div>}
         {state?.phase === "lobby" && <LobbyOverlay state={state} level={level} />}
         {state?.phase === "finished" && sessionResult && <SessionEndOverlay result={sessionResult} me={playerId} state={state} />}
 
@@ -111,9 +140,9 @@ export default function PlayRoom({ roomId, levelId, userToken }: { roomId?: stri
         {state?.phase === "reveal" && lastResult && <RoundLeaderboard result={lastResult} me={playerId} />}
         {base && target && state?.phase === "round" && (
           <div className="rounded-2xl bg-white/80 p-3 text-xs text-ink-600 shadow backdrop-blur dark:bg-ink-900/70 dark:text-ink-200">
-            <div className="font-semibold text-ink-800 dark:text-ink-50">How tall is {target.name}?</div>
-            <div className="mt-1">{target.country} · {target.category}</div>
-            <div className="mt-2 border-t border-ink-100 pt-2 dark:border-ink-700">Base: <b>{base.name}</b> ({base.heightM} m)<div className="mt-0.5 text-[11px] text-ink-500 dark:text-ink-300">{base.heightNote}</div></div>
+            <div className="font-semibold text-ink-800 dark:text-ink-50">{sizeQuestion(target)}</div>
+            <div className="mt-1">{target.country} · {GROUP_LABEL[groupOf(target)]}</div>
+            <div className="mt-2 border-t border-ink-100 pt-2 dark:border-ink-700">Base: <b>{base.name}</b> ({fmtExact(base.heightM)})<div className="mt-0.5 text-[11px] text-ink-500 dark:text-ink-300">{base.heightNote}</div></div>
           </div>
         )}
         {state?.phase === "reveal" && target && (

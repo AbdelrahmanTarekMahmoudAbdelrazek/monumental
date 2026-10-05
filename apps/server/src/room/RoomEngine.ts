@@ -2,6 +2,10 @@ import { nanoid } from "nanoid";
 import {
   getLevel,
   pickSessionPairs,
+  pickDuelPairs,
+  scoreDuel,
+  duelWinner,
+  getDuelItem,
   scoreRound,
   realPercent,
   roundTo,
@@ -39,7 +43,8 @@ interface LiveRound {
   pair: RoundPair;
   realPct: number;
   endsAt: number;
-  guesses: Map<string, { guessPct: number; locked: boolean; at: number }>;
+  startedAt: number;
+  guesses: Map<string, { guessPct: number; pick?: "a" | "b"; locked: boolean; at: number }>;
 }
 
 export interface EngineOptions {
@@ -180,7 +185,11 @@ export class RoomEngine {
 
   // ───────────────────────── guesses ─────────────────────────
 
-  submitGuess(playerKey: string, roundId: string, guessPct: number, lock: boolean): { ok: boolean; error?: string } {
+  get isDuel() {
+    return this.level.kind === "duel";
+  }
+
+  submitGuess(playerKey: string, roundId: string, guessPct: number | undefined, lock: boolean, pick?: "a" | "b"): { ok: boolean; error?: string } {
     const r = this.round;
     if (!r || this.phase !== "round") return { ok: false, error: "No round in progress" };
     if (r.roundId !== roundId) return { ok: false, error: "Stale round" };
@@ -188,10 +197,16 @@ export class RoomEngine {
     const p = this.players.get(playerKey);
     if (!p) return { ok: false, error: "Not in room" };
     if (r.index < p.eligibleFrom) return { ok: false, error: "You joined mid-round — you'll play from the next one" };
-    if (!Number.isFinite(guessPct)) return { ok: false, error: "Bad guess" };
     const prev = r.guesses.get(playerKey);
     if (prev?.locked) return { ok: false, error: "Already locked" };
-    r.guesses.set(playerKey, { guessPct, locked: lock, at: this.now() });
+    if (this.isDuel) {
+      if (pick !== "a" && pick !== "b") return { ok: false, error: "Pick a side" };
+      lock = true; // one tap = final answer
+      r.guesses.set(playerKey, { guessPct: 0, pick, locked: true, at: this.now() });
+    } else {
+      if (typeof guessPct !== "number" || !Number.isFinite(guessPct)) return { ok: false, error: "Bad guess" };
+      r.guesses.set(playerKey, { guessPct, locked: lock, at: this.now() });
+    }
     if (lock) this.ev.emit("player_locked", { playerId: playerKey, locked: true });
     return { ok: true };
   }
@@ -211,7 +226,11 @@ export class RoomEngine {
     this.round = null;
     this.lastResult = null;
     for (const p of this.players.values()) { p.totalPoints = 0; p.errors = []; p.eligibleFrom = 0; }
-    this.pairs = pickSessionPairs(this.level, this.opts.catalog(), this.roundsPerSession, `${this.roomId}:${this.sessionId}`);
+    const seed = `${this.roomId}:${this.sessionId}`;
+    this.pairs = this.isDuel
+      ? pickDuelPairs(this.level.duelCats ?? [], this.level.tiers, this.roundsPerSession, seed).map((p) => ({ baseId: p.aId, targetId: p.bId }))
+      : pickSessionPairs(this.level, this.opts.catalog(), this.roundsPerSession, seed);
+    this.roundsPerSession = Math.min(this.roundsPerSession, this.pairs.length);
     const lobby = (this.opts.lobbySeconds ?? LOBBY_SECONDS) * 1000;
     this.phaseEndsAt = this.now() + lobby;
     this.broadcastState();
@@ -229,14 +248,19 @@ export class RoomEngine {
     }
     this.roundIndex++;
     const pair = this.pairs[this.roundIndex];
-    const base = this.opts.catalog().find((m) => m.id === pair.baseId)!;
-    const target = this.opts.catalog().find((m) => m.id === pair.targetId)!;
+    let realPct = 0;
+    if (!this.isDuel) {
+      const base = this.opts.catalog().find((m) => m.id === pair.baseId)!;
+      const target = this.opts.catalog().find((m) => m.id === pair.targetId)!;
+      realPct = realPercent(base.heightM, target.heightM);
+    }
     const endsAt = this.now() + this.level.timerSec * 1000;
     this.round = {
       roundId: nanoid(8),
       index: this.roundIndex,
       pair,
-      realPct: realPercent(base.heightM, target.heightM),
+      realPct,
+      startedAt: this.now(),
       endsAt,
       guesses: new Map(),
     };
@@ -252,6 +276,7 @@ export class RoomEngine {
       endsAt,
       serverNow: this.now(),
       levelId: this.level.id,
+      kind: this.isDuel ? "duel" : "size",
     });
     this.broadcastState();
     this.setTimer(endsAt - this.now() + 250, () => this.endRound());
@@ -263,6 +288,7 @@ export class RoomEngine {
     // Eligible = joined before this round AND (still connected OR actually sent a guess).
     // Disconnected seats that never guessed are left out of the round result (they keep their points).
     const eligible = [...this.players.values()].filter((p) => r.index >= p.eligibleFrom && (p.connections > 0 || r.guesses.has(p.playerKey)));
+    if (this.isDuel) return this.endDuelRound(r, eligible);
     const scored = scoreRound(
       r.realPct,
       eligible.map((p) => ({ playerId: p.playerKey, guessPct: r.guesses.get(p.playerKey)?.guessPct ?? null })),
@@ -289,6 +315,10 @@ export class RoomEngine {
       entries,
       leaderboard: this.leaderboard(),
     };
+    this.finishRound(result);
+  }
+
+  private finishRound(result: RoundResult) {
     this.lastResult = result;
     this.phase = "reveal";
     this.phaseEndsAt = this.now() + REVEAL_SECONDS * 1000;
@@ -296,6 +326,37 @@ export class RoomEngine {
     this.broadcastState();
     const last = this.roundIndex >= this.roundsPerSession - 1;
     this.setTimer(REVEAL_SECONDS * 1000, () => (last ? this.endSession() : this.startRound()));
+  }
+
+  private endDuelRound(r: LiveRound, eligible: EnginePlayer[]) {
+    const a = getDuelItem(r.pair.baseId);
+    const b = getDuelItem(r.pair.targetId);
+    const winner = duelWinner(a, b);
+    const scored = scoreDuel(
+      winner,
+      eligible.map((p) => {
+        const g = r.guesses.get(p.playerKey);
+        return { playerId: p.playerKey, pick: g?.pick ?? null, ms: g ? g.at - r.startedAt : null };
+      }),
+    );
+    const entries = scored.map((s) => {
+      const p = this.players.get(s.playerId)!;
+      p.totalPoints += s.points;
+      // stats: "error" for duels = 0 when right, 100 when wrong / no answer
+      p.errors.push(s.pick == null ? null : s.correct ? 0 : 100);
+      return { playerId: s.playerId, nickname: p.nickname, guessPct: null, errorPct: null, pick: s.pick, ms: s.ms, correct: s.correct, points: s.points, rank: s.rank };
+    });
+    entries.sort((x, y) => (x.rank ?? 1e9) - (y.rank ?? 1e9) || Number(y.correct) - Number(x.correct));
+    const result: RoundResult = {
+      roundIndex: r.index,
+      baseId: r.pair.baseId,
+      targetId: r.pair.targetId,
+      realPct: 0,
+      duel: { winner },
+      entries,
+      leaderboard: this.leaderboard(),
+    };
+    this.finishRound(result);
   }
 
   private leaderboard() {
@@ -369,7 +430,7 @@ export class RoomEngine {
       sessionId: this.sessionId,
       players: [...this.players.values()].map((p) => this.publicPlayer(p)),
       round: this.round
-        ? { baseId: this.round.pair.baseId, targetId: this.round.pair.targetId, timerSec: this.level.timerSec, roundId: this.round.roundId }
+        ? { baseId: this.round.pair.baseId, targetId: this.round.pair.targetId, timerSec: this.level.timerSec, roundId: this.round.roundId, kind: this.isDuel ? "duel" : "size" }
         : undefined,
       result: this.phase === "reveal" ? this.lastResult ?? undefined : undefined,
       sessionResult: this.phase === "finished" ? this.lastSession ?? undefined : undefined,

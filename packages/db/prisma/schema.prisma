@@ -79,6 +79,10 @@ enum MonumentCategory {
   skyscraper
   bridge
   landmark
+  animal
+  nature
+  vehicle
+  space
 }
 
 /// Editable copy of the monument catalogue (admin page). The server merges this

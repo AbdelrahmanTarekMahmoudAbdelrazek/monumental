@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { LEVELS, getLevel, pickSessionPairs, realPercent, roundTo, REVEAL_SECONDS, type Monument } from "@monumental/shared";
+import { LEVELS, getLevel, pickSessionPairs, realPercent, roundTo, REVEAL_SECONDS, sizeQuestion, GROUP_LABEL, groupOf, type Monument } from "@monumental/shared";
 import { useCatalog } from "@/lib/catalog";
 import { sfx } from "@/lib/sound";
+import { fmtExact } from "@/lib/format";
 import GameStage, { fmtPct } from "./GameStage";
 
 /**
@@ -17,7 +18,15 @@ function practicePoints(err: number) {
   return err <= 2 ? 3 : err <= 5 ? 2 : err <= 10 ? 1 : 0;
 }
 
-export default function SoloGame({ levelId: initialLevel = 1 }: { levelId?: number }) {
+export default function SoloGame(props: { levelId?: number }) {
+  // Rounds are seeded randomly, so render only in the browser (avoids a server/client mismatch).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return <div className="p-10 text-center text-sm text-ink-500">Loading…</div>;
+  return <SoloInner {...props} />;
+}
+
+function SoloInner({ levelId: initialLevel = 1 }: { levelId?: number }) {
   const catalog = useCatalog();
   const [levelId, setLevelId] = useState(initialLevel);
   const level = getLevel(levelId);
@@ -127,9 +136,9 @@ export default function SoloGame({ levelId: initialLevel = 1 }: { levelId?: numb
         </div>
         {phase === "round" && (
           <div className="rounded-2xl bg-white/80 p-3 text-xs text-ink-600 shadow backdrop-blur dark:bg-ink-900/70 dark:text-ink-200">
-            <div className="font-semibold text-ink-800 dark:text-ink-50">How tall is {target.name}?</div>
-            <div className="mt-1">{target.country} · {target.category}</div>
-            <div className="mt-2 border-t border-ink-100 pt-2 dark:border-ink-700">Base: <b>{base.name}</b> ({base.heightM} m)</div>
+            <div className="font-semibold text-ink-800 dark:text-ink-50">{sizeQuestion(target)}</div>
+            <div className="mt-1">{target.country} · {GROUP_LABEL[groupOf(target)]}</div>
+            <div className="mt-2 border-t border-ink-100 pt-2 dark:border-ink-700">Base: <b>{base.name}</b> ({fmtExact(base.heightM)})</div>
           </div>
         )}
         {phase === "reveal" && <div className="animate-rise rounded-2xl bg-brand-500/10 p-3 text-xs"><span className="font-semibold">Did you know?</span> {target.funFact}</div>}

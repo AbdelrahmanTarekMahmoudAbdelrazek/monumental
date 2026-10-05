@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtPct, fmtM } from "./format";
+import { fmtPct, fmtM, fmtExact } from "./format";
 import { computeLayout } from "@monumental/shared";
 
 describe("format", () => {
@@ -10,9 +10,14 @@ describe("format", () => {
     expect(fmtPct(20700)).toBe("20,700%");
   });
   it("formats metres", () => {
-    expect(fmtM(4)).toBe("4.0 m");
+    expect(fmtM(4)).toBe("4 m");
+    expect(fmtM(0.3)).toBe("30 cm");
     expect(fmtM(138.5)).toBe("139 m");
-    expect(fmtM(1200)).toBe("1.20 km");
+    expect(fmtM(8849)).toBe("8,849 m");
+    expect(fmtM(1_392_700_000)).toBe("1,392,700 km");
+    expect(fmtExact(138.5)).toBe("138.5 m");
+    expect(fmtExact(12_742_000)).toBe("12,742 km");
+    expect(fmtExact(22_500)).toBe("22.5 km");
   });
 });
 

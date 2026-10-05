@@ -1,4 +1,5 @@
 import type { Silhouette } from "./types";
+import { SILHOUETTES2 } from "./silhouettes2";
 
 /**
  * Original, hand-authored SVG silhouettes.
@@ -455,7 +456,7 @@ export const SILHOUETTES: Record<string, Silhouette> = {
 
 /** Lookup a silhouette; falls back to a generic obelisk-ish block. */
 export function getSilhouette(id: string): Silhouette {
-  return SILHOUETTES[id] ?? { w: 30, d: rect(0, 0, 30, 100) };
+  return SILHOUETTES[id] ?? SILHOUETTES2[id] ?? { w: 30, d: rect(0, 0, 30, 100) };
 }
 
 export const _shapeHelpers = { poly, rect, dome, circle, spire, join };

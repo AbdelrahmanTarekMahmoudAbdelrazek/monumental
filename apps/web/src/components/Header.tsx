@@ -6,6 +6,7 @@ import type { AppSessionUser } from "@/lib/auth";
 
 const nav = [
   { href: "/", label: "Play" },
+  { href: "/duel", label: "Which is more?" },
   { href: "/tournaments", label: "Tournaments" },
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/profile", label: "Profile" },
@@ -19,7 +20,7 @@ export default function Header({ user }: { user: AppSessionUser | null }) {
       <div className="mx-auto flex max-w-6xl items-center gap-3 px-3 py-2 md:px-4">
         <Link href="/" className="flex items-center gap-2">
           <Logo />
-          <span className="font-display text-lg font-black tracking-tight">MONUMENTAL</span>
+          <span className="font-display text-lg font-black tracking-tight">How Big<span className="text-brand-500">?</span></span>
         </Link>
         <nav className="ml-2 hidden items-center gap-1 text-sm font-semibold sm:flex">
           {nav.map((n) => (
@@ -50,8 +51,9 @@ function Logo() {
   return (
     <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden>
       <rect width="28" height="28" rx="8" className="fill-brand-500" />
-      <path d="M5 22 L10 8 L15 22 Z" fill="white" opacity=".95" />
-      <path d="M16 22 L19 4 L22 22 Z" fill="white" opacity=".8" />
+      <rect x="5" y="15" width="6" height="8" rx="1" fill="white" opacity=".8" />
+      <rect x="12.5" y="10" width="4.5" height="13" rx="1" fill="white" opacity=".9" />
+      <rect x="18.5" y="4" width="4.5" height="19" rx="1" fill="white" />
     </svg>
   );
 }

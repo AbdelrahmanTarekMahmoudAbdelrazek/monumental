@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { PlayerPublic, RoomState, RoundResult, SessionResult, LevelConfig } from "@monumental/shared";
+import { getLevel, type PlayerPublic, type RoomState, type RoundResult, type SessionResult, type LevelConfig } from "@monumental/shared";
 import { serverNow } from "@/lib/socket";
 import { sfx } from "@/lib/sound";
 import { fmtPct } from "./GameStage";
@@ -78,7 +78,11 @@ export function RoundLeaderboard({ result, me }: { result: RoundResult; me: stri
               {i === 0 && e.points === 3 && <span>🏆</span>}
             </span>
             <span className="flex items-center gap-3 tabular-nums">
-              <span className="text-xs text-ink-500 dark:text-ink-300">{e.guessPct == null ? "no guess" : `${fmtPct(e.guessPct)} · ±${e.errorPct?.toFixed(1)}`}</span>
+              <span className="text-xs text-ink-500 dark:text-ink-300">
+                {result.duel
+                  ? e.pick == null ? "no answer" : e.correct ? `✓ ${((e.ms ?? 0) / 1000).toFixed(1)}s` : "✗ wrong"
+                  : e.guessPct == null ? "no guess" : `${fmtPct(e.guessPct)} · ±${e.errorPct?.toFixed(1)}`}
+              </span>
               <span className={`rounded-full px-2 text-xs font-bold ${e.points === 3 ? "bg-emerald-500 text-white" : e.points === 1 ? "bg-amber-400 text-ink-900" : "bg-ink-100 text-ink-500 dark:bg-ink-800 dark:text-ink-300"}`}>+{e.points}</span>
             </span>
           </li>
@@ -107,6 +111,7 @@ export function LobbyOverlay({ state, level }: { state: RoomState; level: LevelC
 export function SessionEndOverlay({ result, me, state }: { result: SessionResult; me: string | null; state: RoomState }) {
   const left = useCountdown(state.phaseEndsAt);
   const winner = result.leaderboard[0];
+  const duel = getLevel(result.levelId).kind === "duel";
   const mine = result.leaderboard.find((p) => p.playerId === me);
   const myRank = result.leaderboard.findIndex((p) => p.playerId === me) + 1;
   useEffect(() => { if (result.winnerId === me) sfx.win(); }, [result.winnerId, me]);
@@ -116,13 +121,13 @@ export function SessionEndOverlay({ result, me, state }: { result: SessionResult
         <div className="text-center">
           <div className="text-xs font-semibold uppercase tracking-widest text-brand-600">Session over</div>
           <h2 className="mt-1 text-2xl font-black">{winner && result.winnerId ? `🏆 ${winner.nickname} wins!` : "No winner this time"}</h2>
-          {mine && <p className="mt-1 text-sm text-ink-500 dark:text-ink-300">You finished #{myRank} with {mine.totalPoints} pts · avg error {mine.avgError.toFixed(1)}</p>}
+          {mine && <p className="mt-1 text-sm text-ink-500 dark:text-ink-300">You finished #{myRank} with {mine.totalPoints} pts · {duel ? `${Math.round(100 - mine.avgError)}% correct` : `avg error ${mine.avgError.toFixed(1)}`}</p>}
         </div>
         <ol className="mt-4 space-y-1 text-sm">
           {result.leaderboard.slice(0, 10).map((p, i) => (
             <li key={p.playerId} className={`flex items-center justify-between rounded-lg px-2 py-1 ${p.playerId === me ? "bg-brand-500/10" : ""}`}>
               <span><span className="mr-2 inline-block w-5 text-center text-xs font-bold text-ink-400">{i + 1}</span>{p.nickname}</span>
-              <span className="tabular-nums"><span className="mr-2 text-xs text-ink-400">±{p.avgError.toFixed(1)}</span><b>{p.totalPoints}</b></span>
+              <span className="tabular-nums"><span className="mr-2 text-xs text-ink-400">{duel ? `${Math.round(100 - p.avgError)}%` : `±${p.avgError.toFixed(1)}`}</span><b>{p.totalPoints}</b></span>
             </li>
           ))}
         </ol>

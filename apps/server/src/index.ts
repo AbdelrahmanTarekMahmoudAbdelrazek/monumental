@@ -67,6 +67,6 @@ export async function createServer() {
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/").split("/").pop()!);
 if (isMain && !config.isTest) {
   createServer().then(({ httpServer }) => {
-    httpServer.listen(config.port, () => console.log(`[server] MONUMENTAL socket server on :${config.port}`));
+    httpServer.listen(config.port, () => console.log(`[server] How Big? socket server on :${config.port}`));
   });
 }

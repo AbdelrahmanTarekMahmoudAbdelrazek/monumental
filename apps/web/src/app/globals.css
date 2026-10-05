@@ -19,3 +19,8 @@ html.dark body { background-image: radial-gradient(60% 50% at 50% -10%, rgba(249
 .card { @apply rounded-3xl bg-white/80 p-5 shadow-lg ring-1 ring-ink-900/5 backdrop-blur dark:bg-ink-900/70 dark:ring-white/10; }
 .input { @apply w-full rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm outline-none ring-brand-500 focus:ring-2 dark:border-ink-700 dark:bg-ink-800; }
 .label { @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-300; }
+
+@keyframes twinkle { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+@keyframes slideL { from { transform: translateX(-24px); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes slideR { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes glow { 0%, 100% { opacity: .2 } 50% { opacity: .6 } }

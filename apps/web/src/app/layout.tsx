@@ -5,9 +5,9 @@ import Header from "@/components/Header";
 import { currentUser } from "@/lib/auth";
 
 export const metadata: Metadata = {
-  title: "MONUMENTAL — guess the height",
-  description: "Real-time multiplayer game: drag a monument to its true height relative to another. Pyramids vs skyscrapers, Moai vs Burj Khalifa.",
-  applicationName: "MONUMENTAL",
+  title: "How Big? — the size-guessing game",
+  description: "Real-time multiplayer game: drag one thing to its true size next to another — monuments, animals, mountains, rockets, planets and stars.",
+  applicationName: "How Big?",
 };
 export const viewport: Viewport = { themeColor: "#f97316", width: "device-width", initialScale: 1, maximumScale: 1, viewportFit: "cover" };
 

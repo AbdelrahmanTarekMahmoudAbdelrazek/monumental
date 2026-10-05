@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { computeLayout, rulerStep, type HelperLevel, type Monument } from "@monumental/shared";
 import { sfx } from "@/lib/sound";
-import { fmtPct, fmtM } from "@/lib/format";
+import { fmtPct, fmtM, fmtExact } from "@/lib/format";
 
 export interface GameStageProps {
   base: Monument;
@@ -18,7 +18,7 @@ export interface GameStageProps {
   className?: string;
 }
 
-const MIN_PCT = 0.5;
+const MIN_PCT = 0.2;
 const MAX_PCT = 40000;
 
 function useSize<T extends HTMLElement>() {
@@ -107,7 +107,7 @@ export default function GameStage({ base, target, guessPct, onGuessChange, helpe
       let pct = ((d.startPct / 100) * base.heightM + dM) / base.heightM * 100;
       pct = Math.min(MAX_PCT, Math.max(MIN_PCT, pct));
       // Precision: snap to 0.5% below 200%, 1% up to 1000%, else 5%
-      const step = pct < 200 ? 0.5 : pct < 1000 ? 1 : 5;
+      const step = pct < 10 ? 0.1 : pct < 200 ? 0.5 : pct < 1000 ? 1 : 5;
       pct = Math.round(pct / step) * step;
       if (pct !== guessPct) { onGuessChange(pct); if (Math.abs(pct - guessPct) >= step) sfx.tick(); }
     },
@@ -129,6 +129,9 @@ export default function GameStage({ base, target, guessPct, onGuessChange, helpe
   const step = rulerStep(visibleMetres);
   const ticks: number[] = [];
   for (let m = step; m <= visibleMetres + 1e-9; m += step) ticks.push(m);
+
+  // Space pairs (planets, stars) get a night-sky scene.
+  const space = base.category === "space" && target.category === "space";
 
   const handleY = groundY - displayTargetH * ppm;
   const handleX = T.x + T.w / 2;
@@ -154,18 +157,34 @@ export default function GameStage({ base, target, guessPct, onGuessChange, helpe
             <stop offset="0%" className="[stop-color:#fb923c] dark:[stop-color:#fdba74]" />
             <stop offset="100%" className="[stop-color:#c2410c] dark:[stop-color:#ea580c]" />
           </linearGradient>
+          <linearGradient id="spaceSky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#03040c" />
+            <stop offset="65%" stopColor="#0b1030" />
+            <stop offset="100%" stopColor="#1d1846" />
+          </linearGradient>
+          <linearGradient id="spaceGround" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#272247" />
+            <stop offset="100%" stopColor="#120f26" />
+          </linearGradient>
+          <linearGradient id="silBaseSpace" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#dbe4ff" />
+            <stop offset="100%" stopColor="#8f9bc4" />
+          </linearGradient>
           <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="0" dy="6" stdDeviation="6" floodOpacity="0.25" />
           </filter>
         </defs>
 
         {/* sky */}
-        <rect x="0" y="0" width={size.w} height={groundY} fill="url(#sky)" />
-        {/* drifting clouds */}
-        <g className="opacity-70 dark:opacity-20" style={{ animation: "drift 90s linear infinite" }}>
-          <Cloud x={size.w * 0.1} y={40} s={1} />
-          <Cloud x={size.w * 0.55} y={80} s={0.7} />
-        </g>
+        <rect x="0" y="0" width={size.w} height={groundY} fill={space ? "url(#spaceSky)" : "url(#sky)"} />
+        {space ? (
+          <Stars w={size.w} h={groundY} />
+        ) : (
+          <g className="opacity-70 dark:opacity-20" style={{ animation: "drift 90s linear infinite" }}>
+            <Cloud x={size.w * 0.1} y={40} s={1} />
+            <Cloud x={size.w * 0.55} y={80} s={0.7} />
+          </g>
+        )}
 
         {/* grid (level 1-2) */}
         {showGrid &&
@@ -174,17 +193,17 @@ export default function GameStage({ base, target, guessPct, onGuessChange, helpe
           ))}
 
         {/* ground */}
-        <rect x="0" y={groundY} width={size.w} height={size.h - groundY} fill="url(#ground)" />
+        <rect x="0" y={groundY} width={size.w} height={size.h - groundY} fill={space ? "url(#spaceGround)" : "url(#ground)"} />
         <line x1="0" x2={size.w} y1={groundY} y2={groundY} className="stroke-ink-900/40 dark:stroke-white/30" strokeWidth={2} />
 
         {/* ruler (levels 1-4) */}
         {showRuler && (
-          <g className="text-[10px] font-medium fill-ink-700 dark:fill-ink-200">
+          <g className={`text-[10px] font-medium ${space ? "fill-ink-200" : "fill-ink-700 dark:fill-ink-200"}`}>
             <line x1={8} x2={8} y1={groundY} y2={groundY - visibleMetres * ppm} className="stroke-ink-900/40 dark:stroke-white/40" />
             {ticks.map((m) => (
               <g key={m}>
                 <line x1={4} x2={12} y1={groundY - m * ppm} y2={groundY - m * ppm} className="stroke-ink-900/50 dark:stroke-white/50" />
-                <text x={16} y={groundY - m * ppm + 3}>{m} m</text>
+                <text x={16} y={groundY - m * ppm + 3}>{fmtM(m)}</text>
               </g>
             ))}
           </g>
@@ -192,13 +211,13 @@ export default function GameStage({ base, target, guessPct, onGuessChange, helpe
 
         {/* base monument */}
         <g transform={`translate(${B.x} ${B.y}) scale(${B.h / 100})`} filter="url(#shadow)">
-          <path d={base.silhouette.d} fill="url(#silBase)" />
+          <path d={base.silhouette.d} fill={space ? "url(#silBaseSpace)" : "url(#silBase)"} />
         </g>
         {/* base labels (on the ground strip) */}
-        <g className="fill-ink-900 dark:fill-ink-50 text-[12px] font-bold">
+        <g className={`text-[12px] font-bold ${space ? "fill-white" : "fill-ink-900 dark:fill-ink-50"}`}>
           <text x={B.x + B.w / 2} y={groundY + 16} textAnchor="middle">{base.name}</text>
-          <text x={B.x + B.w / 2} y={groundY + 31} textAnchor="middle" className="fill-ink-800 dark:fill-ink-200 text-[11px] font-medium">
-            {base.heightM} m · 100%
+          <text x={B.x + B.w / 2} y={groundY + 31} textAnchor="middle" className={`text-[11px] font-medium ${space ? "fill-ink-200" : "fill-ink-800 dark:fill-ink-200"}`}>
+            {fmtExact(base.heightM)} · 100%
           </text>
         </g>
 
@@ -206,10 +225,10 @@ export default function GameStage({ base, target, guessPct, onGuessChange, helpe
         <g transform={`translate(${T.x} ${T.y}) scale(${Math.max(T.h, 0.01) / 100})`} filter="url(#shadow)">
           <path d={target.silhouette.d} fill="url(#silTarget)" />
         </g>
-        <g className="fill-ink-900 dark:fill-ink-50 text-[12px] font-bold">
+        <g className={`text-[12px] font-bold ${space ? "fill-white" : "fill-ink-900 dark:fill-ink-50"}`}>
           <text x={T.x + T.w / 2} y={groundY + 16} textAnchor="middle">{target.name}</text>
-          <text x={T.x + T.w / 2} y={groundY + 31} textAnchor="middle" className="fill-ink-800 dark:fill-ink-200 text-[11px] font-medium">
-            {reveal ? `${target.heightM} m · ${fmtPct(reveal.realPct)}` : "? m"}
+          <text x={T.x + T.w / 2} y={groundY + 31} textAnchor="middle" className={`text-[11px] font-medium ${space ? "fill-ink-200" : "fill-ink-800 dark:fill-ink-200"}`}>
+            {reveal ? `${fmtExact(target.heightM)} · ${fmtPct(reveal.realPct)}` : "?"}
           </text>
         </g>
 
@@ -283,7 +302,7 @@ function RevealCard({ reveal, base, target }: { reveal: NonNullable<GameStagePro
   return (
     <div className="animate-pop rounded-2xl bg-white/95 px-5 py-3 text-center shadow-xl backdrop-blur dark:bg-ink-900/95">
       <div className="text-xs font-medium uppercase tracking-wide text-ink-500 dark:text-ink-300">
-        {target.name} is <span className="font-bold text-ink-800 dark:text-ink-50">{fmtPct(reveal.realPct)}</span> of {base.name}
+        {target.name}&apos;s {target.measure === "diameter" ? "diameter" : target.measure === "length" ? "length" : "height"} is <span className="font-bold text-ink-800 dark:text-ink-50">{fmtPct(reveal.realPct)}</span> of {base.name}
       </div>
       <div className="mt-1 flex items-center justify-center gap-4 text-sm">
         <div>
@@ -304,9 +323,27 @@ function RevealCard({ reveal, base, target }: { reveal: NonNullable<GameStagePro
         </div>
       </div>
       <div className="mt-1 text-[11px] text-ink-500 dark:text-ink-300">
-        {target.heightM} m — {target.heightNote}
+        {fmtExact(target.heightM)} — {target.heightNote}
       </div>
     </div>
+  );
+}
+
+/** Deterministic twinkling starfield (no Math.random so SSR and client agree). */
+function Stars({ w, h }: { w: number; h: number }) {
+  const stars = useMemo(() => {
+    const out: { x: number; y: number; r: number; d: number }[] = [];
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < 90; i++) out.push({ x: rnd() * w, y: rnd() * h, r: rnd() * 1.4 + 0.3, d: rnd() * 4 });
+    return out;
+  }, [w, h]);
+  return (
+    <g>
+      {stars.map((s, i) => (
+        <circle key={i} cx={s.x} cy={s.y} r={s.r} fill="white" style={{ animation: `twinkle ${3 + (i % 4)}s ease-in-out ${s.d}s infinite` }} />
+      ))}
+    </g>
   );
 }
 
@@ -320,4 +357,4 @@ function Cloud({ x, y, s }: { x: number; y: number; s: number }) {
   );
 }
 
-export { fmtPct, fmtM } from "@/lib/format";
+export { fmtPct, fmtM, fmtExact } from "@/lib/format";

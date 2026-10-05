@@ -5,7 +5,17 @@ export type MonumentCategory =
   | "statue"
   | "skyscraper"
   | "bridge"
-  | "landmark";
+  | "landmark"
+  | "animal"
+  | "nature"
+  | "vehicle"
+  | "space";
+
+/** Top-level groups shown to players. Every non-mixed category belongs to "monuments". */
+export type CatalogGroup = "monuments" | "animal" | "nature" | "vehicle" | "space";
+
+/** Which dimension `heightM` measures. Drawn vertically in every case. */
+export type Measure = "height" | "length" | "diameter";
 
 /** 1 = world-famous, 2 = well known, 3 = lesser known, 4 = obscure */
 export type DifficultyTier = 1 | 2 | 3 | 4;
@@ -24,6 +34,8 @@ export interface Monument {
   /** Height in metres (see heightNote for what is / isn't included). */
   heightM: number;
   heightNote: string;
+  /** Default "height". Space bodies use "diameter"; a breaching whale uses "length". */
+  measure?: Measure;
   category: MonumentCategory;
   tier: DifficultyTier;
   funFact: string;
@@ -47,6 +59,16 @@ export interface LevelConfig {
   ratioBand: { minLog2: number; maxLog2: number };
   helpers: HelperLevel;
   roundsPerSession: number;
+  /** "classic" = monuments only, "mixed" = everything, "duel" = Which is more? Used to group levels on the home page. */
+  mode: "classic" | "mixed" | "duel";
+  /** "size" (drag to resize, default) or "duel" (tap the card with more). */
+  kind?: "size" | "duel";
+  /** Duel levels: which duel categories to draw pairs from. */
+  duelCats?: import("./duel").DuelCategoryId[];
+  /** Restrict the pool to these categories (omit = all). */
+  categories?: MonumentCategory[];
+  /** Only pair items from different groups (e.g. an animal vs a monument). */
+  crossGroup?: boolean;
   /** Lock-in required to score? If false, the last drag position counts. */
   unlockToPlay?: number; // minimum points to unlock (0 = free)
 }
@@ -73,6 +95,10 @@ export interface RoundResultEntry {
   nickname: string;
   guessPct: number | null;
   errorPct: number | null;
+  /** Duel rounds only. */
+  pick?: "a" | "b" | null;
+  ms?: number | null;
+  correct?: boolean;
   points: number;
   rank: number | null;
 }
@@ -82,6 +108,8 @@ export interface RoundResult {
   baseId: string;
   targetId: string;
   realPct: number;
+  /** Duel rounds only: the winning side. */
+  duel?: { winner: "a" | "b" };
   entries: RoundResultEntry[];
   leaderboard: { playerId: string; nickname: string; totalPoints: number }[];
 }
@@ -106,7 +134,8 @@ export interface RoomState {
   sessionId: string;
   players: PlayerPublic[];
   /** Present only during round/reveal. */
-  round?: { baseId: string; targetId: string; timerSec: number; roundId: string };
+  /** For duel rounds baseId/targetId are the left (a) and right (b) duel item ids. */
+  round?: { baseId: string; targetId: string; timerSec: number; roundId: string; kind?: "size" | "duel" };
   /** Present only during reveal. */
   result?: RoundResult;
   sessionResult?: SessionResult;

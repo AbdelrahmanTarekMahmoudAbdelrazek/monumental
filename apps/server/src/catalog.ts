@@ -32,6 +32,7 @@ export async function refreshCatalog(): Promise<void> {
         country: r.country,
         heightM: r.heightM,
         heightNote: r.heightNote,
+        measure: builtin?.measure,
         category: r.category as MonumentCategory,
         tier: Math.min(4, Math.max(1, r.tier)) as DifficultyTier,
         funFact: r.funFact,

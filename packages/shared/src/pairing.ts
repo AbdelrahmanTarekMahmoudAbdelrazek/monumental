@@ -1,4 +1,5 @@
 import type { LevelConfig, Monument, RoundPair } from "./types";
+import { groupOf } from "./monuments";
 
 /** Small deterministic PRNG (mulberry32) so rounds can be reproduced from a seed. */
 export function mulberry32(seed: number) {
@@ -23,11 +24,14 @@ export function hashSeed(s: string): number {
 
 /** All (base, target) ordered pairs that satisfy the level's tier + ratio constraints. */
 export function eligiblePairs(level: LevelConfig, monuments: Monument[]): RoundPair[] {
-  const pool = monuments.filter((m) => level.tiers.includes(m.tier));
+  const pool = monuments.filter(
+    (m) => level.tiers.includes(m.tier) && (!level.categories || level.categories.includes(m.category)),
+  );
   const out: RoundPair[] = [];
   for (const base of pool) {
     for (const target of pool) {
       if (base.id === target.id) continue;
+      if (level.crossGroup && groupOf(base) === groupOf(target)) continue;
       const l = Math.abs(Math.log2(target.heightM / base.heightM));
       if (l >= level.ratioBand.minLog2 && l <= level.ratioBand.maxLog2) {
         out.push({ baseId: base.id, targetId: target.id });
