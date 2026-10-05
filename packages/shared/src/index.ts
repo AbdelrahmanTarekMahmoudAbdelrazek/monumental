@@ -12,3 +12,4 @@ export * from "./duel";
 export * from "./custom";
 export * from "./shak";
 export * from "./oneword";
+export * from "./smuggle";

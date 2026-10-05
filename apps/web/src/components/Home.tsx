@@ -95,6 +95,17 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
       </section>
 
       <section className="mt-10">
+        <Link href="/smugglers" onClick={saveNick} className="flex flex-col items-start gap-3 rounded-3xl bg-[radial-gradient(ellipse_at_top_left,#3b2d5c,#1a1426)] p-5 text-white shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
+          <span className="text-5xl" aria-hidden>📦</span>
+          <div className="flex-1">
+            <h2 className="text-xl font-black">SMUGGLERS <span className="ml-1 rounded-full bg-amber-400 px-2 py-0.5 align-middle text-xs font-bold text-ink-900">NEW</span></h2>
+            <p className="text-sm text-white/75">Write a story together, one sentence each, while sneaking your secret word into it. Then catch everyone else&apos;s. 3–10 players.</p>
+          </div>
+          <span className="btn w-full bg-amber-400 text-ink-950 sm:w-auto">Start smuggling →</span>
+        </Link>
+      </section>
+
+      <section className="mt-6">
         <Link href="/oneword" onClick={saveNick} className="flex flex-col items-start gap-3 rounded-3xl bg-gradient-to-br from-[#16233a] to-[#24395c] p-5 text-white shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
           <span className="grid grid-cols-3 gap-1" aria-hidden>
             {["bg-rose-500", "bg-sky-500", "bg-[#efe6d2]", "bg-sky-500", "bg-ink-900", "bg-rose-500"].map((c, i) => <span key={i} className={`h-5 w-7 rounded ${c}`} />)}

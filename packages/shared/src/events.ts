@@ -80,6 +80,10 @@ export interface ServerToClientEvents {
   ow_state: (s: import("./oneword").OwPublicState) => void;
   /** The secret key — sent only to Spymasters. */
   ow_key: (k: { code: string; key: import("./oneword").OwColor[] | null }) => void;
+  /** SMUGGLERS tables. */
+  sm_state: (s: import("./smuggle").SmugglePublicState) => void;
+  /** Your own secret word(s) — sent only to you. */
+  sm_secret: (s: { code: string; words: string[] }) => void;
   /** Your team's guesser chat (full recent history; empty for Spymasters). */
   ow_chat: (c: { code: string; team: import("./oneword").OwTeam | null; msgs: import("./oneword").OwChatMsg[] }) => void;
 }
@@ -127,4 +131,15 @@ export interface ClientToServerEvents {
   ) => void;
   ow_leave: () => void;
   ow_act: (p: import("./oneword").OwAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** SMUGGLERS tables. */
+  sm_create: (
+    p: { settings?: Partial<import("./smuggle").SmuggleSettings>; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; code?: string; error?: string }) => void,
+  ) => void;
+  sm_join: (
+    p: { code: string; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; error?: string; playerId?: string; state?: import("./smuggle").SmugglePublicState; words?: string[] }) => void,
+  ) => void;
+  sm_leave: () => void;
+  sm_act: (p: import("./smuggle").SmuggleAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
 }

@@ -12,6 +12,7 @@ import { refreshCatalog, getCatalog } from "./catalog.js";
 import { TournamentScheduler } from "./tournaments/scheduler.js";
 import { ShakManager } from "./shak/ShakManager.js";
 import { OneWordManager } from "./oneword/OneWordManager.js";
+import { SmuggleManager } from "./smuggle/SmuggleManager.js";
 import { LEVELS } from "@monumental/shared";
 
 export async function createServer() {
@@ -41,7 +42,8 @@ export async function createServer() {
   const rooms = new RoomManager(io, store);
   const shak = new ShakManager(io);
   const oneword = new OneWordManager(io);
-  registerSocketHandlers(io, rooms, store, shak, oneword);
+  const smuggle = new SmuggleManager(io);
+  registerSocketHandlers(io, rooms, store, shak, oneword, smuggle);
 
   let scheduler: TournamentScheduler | null = null;
   if (db && config.tournamentsEnabled) {
@@ -64,7 +66,7 @@ export async function createServer() {
   app.get("/monuments", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=60"); res.json(getCatalog()); });
   app.get("/time", (_req, res) => res.json({ now: Date.now() }));
 
-  return { app, httpServer, io, rooms, store, scheduler, db, shak, oneword };
+  return { app, httpServer, io, rooms, store, scheduler, db, shak, oneword, smuggle };
 }
 
 // Boot when run directly.

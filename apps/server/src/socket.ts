@@ -1,13 +1,14 @@
 import type { Socket } from "socket.io";
 import { z } from "zod";
-import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
+import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
 import type { ShakManager } from "./shak/ShakManager.js";
 import type { OneWordManager } from "./oneword/OneWordManager.js";
+import type { SmuggleManager } from "./smuggle/SmuggleManager.js";
 import { resolveIdentity, type Identity } from "./auth.js";
 import type { RoomManager, IO } from "./room/RoomManager.js";
 import type { LiveStore } from "./store.js";
 
-type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string }>;
+type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string; sm?: string }>;
 
 const joinSchema = z.object({
   roomId: z.string().max(64).optional(),
@@ -25,7 +26,7 @@ const guessSchema = z.object({
   lock: z.boolean().default(false),
 });
 
-export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager) {
+export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager, sm?: SmuggleManager) {
   io.on("connection", (socket: Sock) => {
     // naive per-socket rate limit for guesses (drag streams are throttled client-side to ~10/s)
     let guessBudget = 40;
@@ -248,8 +249,70 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
     });
     socket.on("ow_leave", () => owLeave());
 
+    // ───────── SMUGGLERS ─────────
+    const smTable = () => (socket.data.sm && sm ? sm.get(socket.data.sm) : undefined);
+    const smLeave = () => {
+      const t = smTable();
+      if (t && socket.data.identity) t.leave(socket.data.identity.playerKey);
+      if (socket.data.sm) socket.leave(`sm:${socket.data.sm}`);
+      socket.data.sm = undefined;
+    };
+    socket.on("sm_create", async (raw, ack) => {
+      if (!sm) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ settings: z.record(z.string(), z.unknown()).optional() }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        if (Date.now() - lastCreate < 5000) return ack({ ok: false, error: "Slow down a little" });
+        lastCreate = Date.now();
+        const t = sm.create(identity.playerKey, normaliseSmuggleSettings(p.settings as Partial<SmuggleSettings>));
+        ack({ ok: true, code: t.code });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    socket.on("sm_join", async (raw, ack) => {
+      if (!sm) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ code: z.string().min(4).max(10) }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        const t = sm.get(p.code);
+        if (!t) return ack({ ok: false, error: "Game not found — ask the host for a new link" });
+        if (socket.data.sm && socket.data.sm !== t.code) smLeave();
+        if (socket.data.sm !== t.code) {
+          const r = t.join(identity.playerKey, identity.nickname);
+          if (!r.ok) return ack(r);
+        }
+        socket.data.identity = identity;
+        socket.data.sm = t.code;
+        socket.join(`sm:${t.code}`);
+        socket.join(`player:${identity.playerKey}`);
+        ack({ ok: true, playerId: identity.playerKey, state: t.state(), words: t.secretFor(identity.playerKey) });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    const smAction = z.discriminatedUnion("type", [
+      z.object({ type: z.literal("start") }),
+      z.object({ type: z.literal("write"), text: z.string().max(400) }),
+      z.object({ type: z.literal("guess"), guesses: z.record(z.string().max(64), z.string().max(40)) }),
+      z.object({ type: z.literal("settings"), settings: z.record(z.string(), z.unknown()) }),
+      z.object({ type: z.literal("to_lobby") }),
+    ]);
+    socket.on("sm_act", (raw, ack) => {
+      const t = smTable();
+      const me = socket.data.identity?.playerKey;
+      if (!t || !me) return ack?.({ ok: false, error: "Join a game first" });
+      if (guessBudget-- <= 0) return ack?.({ ok: false, error: "Too fast" });
+      const p = smAction.safeParse(raw);
+      if (!p.success) return ack?.({ ok: false, error: "Invalid action" });
+      let a = p.data as SmuggleAction;
+      if (a.type === "settings") a = { type: "settings", settings: normaliseSmuggleSettings({ ...t.state().settings, ...(a.settings as Partial<SmuggleSettings>) }) };
+      ack?.(t.act(me, a));
+    });
+    socket.on("sm_leave", () => smLeave());
+
     socket.on("leave_room", () => leave());
-    socket.on("disconnect", () => { clearInterval(refill); leave(); shakLeave(); owLeave(); });
+    socket.on("disconnect", () => { clearInterval(refill); leave(); shakLeave(); owLeave(); smLeave(); });
 
     function leave() {
       const { identity, roomId } = socket.data;

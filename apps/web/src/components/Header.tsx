@@ -7,6 +7,7 @@ import type { AppSessionUser } from "@/lib/auth";
 const nav = [
   { href: "/", label: "Play" },
   { href: "/duel", label: "Which is more?" },
+  { href: "/smugglers", label: "Smugglers" },
   { href: "/oneword", label: "One Word" },
   { href: "/shak", label: "أشك Domino" },
   { href: "/host", label: "Host a game" },
@@ -21,23 +22,23 @@ export default function Header({ user }: { user: AppSessionUser | null }) {
   return (
     <header className="sticky top-0 z-30 border-b border-ink-900/5 bg-ink-50/80 backdrop-blur dark:border-white/10 dark:bg-ink-950/80">
       <div className="mx-auto flex max-w-6xl items-center gap-3 px-3 py-2 md:px-4">
-        <Link href="/" className="flex items-center gap-2">
+        <Link href="/" className="flex shrink-0 items-center gap-2">
           <Logo />
-          <span className="font-display text-lg font-black tracking-tight">How Big<span className="text-brand-500">?</span></span>
+          <span className="whitespace-nowrap font-display text-lg font-black tracking-tight">How Big<span className="text-brand-500">?</span></span>
         </Link>
-        <nav className="ml-2 hidden items-center gap-1 whitespace-nowrap text-sm font-semibold sm:flex">
+        <nav className="ml-1 hidden min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap text-[13px] font-semibold [scrollbar-width:none] sm:flex">
           {nav.map((n) => (
-            <Link key={n.href} href={n.href} className={`rounded-full px-3 py-1.5 transition ${path === n.href ? "bg-brand-500/15 text-brand-700 dark:text-brand-300" : "text-ink-600 hover:bg-ink-100 dark:text-ink-200 dark:hover:bg-ink-800"}`}>{n.label}</Link>
+            <Link key={n.href} href={n.href} className={`shrink-0 rounded-full px-2 py-1.5 transition ${path === n.href ? "bg-brand-500/15 text-brand-700 dark:text-brand-300" : "text-ink-600 hover:bg-ink-100 dark:text-ink-200 dark:hover:bg-ink-800"}`}>{n.label}</Link>
           ))}
           {user?.role === "ADMIN" && <Link href="/admin/monuments" className="rounded-full px-3 py-1.5 text-ink-600 hover:bg-ink-100 dark:text-ink-200 dark:hover:bg-ink-800">Admin</Link>}
         </nav>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <button onClick={toggleMuted} className="btn-ghost h-9 w-9 !p-0" aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>{muted ? "🔇" : "🔊"}</button>
           <button onClick={toggleTheme} className="btn-ghost h-9 w-9 !p-0" aria-label="Toggle theme" title="Light / dark">{theme === "dark" ? "☀️" : "🌙"}</button>
           {user ? (
             <Link href="/profile" className="btn-ghost h-9 max-w-[140px] truncate !px-3 text-xs">{user.nickname ?? user.name ?? user.email}</Link>
           ) : (
-            <Link href="/auth/signin" className="btn-ghost h-9 !px-3 text-xs">Sign in</Link>
+            <Link href="/auth/signin" className="btn-ghost h-9 whitespace-nowrap !px-3 text-xs">Sign in</Link>
           )}
         </div>
       </div>
