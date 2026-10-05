@@ -76,6 +76,10 @@ export interface ServerToClientEvents {
   shak_state: (s: import("./shak").ShakPublicState) => void;
   /** Your own hand (sent only to you). */
   shak_hand: (h: { code: string; tiles: number[] }) => void;
+  /** ONE WORD tables. */
+  ow_state: (s: import("./oneword").OwPublicState) => void;
+  /** The secret key — sent only to Spymasters. */
+  ow_key: (k: { code: string; key: import("./oneword").OwColor[] | null }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -110,4 +114,15 @@ export interface ClientToServerEvents {
   shak_play: (p: { tiles: number[]; number?: number }, ack: (a: { ok: boolean; error?: string }) => void) => void;
   shak_pass: (ack: (a: { ok: boolean; error?: string }) => void) => void;
   shak_doubt: (ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** ONE WORD tables. */
+  ow_create: (
+    p: { settings?: Partial<import("./oneword").OwSettings>; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; code?: string; error?: string }) => void,
+  ) => void;
+  ow_join: (
+    p: { code: string; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; error?: string; playerId?: string; state?: import("./oneword").OwPublicState; key?: import("./oneword").OwColor[] | null }) => void,
+  ) => void;
+  ow_leave: () => void;
+  ow_act: (p: import("./oneword").OwAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
 }
