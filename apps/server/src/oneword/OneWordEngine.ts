@@ -11,6 +11,8 @@ import {
   type OwSettings,
   type OwTeam,
   type OwClueLog,
+  type OwChatMsg,
+  OW_CHAT_MAX,
 } from "@monumental/shared";
 
 interface Seat {
@@ -29,6 +31,8 @@ export interface OwEvents {
   broadcast: (s: OwPublicState) => void;
   /** Send the key (or null) to one player. */
   sendKey: (playerId: string, key: OwColor[] | null) => void;
+  /** Send the team chat history (or empty) to one player. */
+  sendChat: (playerId: string, team: OwTeam | null, msgs: OwChatMsg[]) => void;
   onIdle: () => void;
 }
 
@@ -56,6 +60,8 @@ export class OneWordEngine {
   private hostTimer: ReturnType<typeof setTimeout> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
+  private chats: Record<OwTeam, OwChatMsg[]> = { red: [], blue: [] };
+  private chatSeq = 0;
 
   constructor(
     readonly code: string,
@@ -114,6 +120,29 @@ export class OneWordEngine {
     return this.key.slice();
   }
 
+  /** Team chat a player may read: guessers only, their own team. */
+  chatFor(id: string): OwChatMsg[] {
+    const s = this.seats.find((x) => x.id === id);
+    if (!s || !s.team || s.role !== "operative") return [];
+    return this.chats[s.team].slice();
+  }
+
+  private sendPrivate(s: Seat) {
+    this.ev.sendKey(s.id, this.keyFor(s.id));
+    this.ev.sendChat(s.id, s.role === "operative" ? s.team : null, this.chatFor(s.id));
+  }
+
+  private chat(me: Seat, raw: string): R {
+    if (!me.team || me.role !== "operative") return no("Only guessers can use the team chat — Spymasters must stay silent 🤐");
+    const text = String(raw ?? "").replace(/\s+/g, " ").trim().slice(0, OW_CHAT_MAX);
+    if (!text) return no("Type a message");
+    const list = this.chats[me.team];
+    list.push({ id: ++this.chatSeq, by: me.id, nickname: me.nickname, text, at: this.now() });
+    if (list.length > 60) list.splice(0, list.length - 60);
+    for (const s of this.seats) if (s.team === me.team && s.role === "operative") this.ev.sendChat(s.id, s.team, list.slice());
+    return ok;
+  }
+
   // ───────────────────────── actions ─────────────────────────
 
   act(by: string, a: OwAction): R {
@@ -130,6 +159,7 @@ export class OneWordEngine {
       case "settings": return this.updateSettings(by, a.settings);
       case "shuffle_teams": return this.shuffleTeams(by);
       case "to_lobby": return this.toLobby(by);
+      case "chat": return this.chat(me, a.text);
     }
     return no("Unknown action");
   }
@@ -147,7 +177,7 @@ export class OneWordEngine {
     }
     me.team = team;
     me.role = role;
-    this.ev.sendKey(me.id, this.keyFor(me.id));
+    this.sendPrivate(me);
     this.push();
     return ok;
   }
@@ -161,7 +191,7 @@ export class OneWordEngine {
       s.team = i % 2 === 0 ? "red" : "blue";
       s.role = i < 2 ? "spymaster" : "operative";
     });
-    this.seats.forEach((s) => this.ev.sendKey(s.id, null));
+    this.seats.forEach((s) => this.sendPrivate(s));
     this.push();
     return ok;
   }
@@ -179,7 +209,7 @@ export class OneWordEngine {
     this.clearTimer();
     this.phase = "lobby";
     this.seats = this.seats.filter((x) => x.connections > 0);
-    this.seats.forEach((s) => this.ev.sendKey(s.id, null));
+    this.seats.forEach((s) => this.sendPrivate(s));
     this.push();
     return ok;
   }
@@ -215,7 +245,8 @@ export class OneWordEngine {
     this.turn = this.startTeam;
     this.setEvent(`Game ${this.game} — ${cap(this.startTeam)} goes first and has 9 words`);
     this.beginClue();
-    this.seats.forEach((s) => this.ev.sendKey(s.id, this.keyFor(s.id)));
+    this.chats = { red: [], blue: [] };
+    this.seats.forEach((s) => this.sendPrivate(s));
     return ok;
   }
 

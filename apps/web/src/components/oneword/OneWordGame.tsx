@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { OW_TIMER_CHOICES, otherTeam, type OwColor, type OwPlayerPublic, type OwPublicState, type OwTeam } from "@monumental/shared";
+import { OW_TIMER_CHOICES, otherTeam, type OwChatMsg, type OwColor, type OwPlayerPublic, type OwPublicState, type OwTeam } from "@monumental/shared";
 import { useOneWord } from "@/lib/useOneWord";
 import { serverNow } from "@/lib/socket";
 import { sfx } from "@/lib/sound";
@@ -128,39 +128,49 @@ export default function OneWordGame({ code, userToken }: { code: string; userTok
                 const tint = !c.revealed && spyColor ? TINT[spyColor] : "";
                 const marked = c.marks.length > 0;
                 const canTap = myTurnGuess && !c.revealed;
+                const mineMarked = canTap && c.marks.includes(me ?? "");
+                const done = c.revealed; // guessed → covered in its colour and greyed out
                 return (
-                  <div key={i} className="relative" data-testid="ow-card" data-color={known ?? spyColor ?? ""}>
+                  <div key={i} className="relative" data-testid="ow-card" data-color={known ?? spyColor ?? ""} data-revealed={done ? "1" : ""}>
                     <button
                       type="button"
                       disabled={!canTap}
                       onClick={() => void act({ type: "mark", index: i })}
-                      className={`group relative flex aspect-[4/3] w-full flex-col justify-end rounded-lg border-2 p-1 shadow-[0_4px_0_rgba(0,0,0,.35)] transition sm:rounded-xl sm:p-2 ${tint || face.frame} ${c.revealed && state.phase === "playing" ? "" : ""} ${state.phase === "finished" && !c.revealed ? "opacity-60" : ""} ${canTap ? "cursor-pointer hover:-translate-y-0.5 hover:brightness-105" : "cursor-default"} ${marked ? `ring-4 ${TEAM[state.turn].ring}` : ""} ${c.revealed ? "animate-[tileFlip_.5s_ease-out_both]" : ""}`}
+                      className={`group relative flex aspect-[4/3] w-full flex-col justify-end overflow-hidden rounded-lg border-2 p-1 transition sm:rounded-xl sm:p-2 ${tint || face.frame} ${done ? "shadow-inner saturate-[.65] brightness-75" : "shadow-[0_4px_0_rgba(0,0,0,.35)]"} ${state.phase === "finished" && !done ? "opacity-70" : ""} ${canTap ? "cursor-pointer hover:-translate-y-0.5 hover:brightness-105" : "cursor-default"} ${marked && !done ? `ring-4 ${TEAM[state.turn].ring}` : ""} ${done ? "animate-[tileFlip_.5s_ease-out_both]" : ""}`}
                     >
+                      {done && known !== "bomb" && (
+                        <span className="absolute inset-0 grid place-items-center text-3xl font-black text-white/70 sm:text-5xl" aria-hidden>
+                          {known === "neutral" ? "—" : "✓"}
+                        </span>
+                      )}
                       {known === "bomb" && <span className="absolute inset-0 grid place-items-center text-2xl sm:text-4xl">💣</span>}
-                      {!c.revealed && spyColor === "bomb" && <span className="absolute right-1 top-1 text-sm sm:text-lg">💣</span>}
-                      <span className={`block truncate rounded-md border-2 px-0.5 py-0.5 text-center text-[9px] font-black uppercase leading-tight tracking-tight sm:py-1.5 sm:text-sm md:text-base lg:text-lg ${c.revealed ? face.plate : "border-[#d8c9a6] bg-[#fffaf0]"} ${c.revealed ? face.word : "text-ink-900"}`}>
+                      {!done && spyColor === "bomb" && <span className="absolute right-1 top-1 text-sm sm:text-lg">💣</span>}
+                      <span className={`relative block truncate rounded-md border-2 px-0.5 py-0.5 text-center text-[9px] font-black uppercase leading-tight tracking-tight sm:py-1.5 sm:text-sm md:text-base lg:text-lg ${done ? "border-black/20 bg-black/35 text-white/55 line-through decoration-2" : "border-[#d8c9a6] bg-[#fffaf0] text-ink-900"}`}>
                         {c.word}
                       </span>
                     </button>
-                    {marked && (
-                      <div className="pointer-events-none absolute left-1 top-1 flex max-w-[70%] flex-wrap gap-0.5">
-                        {c.marks.slice(0, 3).map((id) => <span key={id} className="truncate rounded bg-white/90 px-1 text-[8px] font-bold text-ink-900 sm:text-[10px]">{name(id)}</span>)}
+                    {marked && !done && !mineMarked && (
+                      <div className="pointer-events-none absolute left-1 top-1 flex max-w-[90%] flex-wrap gap-0.5">
+                        {c.marks.slice(0, 3).map((id) => <span key={id} className="truncate rounded bg-white/90 px-1 text-[8px] font-bold text-ink-900 sm:text-[10px]">👉 {name(id)}</span>)}
                       </div>
                     )}
-                    {canTap && c.marks.includes(me ?? "") && (
+                    {mineMarked && (
                       <button type="button" onClick={() => void act({ type: "reveal", index: i })} data-testid="ow-reveal"
-                        className="absolute -right-1 -top-1 z-10 grid h-7 w-7 place-items-center rounded-full bg-amber-400 text-sm font-black text-ink-950 shadow-lg ring-2 ring-white hover:scale-110 sm:h-9 sm:w-9">✓</button>
+                        className="absolute inset-x-1 top-1 z-10 rounded-md bg-amber-400 py-1 text-[10px] font-black uppercase text-ink-950 shadow-lg ring-2 ring-white hover:bg-amber-300 sm:inset-x-2 sm:top-2 sm:py-2 sm:text-sm">
+                        🔒 Lock in
+                      </button>
                     )}
                   </div>
                 );
               })}
             </div>
-            {myTurnGuess && <p className="mt-2 text-center text-xs text-white/60">Tap a word to point at it (your team sees it), then press ✓ to reveal it.</p>}
+            {myTurnGuess && <p className="mt-2 text-center text-xs text-white/60">Tap a word to point at it (your team sees it), then press 🔒 Lock in to reveal it.</p>}
             {err && <p className="mt-2 text-center text-sm font-bold text-rose-300">{err}</p>}
           </div>
 
           <div className="order-3 space-y-4 self-start">
             <TeamPanel team="blue" state={state} me={me} />
+            {mine?.role === "operative" && mine.team && <TeamChat team={mine.team} msgs={g.chat} me={me} send={(text) => act({ type: "chat", text })} />}
             <GameLog state={state} />
           </div>
         </div>
@@ -174,8 +184,16 @@ export default function OneWordGame({ code, userToken }: { code: string; userTok
       {state.phase === "playing" && (myTurnSpy || myTurnGuess) && (
         <div className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-[#0f1726]/95 px-2 py-3 backdrop-blur">
           {myTurnSpy ? <ClueBar onSend={(word, count) => act({ type: "clue", word, count })} team={state.turn} /> : (
-            <div className="flex justify-center">
-              <button className="btn bg-amber-400 text-ink-950 hover:bg-amber-300" data-testid="ow-end-turn" onClick={() => void act({ type: "end_turn" })}>End turn ⏭</button>
+            <div className="flex flex-wrap justify-center gap-2">
+              {(() => {
+                const pick = state.cards.findIndex((c) => !c.revealed && c.marks.includes(me ?? ""));
+                return pick >= 0 ? (
+                  <button className="btn bg-amber-400 text-ink-950 hover:bg-amber-300" data-testid="ow-lockin" onClick={() => void act({ type: "reveal", index: pick })}>
+                    🔒 Lock in “{state.cards[pick].word}”
+                  </button>
+                ) : <span className="self-center text-sm text-white/60">Tap a word, then lock it in</span>;
+              })()}
+              <button className="btn border border-white/30 text-white hover:bg-white/10" data-testid="ow-end-turn" onClick={() => void act({ type: "end_turn" })}>End turn ⏭</button>
             </div>
           )}
         </div>
@@ -242,6 +260,48 @@ function Member({ p, me, spy }: { p?: OwPlayerPublic; me: string | null; spy?: b
     <span className={`inline-flex items-center gap-1 rounded-full bg-black/25 px-2 py-0.5 text-xs font-semibold ${p.connected ? "" : "opacity-50"} ${p.id === me ? "ring-2 ring-white" : ""}`}>
       {spy ? "🕵️" : "🙂"} {p.nickname}{p.id === me ? " (you)" : ""}
     </span>
+  );
+}
+
+function TeamChat({ team, msgs, me, send }: { team: OwTeam; msgs: OwChatMsg[]; me: string | null; send: (t: string) => Promise<{ ok: boolean }> }) {
+  const [text, setText] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+  const seen = useRef(0);
+  const last = msgs[msgs.length - 1]?.id ?? 0;
+  useEffect(() => {
+    if (box.current) box.current.scrollTop = box.current.scrollHeight;
+    if (last > seen.current && seen.current !== 0 && msgs[msgs.length - 1]?.by !== me) sfx.tick();
+    seen.current = last;
+  }, [last]); // eslint-disable-line react-hooks/exhaustive-deps
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const t = text.trim();
+    if (!t) return;
+    setText("");
+    const r = await send(t);
+    if (!r.ok) setText(t);
+  };
+  return (
+    <div className={`rounded-2xl bg-black/30 p-3 ring-2 ${team === "red" ? "ring-rose-500/60" : "ring-sky-500/60"}`} data-testid="ow-chat">
+      <div className="text-xs font-black uppercase tracking-wider">💬 {TEAM[team].name} team chat</div>
+      <div className="text-[10px] text-white/50">Guessers only · your Spymaster can&apos;t see it</div>
+      <div ref={box} className="mt-2 h-44 space-y-1.5 overflow-y-auto pr-1 text-sm" data-testid="ow-chat-msgs">
+        {msgs.length === 0 && <p className="pt-12 text-center text-xs text-white/40">Discuss your guesses here…</p>}
+        {msgs.map((m) => (
+          <div key={m.id} className={`flex ${m.by === me ? "justify-end" : ""}`}>
+            <div className={`max-w-[85%] rounded-2xl px-3 py-1.5 ${m.by === me ? `${TEAM[team].bg} rounded-br-sm` : "rounded-bl-sm bg-white/10"}`}>
+              {m.by !== me && <div className="text-[10px] font-bold text-white/60">{m.nickname}</div>}
+              <div className="break-words">{m.text}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <form onSubmit={submit} className="mt-2 flex gap-1.5">
+        <input className="min-w-0 flex-1 rounded-xl bg-white/10 px-3 py-2 text-sm outline-none ring-amber-400 placeholder:text-white/40 focus:ring-2"
+          placeholder="Message your team…" maxLength={200} value={text} onChange={(e) => setText(e.target.value)} data-testid="ow-chat-input" />
+        <button className="rounded-xl bg-amber-400 px-3 text-sm font-black text-ink-950 hover:bg-amber-300 disabled:opacity-40" disabled={!text.trim()} data-testid="ow-chat-send">➤</button>
+      </form>
+    </div>
   );
 }
 

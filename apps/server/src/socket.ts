@@ -218,7 +218,7 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
         socket.data.ow = t.code;
         socket.join(`ow:${t.code}`);
         socket.join(`player:${identity.playerKey}`);
-        ack({ ok: true, playerId: identity.playerKey, state: t.state(), key: t.keyFor(identity.playerKey) });
+        ack({ ok: true, playerId: identity.playerKey, state: t.state(), key: t.keyFor(identity.playerKey), chat: t.chatFor(identity.playerKey) });
       } catch (e) {
         ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
       }
@@ -233,6 +233,7 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       z.object({ type: z.literal("settings"), settings: z.record(z.string(), z.unknown()) }),
       z.object({ type: z.literal("shuffle_teams") }),
       z.object({ type: z.literal("to_lobby") }),
+      z.object({ type: z.literal("chat"), text: z.string().max(400) }),
     ]);
     socket.on("ow_act", (raw, ack) => {
       const t = owTable();

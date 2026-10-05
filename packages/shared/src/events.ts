@@ -80,6 +80,8 @@ export interface ServerToClientEvents {
   ow_state: (s: import("./oneword").OwPublicState) => void;
   /** The secret key — sent only to Spymasters. */
   ow_key: (k: { code: string; key: import("./oneword").OwColor[] | null }) => void;
+  /** Your team's guesser chat (full recent history; empty for Spymasters). */
+  ow_chat: (c: { code: string; team: import("./oneword").OwTeam | null; msgs: import("./oneword").OwChatMsg[] }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -121,7 +123,7 @@ export interface ClientToServerEvents {
   ) => void;
   ow_join: (
     p: { code: string; nickname: string; guestId?: string; userToken?: string },
-    ack: (a: { ok: boolean; error?: string; playerId?: string; state?: import("./oneword").OwPublicState; key?: import("./oneword").OwColor[] | null }) => void,
+    ack: (a: { ok: boolean; error?: string; playerId?: string; state?: import("./oneword").OwPublicState; key?: import("./oneword").OwColor[] | null; chat?: import("./oneword").OwChatMsg[] }) => void,
   ) => void;
   ow_leave: () => void;
   ow_act: (p: import("./oneword").OwAction, ack: (a: { ok: boolean; error?: string }) => void) => void;

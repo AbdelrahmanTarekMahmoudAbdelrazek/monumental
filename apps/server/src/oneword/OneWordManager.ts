@@ -14,6 +14,7 @@ export class OneWordManager {
     const t = new OneWordEngine(code, hostId, settings, {
       broadcast: (s) => this.io.to(`ow:${code}`).emit("ow_state", s),
       sendKey: (id, key) => this.io.to(`player:${id}`).emit("ow_key", { code, key }),
+      sendChat: (id, team, msgs) => this.io.to(`player:${id}`).emit("ow_chat", { code, team, msgs }),
       onIdle: () => this.destroy(code),
     });
     this.tables.set(code, t);

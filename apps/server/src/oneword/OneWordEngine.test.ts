@@ -5,12 +5,14 @@ import { OneWordEngine } from "./OneWordEngine";
 function table(seed = 1, timerSec = 0) {
   const states: OwPublicState[] = [];
   const keys = new Map<string, OwColor[] | null>();
+  const chats = new Map<string, string[]>();
   const t = new OneWordEngine("TEST1", "h", { timerSec, pack: "standard" }, {
     broadcast: (s) => states.push(JSON.parse(JSON.stringify(s))),
     sendKey: (id, k) => keys.set(id, k),
+    sendChat: (id, _team, msgs) => chats.set(id, msgs.map((m) => m.text)),
     onIdle: () => {},
   }, () => Date.now(), mulberry32(seed));
-  return { t, states, keys, last: () => states[states.length - 1] };
+  return { t, states, keys, chats, last: () => states[states.length - 1] };
 }
 
 /** Host + 3: red spymaster h, red guesser a, blue spymaster b, blue guesser c. */
@@ -147,6 +149,23 @@ describe("ONE WORD rules", () => {
     expect(x.t.act(guesser(team), { type: "end_turn" }).ok).toBe(true);
     expect(x.last().turn).not.toBe(team);
     expect(x.last().stage).toBe("clue");
+  });
+
+  it("team chat reaches only that team's guessers; spymasters can't chat", () => {
+    const x = ready(9);
+    x.t.join("d", "Dan"); // auto-assigned as a guesser
+    x.t.act("d", { type: "join_team", team: "red", role: "operative" });
+    x.t.start("h");
+    expect(x.t.act("a", { type: "chat", text: "  I think   PARK " }).ok).toBe(true);
+    expect(x.chats.get("a")).toEqual(["I think PARK"]);
+    expect(x.chats.get("d")).toEqual(["I think PARK"]);
+    expect(x.chats.get("c") ?? []).toEqual([]); // other team
+    expect(x.chats.get("h") ?? []).toEqual([]); // own spymaster
+    expect(x.t.act("h", { type: "chat", text: "psst" }).ok).toBe(false);
+    expect(x.t.act("a", { type: "chat", text: "   " }).ok).toBe(false);
+    expect(x.t.chatFor("d")).toHaveLength(1);
+    expect(x.t.chatFor("b")).toHaveLength(0);
+    expect(JSON.stringify(x.last())).not.toContain("I think PARK"); // never in public state
   });
 
   it("timer passes the turn when it runs out", () => {

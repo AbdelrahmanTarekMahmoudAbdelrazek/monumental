@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import type { OwAction, OwColor, OwPublicState } from "@monumental/shared";
+import type { OwAction, OwChatMsg, OwColor, OwPublicState } from "@monumental/shared";
 import { getSocket, noteServerNow, syncClock } from "./socket";
 import { getGuestId, getNickname } from "./identity";
 
@@ -10,6 +10,7 @@ type Ack = { ok: boolean; error?: string };
 export function useOneWord(code: string, userToken?: string | null) {
   const [state, setState] = useState<OwPublicState | null>(null);
   const [key, setKey] = useState<OwColor[] | null>(null);
+  const [chat, setChat] = useState<OwChatMsg[]>([]);
   const [me, setMe] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -25,6 +26,7 @@ export function useOneWord(code: string, userToken?: string | null) {
         setMe(a.playerId ?? null);
         setState(a.state);
         setKey(a.key ?? null);
+        setChat(a.chat ?? []);
         noteServerNow(a.state.serverNow);
         void syncClock();
       });
@@ -32,6 +34,8 @@ export function useOneWord(code: string, userToken?: string | null) {
     const onDisconnect = () => setConnected(false);
     const onState = (st: OwPublicState) => { if (st.code === code) setState(st); };
     const onKey = (k: { code: string; key: OwColor[] | null }) => { if (k.code === code) setKey(k.key); };
+    const onChat = (c: { code: string; msgs: OwChatMsg[] }) => { if (c.code === code) setChat(c.msgs); };
+    s.on("ow_chat", onChat);
     s.on("connect", onConnect);
     s.on("disconnect", onDisconnect);
     s.on("ow_state", onState);
@@ -44,9 +48,10 @@ export function useOneWord(code: string, userToken?: string | null) {
       s.off("disconnect", onDisconnect);
       s.off("ow_state", onState);
       s.off("ow_key", onKey);
+      s.off("ow_chat", onChat);
     };
   }, [code, userToken]);
 
   const act = (a: OwAction) => new Promise<Ack>((res) => getSocket().emit("ow_act", a, res));
-  return { state, key, me, error, connected, act };
+  return { state, key, chat, me, error, connected, act };
 }

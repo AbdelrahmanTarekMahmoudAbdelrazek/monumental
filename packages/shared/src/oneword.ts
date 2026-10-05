@@ -166,4 +166,15 @@ export type OwAction =
   | { type: "end_turn" }
   | { type: "settings"; settings: Partial<OwSettings> }
   | { type: "shuffle_teams" }
-  | { type: "to_lobby" };
+  | { type: "to_lobby" }
+  | { type: "chat"; text: string };
+
+/** Team chat message — only that team's guessers see it (Spymasters must stay silent). */
+export interface OwChatMsg {
+  id: number;
+  by: string;
+  nickname: string;
+  text: string;
+  at: number;
+}
+export const OW_CHAT_MAX = 200;
