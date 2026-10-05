@@ -1,13 +1,14 @@
 /**
- * NEON DRIFT — cars leave a glowing trail. Touch any trail (even your own) and you crash.
+ * NEON DRIFT — cars leave a glowing trail. Touch someone else's trail and you crash (your own is safe).
  *  • Grab ⛽ gas to make your trail longer (it follows you like a snake's body).
  *  • Cut in front of rivals so they hit your trail. Each crash into your trail = +1 kill.
- *  • Last car driving wins the round (+3). Then everyone respawns.
+ *  • Endless arena: no rounds. Crash → respawn 3 s later with a fresh short trail (and 2 s of spawn shield).
  *  • Power-ups last a few seconds: 🛡 Shield (drive through trails), ⚡ Turbo (free speed), 🧲 Magnet (pull gas).
  */
 
 export const NEON = {
-  TICK_MS: 50,
+  /** 30 ticks per second. */
+  TICK_MS: 33,
   CAR_R: 11,
   TRAIL_W: 8,
   SPEED: 230,
@@ -16,16 +17,22 @@ export const NEON = {
   TURN: 3.3,
   START_LEN: 260,
   GAS_LEN: 45,
+  /** Trails stop growing here (keeps the arena playable and packets small). */
+  MAX_LEN: 4000,
   GAS_R: 9,
   POWER_R: 16,
-  /** Own trail right behind the car is ignored for collisions. */
-  SELF_SKIP: 48,
   MAGNET_R: 220,
   BOOST_DRAIN: 0.45,
   BOOST_REFILL: 0.12,
-  ROUND_OVER_MS: 4000,
-  /** Full trail resync every N ticks. */
-  FULL_EVERY: 40,
+  RESPAWN_MS: 3000,
+  /** Spawn protection. */
+  SPAWN_SHIELD_MS: 2000,
+  /** How quickly steering eases in/out (per second). */
+  STEER_EASE: 14,
+  /** Full trail resync every N ticks (~2 s). */
+  FULL_EVERY: 60,
+  /** Client renders this far in the past to always have two snapshots to blend. */
+  INTERP_MS: 100,
   MAX_PLAYERS: 12,
 } as const;
 
@@ -78,6 +85,8 @@ export interface NeonPlayerPublic {
   score: number;
   kills: number;
   wins: number;
+  /** Longest trail this session. */
+  best: number;
 }
 
 /** Slow-changing room info (sent on change). */
@@ -111,6 +120,8 @@ export interface NeonCarSnap {
   power: NeonPower | null;
   /** ms of power left. */
   powerMs: number;
+  /** ms until respawn (crashed cars). */
+  respawnMs: number;
 }
 
 export interface NeonSnap {

@@ -7,11 +7,13 @@ import { getGuestId, getNickname } from "./identity";
 type Ack = { ok: boolean; error?: string };
 
 export interface NeonWorld {
-  /** Previous and latest snapshot, with local arrival times (ms, performance.now). */
-  prev: NeonSnap | null;
+  /** Latest snapshot. */
   cur: NeonSnap | null;
-  prevAt: number;
-  curAt: number;
+  /** Recent snapshots (oldest first) for smooth interpolation. */
+  buf: NeonSnap[];
+  /** local performance.now() − server time, estimated from the fastest recent arrivals. */
+  offset: number;
+  offsets: number[];
   /** Rebuilt trails, flat [x,y,…] oldest first. */
   trails: Map<string, number[]>;
   gas: Map<number, [number, number]>;
@@ -34,7 +36,7 @@ export function useNeon(code: string, userToken?: string | null) {
   const [me, setMe] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
-  const world = useRef<NeonWorld>({ prev: null, cur: null, prevAt: 0, curAt: 0, trails: new Map(), gas: new Map(), powers: [], deaths: [] });
+  const world = useRef<NeonWorld>({ cur: null, buf: [], offset: 0, offsets: [], trails: new Map(), gas: new Map(), powers: [], deaths: [] });
 
   useEffect(() => {
     const s = getSocket();
@@ -78,8 +80,12 @@ export function useNeon(code: string, userToken?: string | null) {
       if (sn.gasDel) for (const id of sn.gasDel) w.gas.delete(id);
       if (sn.gasAdd) for (let i = 0; i < sn.gasAdd.length; i += 3) w.gas.set(sn.gasAdd[i], [sn.gasAdd[i + 1], sn.gasAdd[i + 2]]);
       w.powers = sn.powers ?? [];
-      w.prev = w.cur; w.prevAt = w.curAt;
-      w.cur = sn; w.curAt = t;
+      w.cur = sn;
+      w.buf.push(sn);
+      if (w.buf.length > 24) w.buf.shift();
+      w.offsets.push(t - sn.t);
+      if (w.offsets.length > 60) w.offsets.shift();
+      w.offset = Math.min(...w.offsets);
       if (w.deaths.length > 30) w.deaths.splice(0, w.deaths.length - 30);
     };
     s.on("connect", onConnect);

@@ -36,6 +36,13 @@ interface Car {
   wins: number;
   /** Bot brain: re-think counter. */
   think: number;
+  /** Smoothed steering −1…1. */
+  steer: number;
+  /** When a crashed car comes back (0 = not waiting). */
+  respawnAt: number;
+  /** Kills in the current life, and the best trail length ever. */
+  lifeKills: number;
+  best: number;
 }
 
 interface Gas { id: number; x: number; y: number }
@@ -80,14 +87,11 @@ export class NeonEngine {
   private nextId = 1;
   private tickNo = 0;
   private loop: ReturnType<typeof setInterval> | null = null;
-  private roundTimer: ReturnType<typeof setTimeout> | null = null;
   private hostTimer: ReturnType<typeof setTimeout> | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
   /** Spatial hash of trail segments: cell → [carIndex, pointIndex] pairs. */
   private grid = new Map<number, number[]>();
-  /** Per car: distance along the trail from point i to the head (built with the grid). */
-  private toHead: number[][] = [];
 
   constructor(
     readonly code: string,
@@ -112,6 +116,7 @@ export class NeonEngine {
       // a human replaces a bot if the arena is crowded
       if (this.cars.length >= NEON.MAX_PLAYERS) this.removeOneBot();
       c = this.newCar(id, nickname, false);
+      if (this.phase === "playing") c.respawnAt = this.now() + 800;
       this.cars.push(c);
     }
     c.nickname = nickname;
@@ -176,60 +181,39 @@ export class NeonEngine {
     return no("Unknown action");
   }
 
-  // ───────────────────────── rounds ─────────────────────────
+  // ───────────────────────── session ─────────────────────────
 
+  /** Endless arena: no rounds — crash, wait a moment, respawn. */
   private start(): R {
     if (this.phase !== "lobby") return no("Already racing");
-    // fill with bots
     this.cars = this.cars.filter((x) => !x.isBot && x.connections > 0);
     const want = Math.min(this.settings.bots, NEON.MAX_PLAYERS - this.cars.length);
     for (let i = 0; i < want; i++) this.addBot();
-    if (this.cars.length < 2) return no("Add at least one bot or invite a friend");
-    for (const c of this.cars) { c.score = 0; c.kills = 0; c.wins = 0; }
-    this.round = 0;
+    if (this.cars.length < 1) return no("Join first");
+    for (const c of this.cars) { c.score = 0; c.kills = 0; c.wins = 0; c.best = 0; }
+    this.round = 1;
     this.feed = [];
-    this.newRound();
+    this.phase = "playing";
+    this.gas.clear();
+    this.powers.clear();
+    this.rebuildGrid();
+    for (const c of this.cars) this.respawn(c);
+    this.topUpGas(true);
+    this.addFeed("🏁 Arena open — grab gas and trap your friends!");
+    this.pushMeta();
+    this.sendSnap(true);
     this.startLoop();
     return ok;
   }
 
-  private newRound() {
-    this.round++;
-    this.phase = "playing";
-    this.winnerId = null;
-    this.roundEndsAt = 0;
-    this.gas.clear();
-    this.powers.clear();
-    const placed: Pt[] = [];
-    for (const c of this.cars) {
-      const p = this.spawnPoint(placed);
-      placed.push(p);
-      Object.assign(c, {
-        x: p.x, y: p.y, a: Math.atan2(this.size / 2 - p.y, this.size / 2 - p.x) + (this.rnd() - 0.5) * 0.8,
-        turn: 0, boost: false, fuel: 1, alive: true, trail: [{ x: p.x, y: p.y }], len: NEON.START_LEN, power: null, powerUntil: 0,
-      });
-    }
-    this.topUpGas(true);
-    this.addFeed(`Round ${this.round} — go!`);
-    this.pushMeta();
-    this.sendSnap(true);
-  }
-
-  private endRound() {
-    const alive = this.cars.filter((c) => c.alive);
-    const w = alive.length === 1 ? alive[0] : null;
-    if (w) { w.score += 3; w.wins++; this.addFeed(`🏆 ${w.nickname} wins round ${this.round}!`); }
-    else this.addFeed(`Round ${this.round}: nobody survived 💥`);
-    this.winnerId = w?.id ?? null;
-    this.phase = "roundover";
-    this.roundEndsAt = this.now() + NEON.ROUND_OVER_MS;
-    this.pushMeta();
-    this.roundTimer = setTimeout(() => {
-      this.roundTimer = null;
-      if (this.phase !== "roundover") return;
-      if (this.cars.length < 2) { this.stopLoop(); this.phase = "lobby"; this.pushMeta(); return; }
-      this.newRound();
-    }, NEON.ROUND_OVER_MS);
+  private respawn(c: Car) {
+    const others = this.cars.filter((o) => o !== c && o.alive).map((o) => ({ x: o.x, y: o.y }));
+    const p = this.spawnPoint(others);
+    Object.assign(c, {
+      x: p.x, y: p.y, a: Math.atan2(this.size / 2 - p.y, this.size / 2 - p.x) + (this.rnd() - 0.5) * 0.8,
+      turn: 0, steer: 0, boost: false, fuel: 1, alive: true, trail: [{ x: p.x, y: p.y }], len: NEON.START_LEN,
+      power: "shield" as NeonPower, powerUntil: this.now() + NEON.SPAWN_SHIELD_MS, respawnAt: 0, lifeKills: 0,
+    });
   }
 
   // ───────────────────────── simulation ─────────────────────────
@@ -240,12 +224,17 @@ export class NeonEngine {
     const t = this.now();
     if (this.phase === "playing") {
       for (const c of this.cars) {
-        if (!c.alive) continue;
+        if (!c.alive) {
+          if (c.respawnAt && t >= c.respawnAt && (c.isBot || c.connections > 0)) this.respawn(c);
+          continue;
+        }
         if (c.power && t >= c.powerUntil) c.power = null;
         const boosting = c.boost && c.fuel > 0.02;
         c.fuel = Math.min(1, Math.max(0, c.fuel + (boosting ? -NEON.BOOST_DRAIN : NEON.BOOST_REFILL) * dt));
         const v = NEON.SPEED * (boosting ? NEON.BOOST_MULT : 1) * (c.power === "turbo" ? NEON.TURBO_MULT : 1);
-        c.a += c.turn * NEON.TURN * dt;
+        // ease steering in and out so curves are smooth instead of snapping
+        c.steer += (c.turn - c.steer) * Math.min(1, dt * NEON.STEER_EASE);
+        c.a += c.steer * NEON.TURN * dt;
         c.x += Math.cos(c.a) * v * dt;
         c.y += Math.sin(c.a) * v * dt;
         c.trail.push({ x: c.x, y: c.y });
@@ -258,8 +247,6 @@ export class NeonEngine {
         this.pickups();
         this.topUpGas(false);
         if (this.tickNo % 60 === 0 && this.powers.size < 3 + Math.floor(this.cars.length / 3)) this.spawnPower();
-        const alive = this.cars.filter((c) => c.alive).length;
-        if (alive <= (this.cars.length > 1 ? 1 : 0)) this.endRound();
       }
     }
     this.sendSnap(this.tickNo % NEON.FULL_EVERY === 0);
@@ -276,15 +263,6 @@ export class NeonEngine {
 
   private rebuildGrid() {
     this.grid.clear();
-    this.toHead = this.cars.map((c) => {
-      const d = new Array<number>(c.trail.length);
-      let acc = 0;
-      for (let i = c.trail.length - 1; i >= 0; i--) {
-        d[i] = acc;
-        if (i > 0) acc += Math.hypot(c.trail[i].x - c.trail[i - 1].x, c.trail[i].y - c.trail[i - 1].y);
-      }
-      return d;
-    });
     this.cars.forEach((c, ci) => {
       if (!c.alive) return;
       for (let i = 1; i < c.trail.length; i++) {
@@ -315,7 +293,8 @@ export class NeonEngine {
         const tr = car.trail;
         const a = tr[i - 1], b = tr[i];
         if (!a || !b) continue;
-        if (ci === self && (this.toHead[ci]?.[i] ?? 0) < NEON.SELF_SKIP) continue;
+        // your own trail is safe — you can cut across it freely
+        if (ci === self) continue;
         if (segDist2(x, y, a.x, a.y, b.x, b.y) < r2) return ci;
       }
     }
@@ -330,7 +309,7 @@ export class NeonEngine {
       if (c.x < NEON.CAR_R || c.y < NEON.CAR_R || c.x > S - NEON.CAR_R || c.y > S - NEON.CAR_R) { dead.push([c, null, "hit the wall"]); return; }
       if (c.power === "shield") return;
       const hit = this.trailHit(c.x, c.y, NEON.CAR_R * 0.75 + NEON.TRAIL_W / 2, ci);
-      if (hit >= 0) dead.push([c, this.cars[hit] === c ? null : this.cars[hit], this.cars[hit] === c ? "crashed into their own trail" : ""]);
+      if (hit >= 0) dead.push([c, this.cars[hit], ""]);
     });
     // head-on
     for (let i = 0; i < this.cars.length; i++) for (let j = i + 1; j < this.cars.length; j++) {
@@ -346,9 +325,13 @@ export class NeonEngine {
 
   private kill(c: Car, killer: Car | null, why: string) {
     c.alive = false;
+    c.respawnAt = this.now() + NEON.RESPAWN_MS;
+    c.best = Math.max(c.best, Math.round(c.len));
     if (killer && killer !== c) {
       killer.kills++;
+      killer.lifeKills++;
       killer.score++;
+      if (killer.lifeKills === 3) this.addFeed(`🔥 ${killer.nickname} is on a rampage (3 kills)!`);
       this.addFeed(`💥 ${killer.nickname} took out ${c.nickname}${why ? ` (${why})` : ""}`);
     } else {
       this.addFeed(`💥 ${c.nickname} ${why || "crashed"}`);
@@ -370,7 +353,8 @@ export class NeonEngine {
       for (const g of this.gas.values()) {
         const d = Math.hypot(g.x - c.x, g.y - c.y);
         if (d < NEON.CAR_R + NEON.GAS_R + 4) {
-          c.len += NEON.GAS_LEN;
+          c.len = Math.min(NEON.MAX_LEN, c.len + NEON.GAS_LEN);
+          c.best = Math.max(c.best, Math.round(c.len));
           this.gas.delete(g.id);
           this.gasDel.push(g.id);
         } else if (magnet && d < NEON.MAGNET_R) {
@@ -434,15 +418,19 @@ export class NeonEngine {
     const angles = [-0.9, -0.45, 0, 0.45, 0.9];
     const clear = angles.map((da) => this.clearance(c, ci, c.a + da, look));
     // score each turn choice: clearance on that side + pull toward the nearest gas
-    let target: Gas | null = null, td = 1e9;
+    // chase the nearest gas that is roughly in front (gas behind/beside us would make us circle forever)
+    const norm = (d: number) => { while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+    let diff = 0, td = 1e9;
     for (const g of this.gas.values()) {
       const d = Math.hypot(g.x - c.x, g.y - c.y);
-      if (d < td) { td = d; target = g; }
+      if (d > 700 || d >= td) continue;
+      const da = norm(Math.atan2(g.y - c.y, g.x - c.x) - c.a);
+      if (Math.abs(da) > 1.1 && d < 260) continue;
+      td = d; diff = da;
     }
-    const want = target ? Math.atan2(target.y - c.y, target.x - c.x) : c.a;
-    let diff = want - c.a;
-    while (diff > Math.PI) diff -= 2 * Math.PI;
-    while (diff < -Math.PI) diff += 2 * Math.PI;
+    // head back toward the middle when near a wall
+    const m = 220;
+    if (c.x < m || c.y < m || c.x > this.size - m || c.y > this.size - m) diff = norm(Math.atan2(this.size / 2 - c.y, this.size / 2 - c.x) - c.a);
     let bestTurn: -1 | 0 | 1 = 0, best = -1e9;
     for (const t of options) {
       const side = t === -1 ? Math.min(clear[0], clear[1]) * 0.5 + clear[1] * 0.5 : t === 1 ? Math.min(clear[3], clear[4]) * 0.5 + clear[3] * 0.5 : clear[2];
@@ -485,6 +473,7 @@ export class NeonEngine {
     return {
       id, nickname, isBot, connections: 0, color, x: 0, y: 0, a: 0, turn: 0, boost: false, fuel: 1,
       alive: false, trail: [], len: NEON.START_LEN, power: null, powerUntil: 0, score: 0, kills: 0, wins: 0, think: 0,
+      steer: 0, respawnAt: 0, lifeKills: 0, best: 0,
     };
   }
 
@@ -497,7 +486,7 @@ export class NeonEngine {
       hostId: this.hostId,
       settings: this.settings,
       size: this.size,
-      players: this.cars.map((c) => ({ id: c.id, nickname: c.nickname, isBot: c.isBot, connected: c.connections > 0, color: c.color, score: c.score, kills: c.kills, wins: c.wins })),
+      players: this.cars.map((c) => ({ id: c.id, nickname: c.nickname, isBot: c.isBot, connected: c.connections > 0, color: c.color, score: c.score, kills: c.kills, wins: c.wins, best: c.best })),
       round: this.round,
       winnerId: this.winnerId,
       roundEndsAt: this.roundEndsAt,
@@ -512,6 +501,7 @@ export class NeonEngine {
       id: c.id, x: Math.round(c.x * 10) / 10, y: Math.round(c.y * 10) / 10, a: Math.round(c.a * 100), len: Math.round(c.len),
       alive: c.alive, boosting: c.alive && c.boost && c.fuel > 0.02, fuel: Math.round(c.fuel * 100),
       power: c.power, powerMs: c.power ? Math.max(0, c.powerUntil - t) : 0,
+      respawnMs: !c.alive && c.respawnAt ? Math.max(0, c.respawnAt - t) : 0,
     }));
     const s: NeonSnap = { t, tick: this.tickNo, cars, powers: [...this.powers.values()] };
     if (full) {
@@ -543,7 +533,6 @@ export class NeonEngine {
   }
   private stopLoop() {
     if (this.loop) { clearInterval(this.loop); this.loop = null; }
-    if (this.roundTimer) { clearTimeout(this.roundTimer); this.roundTimer = null; }
   }
   private scheduleIdle() {
     if (this.idleTimer) return;

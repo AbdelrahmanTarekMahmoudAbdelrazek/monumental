@@ -47,7 +47,7 @@ export default function NeonHome() {
           ))}
         </svg>
         <h1 className="mt-2 text-4xl font-black">🏎️ NEON DRIFT</h1>
-        <p className="mt-1 max-w-2xl text-white/80">Every car leaves a glowing trail. Touch one — even your own — and you crash. Grab ⛽ gas to make your trail longer, use power-ups, and box your friends in. Last car driving wins.</p>
+        <p className="mt-1 max-w-2xl text-white/80">Every car leaves a glowing trail. Touch someone else&apos;s and you crash — your own is safe. Grab ⛽ gas to make your trail longer, use power-ups, and box your friends in. Last car driving wins.</p>
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <div className="rounded-3xl bg-white/5 p-5 ring-1 ring-fuchsia-500/30">

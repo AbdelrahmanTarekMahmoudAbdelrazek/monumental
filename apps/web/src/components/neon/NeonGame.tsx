@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { NEON, NEON_COLORS, NEON_POWERS, type NeonCarSnap, type NeonMeta } from "@monumental/shared";
 import { useNeon, type NeonWorld } from "@/lib/useNeon";
-import { serverNow } from "@/lib/socket";
 import { sfx } from "@/lib/sound";
 
 type Act = ReturnType<typeof useNeon>["act"];
@@ -18,17 +17,37 @@ function lerpAngle(a: number, b: number, t: number) {
   return a + d * t;
 }
 
-function interpolate(w: NeonWorld, now: number): DrawCar[] {
-  const cur = w.cur;
-  if (!cur) return [];
-  const prev = w.prev;
-  const t = prev ? Math.min(1, Math.max(0, (now - w.curAt) / NEON.TICK_MS)) : 1;
-  const pm = new Map((prev?.cars ?? []).map((c) => [c.id, c]));
-  return cur.cars.map((c) => {
-    const p = pm.get(c.id);
-    if (!p || !p.alive || !c.alive) return { ...c, ang: c.a / 100 };
-    return { ...c, x: p.x + (c.x - p.x) * t, y: p.y + (c.y - p.y) * t, ang: lerpAngle(p.a / 100, c.a / 100, t) };
+/**
+ * Renders the world a little in the past (INTERP_MS) and blends the two snapshots around that moment,
+ * so motion stays smooth even when packets arrive unevenly. Also reports, per car, how many trail
+ * points are "from the future" so the trail never pokes out ahead of the car.
+ */
+function interpolate(w: NeonWorld, now: number): { cars: DrawCar[]; ahead: Map<string, number> } {
+  const buf = w.buf;
+  const ahead = new Map<string, number>();
+  if (!buf.length) return { cars: [], ahead };
+  const target = now - w.offset - NEON.INTERP_MS;
+  let i = buf.length - 1;
+  while (i > 0 && buf[i - 1].t > target) i--;
+  // buf[i-1] ≤ target < buf[i] (or clamp at the ends)
+  const b = buf[i];
+  const a = i > 0 ? buf[i - 1] : b;
+  const span = b.t - a.t;
+  const t = span > 0 ? Math.min(1, Math.max(0, (target - a.t) / span)) : 1;
+  for (let k = i; k < buf.length; k++) for (const c of buf[k].cars) if (c.alive) ahead.set(c.id, (ahead.get(c.id) ?? 0) + 1);
+  const am = new Map(a.cars.map((c) => [c.id, c]));
+  const latest = new Map(buf[buf.length - 1].cars.map((c) => [c.id, c]));
+  const cars = b.cars.map((c) => {
+    const p = am.get(c.id);
+    const l = latest.get(c.id) ?? c;
+    // HUD-ish fields always come from the newest snapshot
+    const base = { ...c, fuel: l.fuel, power: l.power, powerMs: l.powerMs, respawnMs: l.respawnMs, len: l.len };
+    if (!p || !p.alive || !c.alive) return { ...base, ang: c.a / 100 };
+    return { ...base, x: p.x + (c.x - p.x) * t, y: p.y + (c.y - p.y) * t, ang: lerpAngle(p.a / 100, c.a / 100, t) };
   });
+  // cars that only exist in newer snapshots
+  for (const [id, c] of latest) if (!cars.some((x) => x.id === id)) cars.push({ ...c, alive: false, ang: c.a / 100 });
+  return { cars, ahead };
 }
 
 export default function NeonGame({ code, userToken }: { code: string; userToken: string | null }) {
@@ -39,7 +58,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
   metaRef.current = meta;
   const meRef = useRef<string | null>(null);
   meRef.current = me;
-  const [hud, setHud] = useState<{ fuel: number; power: string | null; powerMs: number; alive: boolean; len: number; boosting: boolean } | null>(null);
+  const [hud, setHud] = useState<{ fuel: number; power: string | null; powerMs: number; alive: boolean; len: number; boosting: boolean; respawnMs: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const keys = useRef({ left: false, right: false, boost: false });
   const sent = useRef({ turn: 9, boost: false });
@@ -99,6 +118,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
     let raf = 0;
     let cam = { x: 0, y: 0, init: false };
     let hudAt = 0;
+    let lastFrame = performance.now();
     const sparks: { x: number; y: number; vx: number; vy: number; c: string; life: number }[] = [];
     const seenDeaths = new Set<string>();
 
@@ -110,7 +130,9 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       const m = metaRef.current;
       const w = world.current;
       const now = performance.now();
-      const cars = interpolate(w, now);
+      const dtFrame = Math.min(0.1, (now - lastFrame) / 1000);
+      lastFrame = now;
+      const { cars, ahead } = interpolate(w, now);
       const size = m?.size ?? 2600;
       const colorOf = (id: string) => NEON_COLORS[(m?.players.find((p) => p.id === id)?.color ?? 0) % NEON_COLORS.length];
       const mine = cars.find((c) => c.id === meRef.current);
@@ -118,8 +140,10 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       const zoom = Math.max(W, H) / (W < 700 ? 900 : 1300);
       if (follow) {
         if (!cam.init) cam = { x: follow.x, y: follow.y, init: true };
-        cam.x += (follow.x - cam.x) * 0.18;
-        cam.y += (follow.y - cam.y) * 0.18;
+        // frame-rate independent camera easing
+        const ease = 1 - Math.pow(0.0005, dtFrame);
+        cam.x += (follow.x - cam.x) * ease;
+        cam.y += (follow.y - cam.y) * ease;
       } else if (!cam.init) cam = { x: size / 2, y: size / 2, init: true };
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -181,8 +205,10 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
         const col = colorOf(c.id);
         ctx.beginPath();
         ctx.moveTo(tr[0], tr[1]);
-        // the newest point is the server head; the car is drawn slightly behind it (interpolation)
-        for (let i = 2; i < tr.length - 2; i += 2) ctx.lineTo(tr[i], tr[i + 1]);
+        // skip points newer than the moment we're drawing, then end exactly at the car
+        const end = tr.length - 2 * (ahead.get(c.id) ?? 0);
+        if (end < 2) continue;
+        for (let i = 2; i < end; i += 2) ctx.lineTo(tr[i], tr[i + 1]);
         ctx.lineTo(c.x, c.y);
         ctx.strokeStyle = col.trail + "33";
         ctx.lineWidth = NEON.TRAIL_W * 2.6;
@@ -282,7 +308,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       if (now - hudAt > 150) {
         hudAt = now;
         const mc = w.cur?.cars.find((c) => c.id === meRef.current);
-        setHud(mc ? { fuel: mc.fuel, power: mc.power, powerMs: mc.powerMs, alive: mc.alive, len: mc.len, boosting: mc.boosting } : null);
+        setHud(mc ? { fuel: mc.fuel, power: mc.power, powerMs: mc.powerMs, alive: mc.alive, len: mc.len, boosting: mc.boosting, respawnMs: mc.respawnMs } : null);
       }
     };
     raf = requestAnimationFrame(frame);
@@ -306,8 +332,6 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
   };
   const isHost = meta?.hostId === me;
   const rows = [...(meta?.players ?? [])].sort((a, b) => b.score - a.score);
-  const secsLeft = meta?.roundEndsAt ? Math.max(0, Math.ceil((meta.roundEndsAt - serverNow()) / 1000)) : 0;
-  const winner = meta?.players.find((p) => p.id === meta.winnerId);
 
   return (
     <div className="relative h-[calc(100dvh-56px)] w-full select-none overflow-hidden bg-[#05070f] text-white sm:h-[calc(100dvh-57px)]" data-testid="nd-root">
@@ -316,7 +340,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
       {/* top-left: room + feed */}
       <div className="pointer-events-none absolute left-3 top-3 max-w-[60%] space-y-1">
         <div className="pointer-events-auto flex flex-wrap items-center gap-2 text-xs">
-          <span className="rounded-full bg-black/50 px-3 py-1 font-semibold ring-1 ring-white/15">🏎️ NEON DRIFT · <span className="font-mono">{code}</span>{meta?.round ? ` · Round ${meta.round}` : ""}</span>
+          <span className="rounded-full bg-black/50 px-3 py-1 font-semibold ring-1 ring-white/15">🏎️ NEON DRIFT · <span className="font-mono">{code}</span></span>
           <InviteButton code={code} />
           {isHost && meta?.phase !== "lobby" && <button className="rounded-full bg-black/50 px-3 py-1 font-semibold ring-1 ring-white/15 hover:bg-black/70" onClick={() => void act({ type: "to_lobby" })}>Lobby</button>}
           {!g.connected && <span className="font-bold text-rose-300">Reconnecting…</span>}
@@ -359,10 +383,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
 
       {/* banners */}
       {meta?.phase === "playing" && hud && !hud.alive && (
-        <Banner title="💥 You crashed!" sub="Spectating until the next round…" />
-      )}
-      {meta?.phase === "roundover" && (
-        <Banner title={winner ? `🏆 ${winner.nickname}${winner.id === me ? " (you)" : ""} wins round ${meta.round}!` : "💥 Nobody survived!"} sub={`Next round in ${secsLeft}s`} />
+        <Banner title="💥 You crashed!" sub={hud.respawnMs > 0 ? `Back on the road in ${Math.ceil(hud.respawnMs / 1000)}…` : "Respawning…"} />
       )}
 
       {/* touch controls */}
@@ -468,9 +489,9 @@ export function Rules() {
       <summary className="cursor-pointer font-black">How to play</summary>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-white/80">
         <li>Your car never stops. Steer with <b>← →</b> (or A/D, or the on-screen buttons). <b>Space / ↑</b> or 🔥 = boost.</li>
-        <li>You leave a glowing trail. <b>Touch any trail — even your own — or a wall and you crash.</b></li>
+        <li>You leave a glowing trail. <b>Touch someone else&apos;s trail or a wall and you crash.</b> Your own trail is safe — cut across it any time.</li>
         <li>Grab ⛽ gas to make your trail longer. Crashed cars drop their gas.</li>
-        <li>Cut in front of rivals so they hit your trail: <b>+1</b> per kill. Last car driving wins the round: <b>+3</b>.</li>
+        <li>Cut in front of rivals so they hit your trail: <b>+1</b> per kill. No rounds — crash and you&apos;re back in 3 seconds with a short trail and a moment of 🛡️ protection.</li>
         <li>Power-ups: 🛡️ Shield (drive through trails, 5s) · ⚡ Turbo (free speed, 5s) · 🧲 Magnet (pull gas, 8s).</li>
       </ul>
     </details>

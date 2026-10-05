@@ -19,10 +19,9 @@ describe("NEON DRIFT", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("needs 2 cars; host only; bots fill seats", () => {
+  it("host only; bots fill seats; solo practice allowed", () => {
     const x = arena(0);
     x.t.join("h", "Hana");
-    expect(x.t.act("h", { type: "start" }).ok).toBe(false);
     x.t.join("a", "Adam");
     expect(x.t.act("a", { type: "start" }).ok).toBe(false);
     expect(x.t.act("h", { type: "start" }).ok).toBe(true);
@@ -43,7 +42,7 @@ describe("NEON DRIFT", () => {
     c.x = 900; c.y = 900; c.a = 0; c.trail = [{ x: 900, y: 900 }];
     const bot = P(x.t).cars[1]; bot.x = 200; bot.y = 200; bot.a = Math.PI / 2; bot.trail = [{ x: 200, y: 200 }];
     for (let i = 0; i < 10; i++) x.t.step();
-    expect(c.x).toBeCloseTo(900 + NEON.SPEED * 0.5, 0);
+    expect(c.x).toBeCloseTo(900 + NEON.SPEED * NEON.TICK_MS / 100, 0);
     for (let i = 0; i < 20; i++) { c.a += 0.15; x.t.step(); }
     let total = 0;
     for (let i = 1; i < c.trail.length; i++) total += Math.hypot(c.trail[i].x - c.trail[i - 1].x, c.trail[i].y - c.trail[i - 1].y);
@@ -58,12 +57,12 @@ describe("NEON DRIFT", () => {
     P(x.t).stopLoop();
     const [h, a, b] = P(x.t).cars;
     // Hana drives along y=900 from x=600; Adam drives up across her path
-    Object.assign(h, { x: 600, y: 900, a: 0, trail: [{ x: 600, y: 900 }], len: 400 });
-    Object.assign(a, { x: 760, y: 1000, a: -Math.PI / 2, trail: [{ x: 760, y: 1000 }] });
-    Object.assign(b, { x: 200, y: 200, a: Math.PI / 2, trail: [{ x: 200, y: 200 }] });
-    for (let i = 0; i < 6; i++) { a.y = 1000; a.x = 760; a.trail = [{ x: 760, y: 1000 }]; x.t.step(); } // hold Adam back while Hana passes
+    Object.assign(h, { x: 600, y: 900, a: 0, trail: [{ x: 600, y: 900 }], len: 400, power: null });
+    Object.assign(a, { x: 760, y: 1000, a: -Math.PI / 2, trail: [{ x: 760, y: 1000 }], power: null });
+    Object.assign(b, { x: 200, y: 200, a: Math.PI / 2, trail: [{ x: 200, y: 200 }], power: null });
+    for (let i = 0; i < 30; i++) { a.y = 1000; a.x = 760; a.trail = [{ x: 760, y: 1000 }]; x.t.step(); } // hold Adam back while Hana passes
     expect(h.alive).toBe(true);
-    for (let i = 0; i < 20 && a.alive; i++) x.t.step();
+    for (let i = 0; i < 40 && a.alive; i++) x.t.step();
     expect(a.alive).toBe(false);
     expect(h.kills).toBe(1);
     expect(x.meta().feed.some((f) => f.text.includes("took out Adam"))).toBe(true);
@@ -76,45 +75,62 @@ describe("NEON DRIFT", () => {
     x.t.act("h", { type: "start" });
     P(x.t).stopLoop();
     const [h, a, b] = P(x.t).cars;
-    Object.assign(h, { x: 600, y: 900, a: 0, trail: [{ x: 600, y: 900 }], len: 600 });
+    Object.assign(h, { x: 600, y: 900, a: 0, trail: [{ x: 600, y: 900 }], len: 600, power: null });
     Object.assign(a, { x: 700, y: 1000, a: -Math.PI / 2, trail: [{ x: 700, y: 1000 }], power: "shield", powerUntil: Date.now() + 5000 });
-    Object.assign(b, { x: 30, y: 600, a: Math.PI, trail: [{ x: 30, y: 600 }] });
-    for (let i = 0; i < 8; i++) { a.x = 700; a.y = 1000; a.trail = [{ x: 700, y: 1000 }]; x.t.step(); }
+    Object.assign(b, { x: 30, y: 600, a: Math.PI, trail: [{ x: 30, y: 600 }], power: null });
+    for (let i = 0; i < 14; i++) { a.x = 700; a.y = 1000; a.trail = [{ x: 700, y: 1000 }]; x.t.step(); }
     for (let i = 0; i < 20; i++) x.t.step();
     expect(b.alive).toBe(false); // wall
     expect(a.alive).toBe(true); // shielded through Hana's trail
     x.t.destroy();
   });
 
-  it("gas makes the trail longer; a crash drops gas", () => {
+  it("gas makes the trail longer; a crash drops gas; crashed cars respawn (no rounds)", () => {
     const x = arena(0);
     x.t.join("h", "Hana"); x.t.join("a", "Adam");
     x.t.act("h", { type: "start" });
     P(x.t).stopLoop();
     const [h, a] = P(x.t).cars;
-    Object.assign(h, { x: 600, y: 600, a: 0, trail: [{ x: 600, y: 600 }] });
-    Object.assign(a, { x: 300, y: 1500, a: 0, trail: [{ x: 300, y: 1500 }] });
+    Object.assign(h, { x: 600, y: 600, a: 0, trail: [{ x: 600, y: 600 }], power: null, turn: 1 });
+    Object.assign(a, { x: 300, y: 1500, a: 0, trail: [{ x: 300, y: 1500 }], power: null });
     const before = h.len;
-    P(x.t).gas.set(99999, { id: 99999, x: 620, y: 600 });
+    P(x.t).gas.set(99999, { id: 99999, x: 615, y: 600 });
     x.t.step(); x.t.step();
     expect(h.len).toBe(before + NEON.GAS_LEN);
-    h.turn = 1; // Hana circles safely
     const gasBefore = P(x.t).gas.size;
-    for (let i = 0; i < 200 && a.alive; i++) x.t.step(); // Adam drives into the right wall
+    for (let i = 0; i < 300 && a.alive; i++) x.t.step(); // Adam drives into the right wall
     expect(a.alive).toBe(false);
     expect(P(x.t).gas.size).toBeGreaterThan(gasBefore);
-    expect(x.meta().phase).toBe("roundover");
-    expect(x.meta().winnerId).toBe("h");
+    expect(x.meta().phase).toBe("playing"); // game keeps going
+    expect(x.snap().cars.find((c) => c.id === "a")!.respawnMs).toBeGreaterThan(0);
+    vi.advanceTimersByTime(NEON.RESPAWN_MS + 100);
+    x.t.step();
+    expect(a.alive).toBe(true);
+    expect(a.power).toBe("shield"); // spawn protection
     x.t.destroy();
   });
 
-  it("bot-only rounds keep cycling through rounds", () => {
+  it("your own trail is safe to cross", () => {
+    const x = arena(0);
+    x.t.join("h", "Hana"); x.t.join("a", "Adam");
+    x.t.act("h", { type: "start" });
+    P(x.t).stopLoop();
+    const [h, a] = P(x.t).cars;
+    Object.assign(h, { x: 900, y: 900, a: 0, trail: [{ x: 900, y: 900 }], len: 2000, power: null, turn: 1 });
+    Object.assign(a, { x: 200, y: 1600, a: Math.PI / 2 * 3, trail: [{ x: 200, y: 1600 }], power: null });
+    for (let i = 0; i < 200; i++) { a.x = 200; a.y = 1600; a.trail = [{ x: 200, y: 1600 }]; x.t.step(); } // Hana loops over her own trail many times
+    expect(h.alive).toBe(true);
+    x.t.destroy();
+  });
+
+  it("bots drive, crash and respawn for minutes without the loop breaking", () => {
     const x = arena(5, 3);
     x.t.join("h", "Hana");
     x.t.act("h", { type: "start" });
     vi.advanceTimersByTime(120_000);
-    expect(x.meta().round).toBeGreaterThan(1);
+    expect(x.meta().phase).toBe("playing");
     expect(x.snaps.some((s) => s.trails)).toBe(true);
+    expect(x.meta().feed.length).toBeGreaterThan(0);
     x.t.destroy();
   });
 });
