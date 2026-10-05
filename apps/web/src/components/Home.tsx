@@ -95,6 +95,21 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
       </section>
 
       <section className="mt-10">
+        <Link href="/neon" onClick={saveNick} className="relative flex flex-col items-start gap-3 overflow-hidden rounded-3xl bg-[#05070f] p-5 text-white shadow-lg ring-1 ring-fuchsia-500/40 transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
+          <svg viewBox="0 0 120 50" className="h-14 w-32 shrink-0" aria-hidden>
+            <path d="M5 40 C 30 40, 30 12, 60 12 S 95 30, 100 22" fill="none" stroke="#ff7a7a" strokeWidth="9" strokeOpacity=".25" strokeLinecap="round" />
+            <path d="M5 40 C 30 40, 30 12, 60 12 S 95 30, 100 22" fill="none" stroke="#ff7a7a" strokeWidth="3.5" strokeLinecap="round" />
+            <rect x="98" y="15" width="18" height="11" rx="3" fill="#ef4444" transform="rotate(-20 107 20)" />
+          </svg>
+          <div className="flex-1">
+            <h2 className="text-xl font-black">NEON DRIFT <span className="ml-1 rounded-full bg-fuchsia-500 px-2 py-0.5 align-middle text-xs font-bold">NEW</span></h2>
+            <p className="text-sm text-white/75">Your car leaves a glowing trail — anyone who touches it crashes. Grab gas to grow it, trap your friends, be the last car driving.</p>
+          </div>
+          <span className="btn w-full bg-fuchsia-500 text-white sm:w-auto">Race friends →</span>
+        </Link>
+      </section>
+
+      <section className="mt-6">
         <Link href="/smugglers" onClick={saveNick} className="flex flex-col items-start gap-3 rounded-3xl bg-[radial-gradient(ellipse_at_top_left,#3b2d5c,#1a1426)] p-5 text-white shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
           <span className="text-5xl" aria-hidden>📦</span>
           <div className="flex-1">

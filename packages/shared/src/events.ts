@@ -80,6 +80,9 @@ export interface ServerToClientEvents {
   ow_state: (s: import("./oneword").OwPublicState) => void;
   /** The secret key — sent only to Spymasters. */
   ow_key: (k: { code: string; key: import("./oneword").OwColor[] | null }) => void;
+  /** NEON DRIFT arenas. */
+  nd_meta: (m: import("./neon").NeonMeta) => void;
+  nd_snap: (s: import("./neon").NeonSnap) => void;
   /** SMUGGLERS tables. */
   sm_state: (s: import("./smuggle").SmugglePublicState) => void;
   /** Your own secret word(s) — sent only to you. */
@@ -131,6 +134,19 @@ export interface ClientToServerEvents {
   ) => void;
   ow_leave: () => void;
   ow_act: (p: import("./oneword").OwAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** NEON DRIFT arenas. */
+  nd_create: (
+    p: { settings?: Partial<import("./neon").NeonSettings>; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; code?: string; error?: string }) => void,
+  ) => void;
+  nd_join: (
+    p: { code: string; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; error?: string; playerId?: string; meta?: import("./neon").NeonMeta }) => void,
+  ) => void;
+  nd_leave: () => void;
+  nd_act: (p: import("./neon").NeonAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** Steering: -1 left, 0 straight, 1 right. Sent on change only. */
+  nd_input: (p: { turn: number; boost: boolean }) => void;
   /** SMUGGLERS tables. */
   sm_create: (
     p: { settings?: Partial<import("./smuggle").SmuggleSettings>; nickname: string; guestId?: string; userToken?: string },

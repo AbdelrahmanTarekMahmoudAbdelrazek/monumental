@@ -13,3 +13,4 @@ export * from "./custom";
 export * from "./shak";
 export * from "./oneword";
 export * from "./smuggle";
+export * from "./neon";

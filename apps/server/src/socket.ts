@@ -1,14 +1,15 @@
 import type { Socket } from "socket.io";
 import { z } from "zod";
-import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
+import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, normaliseNeonSettings, type NeonSettings, type NeonAction, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
 import type { ShakManager } from "./shak/ShakManager.js";
 import type { OneWordManager } from "./oneword/OneWordManager.js";
 import type { SmuggleManager } from "./smuggle/SmuggleManager.js";
+import type { NeonManager } from "./neon/NeonManager.js";
 import { resolveIdentity, type Identity } from "./auth.js";
 import type { RoomManager, IO } from "./room/RoomManager.js";
 import type { LiveStore } from "./store.js";
 
-type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string; sm?: string }>;
+type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string; sm?: string; nd?: string }>;
 
 const joinSchema = z.object({
   roomId: z.string().max(64).optional(),
@@ -26,7 +27,7 @@ const guessSchema = z.object({
   lock: z.boolean().default(false),
 });
 
-export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager, sm?: SmuggleManager) {
+export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager, sm?: SmuggleManager, nd?: NeonManager) {
   io.on("connection", (socket: Sock) => {
     // naive per-socket rate limit for guesses (drag streams are throttled client-side to ~10/s)
     let guessBudget = 40;
@@ -311,8 +312,75 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
     });
     socket.on("sm_leave", () => smLeave());
 
+    // ───────── NEON DRIFT ─────────
+    const ndArena = () => (socket.data.nd && nd ? nd.get(socket.data.nd) : undefined);
+    const ndLeave = () => {
+      const t = ndArena();
+      if (t && socket.data.identity) t.leave(socket.data.identity.playerKey);
+      if (socket.data.nd) socket.leave(`nd:${socket.data.nd}`);
+      socket.data.nd = undefined;
+    };
+    socket.on("nd_create", async (raw, ack) => {
+      if (!nd) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ settings: z.record(z.string(), z.unknown()).optional() }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        if (Date.now() - lastCreate < 5000) return ack({ ok: false, error: "Slow down a little" });
+        lastCreate = Date.now();
+        const t = nd.create(identity.playerKey, normaliseNeonSettings(p.settings as Partial<NeonSettings>));
+        ack({ ok: true, code: t.code });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    socket.on("nd_join", async (raw, ack) => {
+      if (!nd) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ code: z.string().min(4).max(10) }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        const t = nd.get(p.code);
+        if (!t) return ack({ ok: false, error: "Arena not found — ask the host for a new link" });
+        if (socket.data.nd && socket.data.nd !== t.code) ndLeave();
+        socket.data.identity = identity;
+        socket.join(`nd:${t.code}`);
+        if (socket.data.nd !== t.code) {
+          const r = t.join(identity.playerKey, identity.nickname);
+          if (!r.ok) { socket.leave(`nd:${t.code}`); return ack(r); }
+        }
+        socket.data.nd = t.code;
+        ack({ ok: true, playerId: identity.playerKey, meta: t.meta() });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    let inputBudget = 40;
+    const inputRefill = setInterval(() => { inputBudget = 40; }, 1000);
+    socket.on("nd_input", (raw) => {
+      const t = ndArena();
+      const me = socket.data.identity?.playerKey;
+      if (!t || !me || inputBudget-- <= 0) return;
+      t.input(me, Number(raw?.turn) || 0, !!raw?.boost);
+    });
+    const ndAction = z.discriminatedUnion("type", [
+      z.object({ type: z.literal("start") }),
+      z.object({ type: z.literal("settings"), settings: z.record(z.string(), z.unknown()) }),
+      z.object({ type: z.literal("to_lobby") }),
+    ]);
+    socket.on("nd_act", (raw, ack) => {
+      const t = ndArena();
+      const me = socket.data.identity?.playerKey;
+      if (!t || !me) return ack?.({ ok: false, error: "Join an arena first" });
+      const p = ndAction.safeParse(raw);
+      if (!p.success) return ack?.({ ok: false, error: "Invalid action" });
+      let a = p.data as NeonAction;
+      if (a.type === "settings") a = { type: "settings", settings: normaliseNeonSettings({ ...t.meta().settings, ...(a.settings as Partial<NeonSettings>) }) };
+      ack?.(t.act(me, a));
+    });
+    socket.on("nd_leave", () => ndLeave());
+    socket.on("disconnect", () => clearInterval(inputRefill));
+
     socket.on("leave_room", () => leave());
-    socket.on("disconnect", () => { clearInterval(refill); leave(); shakLeave(); owLeave(); smLeave(); });
+    socket.on("disconnect", () => { clearInterval(refill); leave(); shakLeave(); owLeave(); smLeave(); ndLeave(); });
 
     function leave() {
       const { identity, roomId } = socket.data;
