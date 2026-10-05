@@ -1,4 +1,6 @@
 import {
+  SHAK_MAX_PLAYERS,
+  SHAK_MIN_PLAYERS,
   claimIsTrue,
   dealShak,
   shakStarter,
@@ -37,7 +39,7 @@ export interface ShakEvents {
 }
 
 const REVEAL_MS = 4200;
-const BOT_NAMES = ["Bot Amr", "Bot Nour", "Bot Salma", "Bot Karim"];
+const BOT_NAMES = ["Bot Amr", "Bot Nour", "Bot Salma", "Bot Karim", "Bot Mona", "Bot Hassan", "Bot Laila"];
 
 export class ShakEngine {
   phase: ShakPhase = "waiting";
@@ -84,7 +86,7 @@ export class ShakEngine {
     let s = this.seats.find((x) => x.id === id);
     if (!s) {
       if (this.phase !== "waiting" && this.phase !== "finished") return { ok: false, error: "A round is in progress — join when it ends" };
-      if (this.seats.length >= 4) return { ok: false, error: "Table is full (4 players)" };
+      if (this.seats.length >= SHAK_MAX_PLAYERS) return { ok: false, error: `Table is full (${SHAK_MAX_PLAYERS} players)` };
       s = { id, nickname, isBot: false, connections: 0, hand: [], outRank: null, pendingExit: false, crowns: 0 };
       this.seats.push(s);
     }
@@ -119,7 +121,7 @@ export class ShakEngine {
   addBot(by: string) {
     if (by !== this.hostId) return { ok: false, error: "Only the host can add bots" };
     if (this.phase !== "waiting" && this.phase !== "finished") return { ok: false, error: "Wait for the round to end" };
-    if (this.seats.length >= 4) return { ok: false, error: "Table is full" };
+    if (this.seats.length >= SHAK_MAX_PLAYERS) return { ok: false, error: "Table is full" };
     const n = this.seats.filter((x) => x.isBot).length;
     this.seats.push({ id: `bot:${n + 1}:${Math.floor(this.rnd() * 1e6)}`, nickname: BOT_NAMES[n] ?? `Bot ${n + 1}`, isBot: true, connections: 1, hand: [], outRank: null, pendingExit: false, crowns: 0 });
     this.push();
@@ -151,7 +153,7 @@ export class ShakEngine {
     if (this.phase !== "waiting" && this.phase !== "finished") return { ok: false, error: "Already playing" };
     // drop humans who left
     this.seats = this.seats.filter((x) => x.isBot || x.connections > 0);
-    if (this.seats.length < 3) return { ok: false, error: "أشك needs 3 or 4 players — invite friends or add a bot" };
+    if (this.seats.length < SHAK_MIN_PLAYERS) return { ok: false, error: `أشك needs ${SHAK_MIN_PLAYERS}–${SHAK_MAX_PLAYERS} players — invite friends or add a bot` };
     const { hands, excluded } = dealShak(this.seats.length, this.rnd);
     this.seats.forEach((s, i) => { s.hand = hands[i]; s.outRank = null; s.pendingExit = false; });
     this.excluded = excluded;
@@ -188,7 +190,7 @@ export class ShakEngine {
     this.doubtOpen = true;
     this.passesInRow = 0;
     if (seat.hand.length === 0) seat.pendingExit = true;
-    this.setLog("play", by, `${seat.nickname} put ${uniq.length} tile${uniq.length > 1 ? "s" : ""} — “${uniq.length > 1 ? "all" : "it's a"} ${this.number}”`);
+    this.setLog("play", by, `${seat.nickname} played`);
     this.ev.sendHand(by, seat.hand);
     if (this.checkEnd()) return { ok: true };
     this.beginTurn(this.nextActive(this.turn));
@@ -249,9 +251,11 @@ export class ShakEngine {
       this.reveal = undefined;
       this.phase = "playing";
       if (this.checkEnd()) return;
-      // the tile-player starts a fresh pile, or the next player if their hand is empty
-      const pi = this.seats.indexOf(player);
-      const starter = player.hand.length > 0 && player.outRank === null ? pi : this.nextActive(pi);
+      // the winner of the challenge starts a fresh pile: a correct doubter, or the truthful player
+      // (if the winner has no tiles left, the next player starts)
+      const winner = truthful ? player : doubter;
+      const wi = this.seats.indexOf(winner);
+      const starter = winner.hand.length > 0 && winner.outRank === null && !winner.pendingExit ? wi : this.nextActive(wi);
       this.beginTurn(starter);
     }, REVEAL_MS);
     return { ok: true };

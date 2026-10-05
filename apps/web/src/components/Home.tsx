@@ -99,7 +99,7 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
           <span className="text-5xl" aria-hidden>🁫</span>
           <div className="flex-1">
             <h2 className="text-xl font-black">أشك · Domino bluff <span className="ml-1 rounded-full bg-brand-500/15 px-2 py-0.5 align-middle text-xs font-bold text-brand-700 dark:text-brand-300">NEW</span></h2>
-            <p className="text-sm text-ink-500 dark:text-ink-300">The Egyptian domino game of lies: put tiles face-down, claim a number, shout «أشك!» to catch the bluffers. 3–4 players with an invite link, bots fill empty seats.</p>
+            <p className="text-sm text-ink-500 dark:text-ink-300">The Egyptian domino game of lies: put tiles face-down, claim a number, shout «أشك!» to catch the bluffers. 3–7 players with an invite link, bots fill empty seats.</p>
           </div>
           <span className="btn-primary w-full sm:w-auto">Open a table →</span>
         </Link>

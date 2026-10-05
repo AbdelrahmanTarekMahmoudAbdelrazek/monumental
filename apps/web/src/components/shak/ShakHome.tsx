@@ -44,7 +44,7 @@ export default function ShakHome() {
         </div>
         <div>
           <h1 className="text-3xl font-black">أشك <span className="text-xl font-bold text-ink-500">· Domino Shak</span></h1>
-          <p className="text-sm text-ink-600 dark:text-ink-200">The Egyptian domino bluffing game. Put tiles face-down, claim a number, and catch the liars. 3–4 players, bots fill empty seats.</p>
+          <p className="text-sm text-ink-600 dark:text-ink-200">The Egyptian domino bluffing game. Put tiles face-down, claim a number, and catch the liars. 3–7 players, bots fill empty seats.</p>
         </div>
       </div>
 

@@ -26,6 +26,15 @@ describe("أشك dealing", () => {
     expect(r3.excluded).toHaveLength(1);
     expect(new Set([...r3.hands.flat(), ...r3.excluded]).size).toBe(28);
   });
+  it("5–7 players: 28 tiles split evenly, leftovers set aside", () => {
+    for (const [n, per, aside] of [[5, 5, 3], [6, 4, 4], [7, 4, 0]]) {
+      const r = dealShak(n, mulberry32(n));
+      expect(r.hands.map((h) => h.length)).toEqual(Array(n).fill(per));
+      expect(r.excluded).toHaveLength(aside);
+      expect(new Set([...r.hands.flat(), ...r.excluded]).size).toBe(28);
+    }
+    expect(() => dealShak(8, mulberry32(1))).toThrow();
+  });
   it("6|6 holder starts, else the largest double", () => {
     for (let s = 1; s < 400; s++) {
       const { hands, excluded } = dealShak(3, mulberry32(s));
@@ -97,7 +106,7 @@ describe("أشك rules", () => {
     expect(x.last().reveal!.truthful).toBe(false);
     expect(liar.hand.length).toBe(before + 1);
     vi.advanceTimersByTime(5000);
-    expect(x.last().turnId).toBe(liar.id);
+    expect(x.last().turnId).toBe(d2.id); // caught a bluff → the doubter starts the new pile
   });
 
   it("doubt only targets the last play and closes after the next move", () => {
@@ -151,6 +160,22 @@ describe("أشك rules", () => {
     expect(r.result!.kingId).toBe(a.id);
     expect(r.result!.foolId).not.toBeNull();
     expect(r.result!.order).toHaveLength(4);
+  });
+
+  it("tables of 5–7 (bots) finish and reject an 8th seat", () => {
+    for (const n of [5, 6, 7]) {
+      const x = table(n);
+      x.t.join("h", "Host");
+      for (let i = 1; i < n; i++) expect(x.t.addBot("h").ok).toBe(true);
+      if (n === 7) { expect(x.t.addBot("h").ok).toBe(false); expect(x.t.join("z", "Zed").ok).toBe(false); }
+      expect(x.t.start("h").ok).toBe(true);
+      expect(x.last().players.every((p) => p.tiles === Math.floor(28 / n))).toBe(true);
+      let guard = 0;
+      while (x.last().phase !== "finished" && guard++ < 3000) vi.advanceTimersByTime(1000);
+      expect(x.last().phase, `n ${n}`).toBe("finished");
+      expect(x.last().result!.order).toHaveLength(n);
+      x.t.destroy();
+    }
   });
 
   it("a whole table of bots (plus an idle human) always finishes", () => {

@@ -1,7 +1,7 @@
 /**
  * أشك (Shak) — the Egyptian dominoes bluffing game.
  * Rules (domono.net/how-to-play/shak):
- *  • 3–4 players. 4 players → 7 tiles each. 3 players → 9 each, 1 tile set aside face-down. No boneyard.
+ *  • 3–7 players. The 28 tiles are dealt evenly (3 → 9 each, 4 → 7, 5 → 5, 6 → 4, 7 → 4); leftovers are set aside face-down.
  *  • The holder of 6|6 starts (if it's the set-aside tile: the holder of the largest double).
  *  • The starter announces a number 0–6 and plays one or more tiles face-down, claiming every one
  *    carries that number (on either half).
@@ -10,6 +10,7 @@
  *  • Challenge: flip only that play. All carry the number → doubter takes every tile on the table.
  *    Any one doesn't → the player who made the play takes them. Then the tile-player starts a new pile
  *    with a fresh number (or the next player, if the tile-player's hand is empty).
+ *    House rule: whoever WINS the challenge starts the new pile — a correct doubter, or the truthful player.
  *  • Everyone with tiles passes in a row → table tiles are removed for good; the next player starts fresh.
  *  • A player who plays their last tile is out once that play survives (next play/pass, or a failed doubt).
  *    First out = king 👑, last one holding tiles = fool. No points.
@@ -49,15 +50,20 @@ export function normaliseShakSettings(s: Partial<ShakSettings> | undefined): Sha
   };
 }
 
-/** Deal for 3 or 4 players. `rnd` returns [0,1). */
+export const SHAK_MIN_PLAYERS = 3;
+export const SHAK_MAX_PLAYERS = 7;
+/** Tiles each player gets for a table size. */
+export const shakTilesPer = (players: number) => Math.floor(28 / players);
+
+/** Deal for 3–7 players. `rnd` returns [0,1). */
 export function dealShak(players: number, rnd: () => number): { hands: number[][]; excluded: number[] } {
-  if (players < 3 || players > 4) throw new Error("Shak needs 3 or 4 players");
+  if (players < SHAK_MIN_PLAYERS || players > SHAK_MAX_PLAYERS) throw new Error(`Shak needs ${SHAK_MIN_PLAYERS}–${SHAK_MAX_PLAYERS} players`);
   const ids = ALL_TILES.map((_, i) => i);
   for (let i = ids.length - 1; i > 0; i--) {
     const j = Math.floor(rnd() * (i + 1));
     [ids[i], ids[j]] = [ids[j], ids[i]];
   }
-  const per = players === 4 ? 7 : 9;
+  const per = shakTilesPer(players);
   const hands = Array.from({ length: players }, (_, p) => ids.slice(p * per, p * per + per).sort((x, y) => x - y));
   const excluded = ids.slice(players * per);
   return { hands, excluded };

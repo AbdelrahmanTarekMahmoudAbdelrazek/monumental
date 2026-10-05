@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { SHAK_LIMITS, tileHas, type ShakPlayerPublic, type ShakPublicState } from "@monumental/shared";
+import { SHAK_LIMITS, SHAK_MAX_PLAYERS, SHAK_MIN_PLAYERS, shakTilesPer, tileHas, type ShakPlayerPublic, type ShakPublicState } from "@monumental/shared";
 import { useShak } from "@/lib/useShak";
 import { serverNow } from "@/lib/socket";
 import { sfx } from "@/lib/sound";
@@ -98,7 +98,7 @@ export default function ShakTable({ code, userToken }: { code: string; userToken
   return (
     <div className="mx-auto max-w-5xl px-2 py-3 md:px-4" dir="ltr">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs text-ink-500 dark:text-ink-300">
-        <span>Table <b className="font-mono text-ink-800 dark:text-ink-100">{state.code}</b> · Round {state.round}{state.excludedCount ? ` · ${state.excludedCount} tile set aside` : ""}</span>
+        <span>Table <b className="font-mono text-ink-800 dark:text-ink-100">{state.code}</b> · Round {state.round}{state.excludedCount ? ` · ${state.excludedCount} tile${state.excludedCount > 1 ? "s" : ""} set aside` : ""}</span>
         {!g.connected && <span className="font-bold text-rose-500">Reconnecting…</span>}
       </div>
 
@@ -124,12 +124,6 @@ export default function ShakTable({ code, userToken }: { code: string; userToken
             </div>
           )}
           <Pile count={state.tableCount} />
-          {lastPlay && state.phase === "playing" && (
-            <p className="mt-2 text-center text-sm text-white/90">
-              Last: <b>{name(lastPlay.by)}</b> put {lastPlay.count} — “{lastPlay.count > 1 ? "all" : "it's a"} {state.number}”
-              {state.doubtOpen && <span className="ml-1 rounded bg-rose-500/80 px-1.5 py-0.5 text-[11px] font-bold">can be doubted</span>}
-            </p>
-          )}
           <div className="mt-2 flex min-h-[34px] items-center justify-center">
             {toast && (
               <div key={toast} className="animate-[slideL_.25s_ease-out] rounded-2xl bg-ink-950/80 px-4 py-1.5 text-center text-sm font-semibold text-white shadow-xl" data-testid="shak-toast">
@@ -314,7 +308,7 @@ function BotButtons({ state, g, act }: { state: ShakPublicState; g: G; act: Act 
   const bots = state.players.filter((p) => p.isBot).length;
   return (
     <>
-      <button className="btn-ghost" data-testid="shak-add-bot" disabled={state.players.length >= 4} onClick={() => void act(g.bot("add"))}>+ Bot</button>
+      <button className="btn-ghost" data-testid="shak-add-bot" disabled={state.players.length >= SHAK_MAX_PLAYERS} onClick={() => void act(g.bot("add"))}>+ Bot</button>
       <button className="btn-ghost" disabled={bots === 0} onClick={() => void act(g.bot("remove"))}>− Bot</button>
     </>
   );
@@ -343,9 +337,9 @@ function Lobby({ state, me, isHost, g, err, act }: { state: ShakPublicState; me:
           <code className="flex-1 truncate rounded-xl bg-ink-100 px-3 py-2 text-sm dark:bg-ink-800" data-testid="shak-invite">{url}</code>
           <InviteButton code={state.code} />
         </div>
-        <p className="mt-2 text-xs text-ink-500 dark:text-ink-300">Table code <b className="font-mono">{state.code}</b>. 3 or 4 players — fill empty seats with bots.</p>
+        <p className="mt-2 text-xs text-ink-500 dark:text-ink-300">Table code <b className="font-mono">{state.code}</b>. {SHAK_MIN_PLAYERS}–{SHAK_MAX_PLAYERS} players — fill empty seats with bots.{n >= SHAK_MIN_PLAYERS && ` With ${n} players everyone gets ${shakTilesPer(n)} tiles.`}</p>
 
-        <h3 className="mt-5 text-sm font-black uppercase tracking-wider text-ink-500">Players {n}/4</h3>
+        <h3 className="mt-5 text-sm font-black uppercase tracking-wider text-ink-500">Players {n}/{SHAK_MAX_PLAYERS}</h3>
         <ul className="mt-2 grid gap-2 sm:grid-cols-2" data-testid="shak-lobby-players">
           {state.players.map((p) => (
             <li key={p.id} className="flex items-center gap-2 rounded-xl bg-ink-50 px-3 py-2 dark:bg-ink-800">
@@ -355,7 +349,7 @@ function Lobby({ state, me, isHost, g, err, act }: { state: ShakPublicState; me:
               {p.crowns > 0 && <span className="text-xs">👑×{p.crowns}</span>}
             </li>
           ))}
-          {Array.from({ length: Math.max(0, 4 - n) }, (_, i) => (
+          {Array.from({ length: Math.max(0, SHAK_MIN_PLAYERS - n) }, (_, i) => (
             <li key={`e${i}`} className="rounded-xl border-2 border-dashed border-ink-200 px-3 py-2 text-sm text-ink-400 dark:border-ink-700">Empty seat</li>
           ))}
         </ul>
@@ -395,18 +389,18 @@ export function RulesCard({ compact }: { compact?: boolean }) {
       <summary className="cursor-pointer text-lg font-black">How to play · طريقة اللعب</summary>
       <div className="mt-3 grid gap-4 text-sm md:grid-cols-2">
         <ul className="list-disc space-y-1 pl-5">
-          <li>3–4 players. 4 players get 7 tiles each; 3 players get 9 and one tile is set aside.</li>
+          <li>3–7 players. The 28 tiles are shared out evenly (3 players → 9 each, 4 → 7, 5 → 5, 6–7 → 4); any leftovers are set aside.</li>
           <li>Whoever holds 6|6 (or the biggest double) starts: announce a number 0–6 and put tiles face-down, claiming each one has that number.</li>
           <li>On your turn: <b>Play</b> more tiles claiming the same number (truth or bluff), <b>Pass</b>, or shout <b>«أشك!»</b> to doubt the last play — only until the next move.</li>
-          <li>Doubt: the tiles flip. All true → the doubter takes the whole table. One lie → the bluffer takes it. The tile-player then starts a new pile.</li>
+          <li>Doubt: the tiles flip. All true → the doubter takes the whole table. One lie → the bluffer takes it. Whoever wins the challenge starts the new pile.</li>
           <li>If everyone passes in a row, the table is removed from the game.</li>
           <li>Play your last tile and survive the next move → you&apos;re out. First out is the 👑 king; the last one holding tiles is the 🤡 fool.</li>
         </ul>
         <ul dir="rtl" className="list-disc space-y-1 pr-5 text-right">
-          <li>٣–٤ لاعبين. في الأربعة كل واحد ٧ حجارة، وفي التلاتة كل واحد ٩ وحجر بيتشال على جنب.</li>
+          <li>من ٣ لـ ٧ لاعبين. الـ ٢٨ حجر بيتوزعوا بالتساوي (٣ ← ٩ لكل واحد، ٤ ← ٧، ٥ ← ٥، ٦ و ٧ ← ٤) والباقي بيتشال على جنب.</li>
           <li>اللي معاه الدُش ٦|٦ (أو أكبر دُش) يبدأ: يقول رقم من ٠ لـ ٦ ويحط حجارة مقلوبة على إنها كلها فيها الرقم ده.</li>
           <li>في دورك: <b>ضع</b> حجارة على نفس الرقم (صح أو كذب)، أو <b>باص</b>، أو قول <b>«أشك!»</b> على آخر لعبة بس قبل الحركة اللي بعدها.</li>
-          <li>لو صادق: اللي شكّ ياخد كل الحجارة اللي على الترابيزة. لو كذاب: هو اللي ياخدها. وبعدها اللي لعب يبدأ كومة جديدة.</li>
+          <li>لو صادق: اللي شكّ ياخد كل الحجارة اللي على الترابيزة. لو كذاب: هو اللي ياخدها. واللي كسب الشك هو اللي يبدأ الكومة الجديدة.</li>
           <li>لو الكل قال باص ورا بعض، الحجارة اللي على الترابيزة تتشال من اللعب.</li>
           <li>اللي يخلّص حجارته ومحدش يكشفه يخرج. أول واحد يخلص هو 👑 الملك، وآخر واحد معاه حجارة هو 🤡 الأهبل.</li>
         </ul>
