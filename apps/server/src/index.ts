@@ -14,6 +14,7 @@ import { ShakManager } from "./shak/ShakManager.js";
 import { OneWordManager } from "./oneword/OneWordManager.js";
 import { SmuggleManager } from "./smuggle/SmuggleManager.js";
 import { NeonManager } from "./neon/NeonManager.js";
+import { SquadManager } from "./squad/SquadManager.js";
 import { LEVELS } from "@monumental/shared";
 
 export async function createServer() {
@@ -45,7 +46,8 @@ export async function createServer() {
   const oneword = new OneWordManager(io);
   const smuggle = new SmuggleManager(io);
   const neon = new NeonManager(io);
-  registerSocketHandlers(io, rooms, store, shak, oneword, smuggle, neon);
+  const squad = new SquadManager(io);
+  registerSocketHandlers(io, rooms, store, shak, oneword, smuggle, neon, squad);
 
   let scheduler: TournamentScheduler | null = null;
   if (db && config.tournamentsEnabled) {
@@ -68,7 +70,7 @@ export async function createServer() {
   app.get("/monuments", (_req, res) => { res.setHeader("Cache-Control", "public, max-age=60"); res.json(getCatalog()); });
   app.get("/time", (_req, res) => res.json({ now: Date.now() }));
 
-  return { app, httpServer, io, rooms, store, scheduler, db, shak, oneword, smuggle, neon };
+  return { app, httpServer, io, rooms, store, scheduler, db, shak, oneword, smuggle, neon, squad };
 }
 
 // Boot when run directly.

@@ -80,6 +80,9 @@ export interface ServerToClientEvents {
   ow_state: (s: import("./oneword").OwPublicState) => void;
   /** The secret key — sent only to Spymasters. */
   ow_key: (k: { code: string; key: import("./oneword").OwColor[] | null }) => void;
+  /** SQUAD RUSH rooms. */
+  sq_meta: (m: import("./squad").SqMeta) => void;
+  sq_snap: (s: import("./squad").SqSnap) => void;
   /** NEON DRIFT arenas. */
   nd_meta: (m: import("./neon").NeonMeta) => void;
   nd_snap: (s: import("./neon").NeonSnap) => void;
@@ -134,6 +137,18 @@ export interface ClientToServerEvents {
   ) => void;
   ow_leave: () => void;
   ow_act: (p: import("./oneword").OwAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** SQUAD RUSH rooms. */
+  sq_create: (
+    p: { settings?: Partial<import("./squad").SqSettings>; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; code?: string; error?: string }) => void,
+  ) => void;
+  sq_join: (
+    p: { code: string; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; error?: string; playerId?: string; meta?: import("./squad").SqMeta }) => void,
+  ) => void;
+  sq_leave: () => void;
+  sq_act: (p: import("./squad").SqAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  sq_input: (p: import("./squad").SqInput) => void;
   /** NEON DRIFT arenas. */
   nd_create: (
     p: { settings?: Partial<import("./neon").NeonSettings>; nickname: string; guestId?: string; userToken?: string },

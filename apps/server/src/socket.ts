@@ -1,15 +1,16 @@
 import type { Socket } from "socket.io";
 import { z } from "zod";
-import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, normaliseNeonSettings, type NeonSettings, type NeonAction, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
+import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, normaliseNeonSettings, normaliseSqSettings, type SqSettings, type SqAction, type NeonSettings, type NeonAction, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
 import type { ShakManager } from "./shak/ShakManager.js";
 import type { OneWordManager } from "./oneword/OneWordManager.js";
 import type { SmuggleManager } from "./smuggle/SmuggleManager.js";
 import type { NeonManager } from "./neon/NeonManager.js";
+import type { SquadManager } from "./squad/SquadManager.js";
 import { resolveIdentity, type Identity } from "./auth.js";
 import type { RoomManager, IO } from "./room/RoomManager.js";
 import type { LiveStore } from "./store.js";
 
-type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string; sm?: string; nd?: string }>;
+type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string; sm?: string; nd?: string; sq?: string }>;
 
 const joinSchema = z.object({
   roomId: z.string().max(64).optional(),
@@ -27,7 +28,7 @@ const guessSchema = z.object({
   lock: z.boolean().default(false),
 });
 
-export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager, sm?: SmuggleManager, nd?: NeonManager) {
+export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager, sm?: SmuggleManager, nd?: NeonManager, sq?: SquadManager) {
   io.on("connection", (socket: Sock) => {
     // naive per-socket rate limit for guesses (drag streams are throttled client-side to ~10/s)
     let guessBudget = 40;
@@ -378,10 +379,81 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       ack?.(t.act(me, a));
     });
     socket.on("nd_leave", () => ndLeave());
+
+    // ───────── SQUAD RUSH ─────────
+    const sqRoom = () => (socket.data.sq && sq ? sq.get(socket.data.sq) : undefined);
+    const sqLeave = () => {
+      const t = sqRoom();
+      if (t && socket.data.identity) t.leave(socket.data.identity.playerKey);
+      if (socket.data.sq) socket.leave(`sq:${socket.data.sq}`);
+      socket.data.sq = undefined;
+    };
+    socket.on("sq_create", async (raw, ack) => {
+      if (!sq) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ settings: z.record(z.string(), z.unknown()).optional() }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        if (Date.now() - lastCreate < 5000) return ack({ ok: false, error: "Slow down a little" });
+        lastCreate = Date.now();
+        const t = sq.create(identity.playerKey, normaliseSqSettings(p.settings as Partial<SqSettings>));
+        ack({ ok: true, code: t.code });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    socket.on("sq_join", async (raw, ack) => {
+      if (!sq) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ code: z.string().min(4).max(10) }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        const t = sq.get(p.code);
+        if (!t) return ack({ ok: false, error: "Room not found — ask the host for a new link" });
+        if (socket.data.sq && socket.data.sq !== t.code) sqLeave();
+        socket.data.identity = identity;
+        socket.join(`sq:${t.code}`);
+        if (socket.data.sq !== t.code) {
+          const r = t.join(identity.playerKey, identity.nickname);
+          if (!r.ok) { socket.leave(`sq:${t.code}`); return ack(r); }
+        }
+        socket.data.sq = t.code;
+        ack({ ok: true, playerId: identity.playerKey, meta: t.meta() });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    let sqBudget = 60;
+    const sqRefill = setInterval(() => { sqBudget = 60; }, 1000);
+    socket.on("sq_input", (raw) => {
+      const t = sqRoom();
+      const me = socket.data.identity?.playerKey;
+      if (!t || !me || sqBudget-- <= 0 || !raw) return;
+      const n = (v: unknown, lo: number, hi: number) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : 0; };
+      t.input(me, { mx: n(raw.mx, -1, 1), my: n(raw.my, -1, 1), aim: n(raw.aim, -10, 10), fire: !!raw.fire, ability: !!raw.ability, revive: !!raw.revive, reload: !!raw.reload, seq: n(raw.seq, 0, 1e9) });
+    });
+    const sqAction = z.discriminatedUnion("type", [
+      z.object({ type: z.literal("start") }),
+      z.object({ type: z.literal("settings"), settings: z.record(z.string(), z.unknown()) }),
+      z.object({ type: z.literal("team"), team: z.enum(["red", "blue"]) }),
+      z.object({ type: z.literal("role"), role: z.enum(["healer", "tank", "fighter"]) }),
+      z.object({ type: z.literal("bot"), team: z.enum(["red", "blue"]), op: z.enum(["add", "remove"]) }),
+      z.object({ type: z.literal("to_lobby") }),
+    ]);
+    socket.on("sq_act", (raw, ack) => {
+      const t = sqRoom();
+      const me = socket.data.identity?.playerKey;
+      if (!t || !me) return ack?.({ ok: false, error: "Join a room first" });
+      const p = sqAction.safeParse(raw);
+      if (!p.success) return ack?.({ ok: false, error: "Invalid action" });
+      let a = p.data as SqAction;
+      if (a.type === "settings") a = { type: "settings", settings: normaliseSqSettings({ ...t.meta().settings, ...(a.settings as Partial<SqSettings>) }) };
+      ack?.(t.act(me, a));
+    });
+    socket.on("sq_leave", () => sqLeave());
+    socket.on("disconnect", () => clearInterval(sqRefill));
     socket.on("disconnect", () => clearInterval(inputRefill));
 
     socket.on("leave_room", () => leave());
-    socket.on("disconnect", () => { clearInterval(refill); leave(); shakLeave(); owLeave(); smLeave(); ndLeave(); });
+    socket.on("disconnect", () => { clearInterval(refill); leave(); shakLeave(); owLeave(); smLeave(); ndLeave(); sqLeave(); });
 
     function leave() {
       const { identity, roomId } = socket.data;

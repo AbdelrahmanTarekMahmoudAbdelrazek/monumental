@@ -95,6 +95,19 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
       </section>
 
       <section className="mt-10">
+        <Link href="/squad" onClick={saveNick} className="relative flex flex-col items-start gap-3 overflow-hidden rounded-3xl bg-[#0B1118] p-5 text-white shadow-lg ring-1 ring-[#FFB224]/40 transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
+          <div className="flex shrink-0 gap-1" aria-hidden>
+            {["#3DD68C", "#A9B6C6", "#FFB224"].map((c) => <span key={c} className="h-12 w-3 rounded-full" style={{ background: c }} />)}
+          </div>
+          <div className="flex-1">
+            <h2 className="text-xl font-black">SQUAD RUSH <span className="ml-1 rounded-full bg-[#FFB224] px-2 py-0.5 align-middle text-xs font-bold text-[#0B1118]">NEW</span></h2>
+            <p className="text-sm text-white/75">Red vs Blue team shooter. Healer, Tank or Fighter — knock enemies down, revive your squad, grab power-ups. Bots fill the teams.</p>
+          </div>
+          <span className="btn w-full bg-[#FFB224] text-[#0B1118] sm:w-auto">Open a team room →</span>
+        </Link>
+      </section>
+
+      <section className="mt-6">
         <Link href="/neon" onClick={saveNick} className="relative flex flex-col items-start gap-3 overflow-hidden rounded-3xl bg-[#05070f] p-5 text-white shadow-lg ring-1 ring-fuchsia-500/40 transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
           <svg viewBox="0 0 120 50" className="h-14 w-32 shrink-0" aria-hidden>
             <path d="M5 40 C 30 40, 30 12, 60 12 S 95 30, 100 22" fill="none" stroke="#ff7a7a" strokeWidth="9" strokeOpacity=".25" strokeLinecap="round" />
