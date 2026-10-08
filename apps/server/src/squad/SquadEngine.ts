@@ -286,7 +286,7 @@ export class SquadEngine {
     for (const u of this.units) if (u.life === "down" && !u.revThisTick) u.rev = Math.max(0, u.rev - dt * 1.5);
     this.updateBullets(dt);
     if (t >= this.nextPowerAt) { this.spawnPower(); this.nextPowerAt = t + 7000 + this.rnd() * 5000; }
-    if (this.tickNo % 3 !== 0) this.sendSnap();
+    this.sendSnap(); // every tick: evenly spaced updates (≈16 KB/s with the compact format)
   }
 
   private updateUnit(u: Unit, dt: number, t: number) {

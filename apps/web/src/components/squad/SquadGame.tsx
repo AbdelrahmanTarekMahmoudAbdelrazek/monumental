@@ -5,7 +5,7 @@ import {
   SQ, SQ_BUSHES, SQ_DASH_MULT, segCircle, sqRayBlock, SQ_OBSTACLES, SQ_POWERS, SQ_ROLES, SQ_SHIELD, SQ_HEAL_PULSE, sqMove,
   type SqInput, type SqMeta, type SqPower, type SqRole, type SqTeam, type SqUnit,
 } from "@monumental/shared";
-import { useSquad } from "@/lib/useSquad";
+import { useSquad, type SqHist } from "@/lib/useSquad";
 import { measurePing, serverNow } from "@/lib/socket";
 import { sfx } from "@/lib/sound";
 import { buildMap, buildSprites, drawBushes, SPRITE, TEAM_COLORS, type SpriteSet } from "./sprites";
@@ -16,7 +16,30 @@ interface Hud {
   cd: number; act: boolean; power: SqPower | null; powerMs: number; bubble: number; timer: number;
   role: SqRole; team: SqTeam; rev: number; prompt: string | null;
 }
-const LEAD = 0.05;
+const DEBUG = typeof window !== "undefined" && window.location.search.includes("sqdebug");
+/** How far in the past other players are drawn. Covers network jitter of up to ~this many ms with no stutter. */
+const INTERP_MS = 100;
+
+/** Position of a unit at server time t from its recent history (interpolate; short extrapolation if we run out). */
+function sample(h: SqHist[] | undefined, t: number) {
+  if (!h || !h.length) return null;
+  let i = h.length - 1;
+  if (t >= h[i].t) {
+    const e = h[i];
+    const s = e.life === "dead" ? 0 : Math.min(0.12, (t - e.t) / 1000);
+    const [x, y] = sqMove(e.x, e.y, e.vx * s, e.vy * s);
+    return { x, y, a: e.a };
+  }
+  while (i > 0 && h[i - 1].t > t) i--;
+  if (i === 0) return { x: h[0].x, y: h[0].y, a: h[0].a };
+  const a = h[i - 1], b = h[i];
+  // respawns / big jumps: don't slide across the map
+  if (a.life !== b.life || Math.hypot(b.x - a.x, b.y - a.y) > 160) return { x: b.x, y: b.y, a: b.a };
+  const f = (t - a.t) / Math.max(1, b.t - a.t);
+  let da = b.a - a.a;
+  da = Math.atan2(Math.sin(da), Math.cos(da));
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, a: a.a + da * f };
+}
 const ROLE_KEYS: SqRole[] = ["healer", "tank", "fighter"];
 
 export default function SquadGame({ code, userToken }: { code: string; userToken: string | null }) {
@@ -89,7 +112,6 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
     let sprites: Record<string, SpriteSet> | null = null;
     const mapCanvas = buildMap();
     void buildSprites().then((s) => { sprites = s; });
-    const preds = new Map<string, { tick: number; base: SqUnit | null; baseAt: number; ex: number; ey: number }>();
     const ghosts = new Map<string, { x: number; y: number; a: number; at: number }[]>();
     const cam = { x: SQ.MAP_W / 2, y: SQ.MAP_H / 2, init: false, lx: 0, ly: 0 };
     let aim = 0;
@@ -104,22 +126,6 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
     /** My own position, simulated locally every frame. */
     const own = { x: 0, y: 0, init: false, dashUntil: 0, dashReady: 0, dx: 0, dy: 0 };
 
-    /** Where a unit is "now": the newest server state pushed forward by elapsed time (mine with my live keys). */
-    const extrapolate = (u: SqUnit, secs: number, mine: boolean, mx: number, my: number) => {
-      let x = u.x, y = u.y;
-      if (u.life === "dead") return [x, y] as const;
-      if (!mine || u.act) { [x, y] = sqMove(x, y, u.vx * secs, u.vy * secs); return [x, y] as const; }
-      const def = SQ_ROLES[u.role];
-      const speed = u.life === "down" ? SQ.CRAWL_SPEED : def.speed * (u.power === "speed" ? 1.35 : 1);
-      const l = Math.hypot(mx, my) || 1;
-      const h = 1 / 120;
-      for (let left = secs; left > 1e-6; left -= h) {
-        const dt = Math.min(h, left);
-        [x, y] = sqMove(x, y, (mx / Math.max(1, l)) * speed * dt, (my / Math.max(1, l)) * speed * dt);
-      }
-      return [x, y] as const;
-    };
-
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const now = performance.now();
@@ -132,8 +138,9 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
       const w = world.current;
       const cur = w.cur;
       const myId = meRef.current;
-      const elapsed = cur ? Math.min(0.25, (now - w.curAt) / 1000 + LEAD) : 0;
-      const T = cur ? cur.t + elapsed * 1000 : 0;
+      /** Render time for other players and their bullets: server "now" minus a small buffer. */
+      const RT = w.tOff !== null ? now + w.tOff - INTERP_MS : 0;
+      const T = RT;
 
       // input direction
       const k = keys.current;
@@ -146,12 +153,9 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
       // units at "now"
       const draw: (SqUnit & { dx: number; dy: number; ang: number })[] = [];
       let mine: (typeof draw)[number] | null = null;
-      const decay = Math.exp(-dt / 0.08);
       for (const u of cur?.units ?? []) {
-        let pr = preds.get(u.id);
-        if (!pr) { pr = { tick: -1, base: null, baseAt: 0, ex: 0, ey: 0 }; preds.set(u.id, pr); }
         const isMe = u.id === myId;
-        if (u.life === "dead") { pr.base = null; if (isMe) own.init = false; continue; }
+        if (u.life === "dead") { if (isMe) own.init = false; continue; }
         if (isMe) {
           // ── my own character moves on my screen, every frame, with my keys (no waiting for the server) ──
           const def = SQ_ROLES[u.role];
@@ -176,21 +180,14 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
           mine = d;
           continue;
         }
-        const [x, y] = extrapolate(u, elapsed, isMe, mx, my);
-        if (cur && pr.tick !== cur.tick) {
-          if (pr.base && pr.base.life === u.life) {
-            const [ox, oy] = extrapolate(pr.base, Math.min(0.25, (now - pr.baseAt) / 1000 + LEAD), isMe, mx, my);
-            const ex = ox + pr.ex - x, ey = oy + pr.ey - y;
-            if (Math.hypot(ex, ey) < 90) { pr.ex = ex; pr.ey = ey; } else { pr.ex = pr.ey = 0; }
-          } else { pr.ex = pr.ey = 0; }
-          pr.tick = cur.tick; pr.base = u; pr.baseAt = w.curAt;
-        }
-        pr.ex *= decay; pr.ey *= decay;
-        const d = { ...u, dx: x + pr.ex, dy: y + pr.ey, ang: isMe ? aim : u.a / 1000 };
+        // other players: drawn ~100 ms in the past, sliding between two real server positions (smooth even when packets bunch up)
+        const p = sample(w.hist.get(u.id), RT);
+        const d = { ...u, dx: p ? p.x : u.x, dy: p ? p.y : u.y, ang: p ? p.a : u.a / 1000 };
         draw.push(d);
         if (isMe) mine = d;
       }
 
+      if (DEBUG) (window as unknown as { __sqDraw: unknown }).__sqDraw = draw.map((u) => ({ id: u.id, x: u.dx, y: u.dy }));
       // camera: locked on me — steady, no leaning toward the mouse
       const zoom = Math.max(W, H) / (W < 700 ? 1000 : 1500);
       const focus = mine ?? draw.find((u) => u.team === m?.players.find((p) => p.id === myId)?.team) ?? null;

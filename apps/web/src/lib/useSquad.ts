@@ -27,7 +27,12 @@ export interface SqWorld {
   meId: string | null;
   /** Shots I fired, drawn the moment I click (visual only; the server decides hits). */
   local: { x0: number; y0: number; a: number; speed: number; stopDist: number; at: number; team: 0 | 1; hit: boolean }[];
+  /** Recent server positions per unit (for smooth interpolation of other players). */
+  hist: Map<string, SqHist[]>;
+  /** Server clock minus local clock, tracked from the fastest-arriving snapshots. */
+  tOff: number | null;
 }
+export interface SqHist { t: number; x: number; y: number; a: number; vx: number; vy: number; life: SqSnap["units"][number]["life"] }
 
 /** Connects to one SQUAD RUSH room. Fast-changing world state lives in a ref. */
 export function useSquad(code: string, userToken?: string | null) {
@@ -37,7 +42,7 @@ export function useSquad(code: string, userToken?: string | null) {
   const [connected, setConnected] = useState(false);
   const world = useRef<SqWorld>({
     cur: null, prev: null, curAt: 0, bullets: new Map(), powers: [],
-    fx: { flashes: new Map(), sparks: [], numbers: [], pulses: [] }, hurt: new Map(), meId: null, local: [],
+    fx: { flashes: new Map(), sparks: [], numbers: [], pulses: [] }, hurt: new Map(), meId: null, local: [], hist: new Map(), tOff: null,
   });
 
   const nToId = useRef(new Map<number, string>());
@@ -86,6 +91,16 @@ export function useSquad(code: string, userToken?: string | null) {
       if (sn.pulses) for (let i = 0; i < sn.pulses.length; i += 2) w.fx.pulses.push({ x: sn.pulses[i], y: sn.pulses[i + 1], at: now });
       const prevHp = new Map((w.cur?.units ?? []).map((u) => [u.id, u.life === "alive" ? u.hp : -1]));
       for (const u of sn.units) { const p = prevHp.get(u.id); if (p !== undefined && p > 0 && u.life === "alive" && u.hp < p - 0.5) w.hurt.set(u.id, now); }
+      // clock: keep the offset of the quickest arrival, drifting down slowly so a one-off fast packet can't stick
+      const sample = sn.t - now;
+      w.tOff = w.tOff === null || sample > w.tOff ? sample : w.tOff - 0.25;
+      if (w.cur && sn.t < w.cur.t) return; // out-of-order packet
+      for (const u of sn.units) {
+        let h = w.hist.get(u.id);
+        if (!h) { h = []; w.hist.set(u.id, h); }
+        h.push({ t: sn.t, x: u.x, y: u.y, a: u.a / 1000, vx: u.vx, vy: u.vy, life: u.life });
+        while (h.length > 2 && h[1].t < sn.t - 1000) h.shift();
+      }
       w.powers = sn.powers;
       w.prev = w.cur;
       w.cur = sn;
