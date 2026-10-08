@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mulberry32, SQ, SQ_ROLES, sqMove, segRect, type SqMeta, type SqSnap, type SqInput } from "@monumental/shared";
+import { mulberry32, SQ, SQ_ROLES, sqMove, segRect, type SqMeta, type SqSnap, type SqInput, decodeSnap } from "@monumental/shared";
 import { SquadEngine } from "./SquadEngine";
 
 function room(teamSize = 1, seed = 1) {
   const metas: SqMeta[] = [];
   const snaps: SqSnap[] = [];
-  const t = new SquadEngine("TEST1", "h", { target: 5, minutes: 6, teamSize }, {
+  const t: SquadEngine = new SquadEngine("TEST1", "h", { target: 5, minutes: 6, teamSize }, {
     meta: (m) => metas.push(JSON.parse(JSON.stringify(m))),
-    snap: (s) => snaps.push(s),
+    snap: (w) => snaps.push(decodeSnap(JSON.parse(JSON.stringify(w)), (n) => (t as unknown as { units: { n: number; id: string }[] }).units.find((u) => u.n === n)?.id)),
     onIdle: () => {},
   }, () => Date.now(), mulberry32(seed));
   return { t, metas, snaps, meta: () => metas[metas.length - 1], snap: () => snaps[snaps.length - 1] };

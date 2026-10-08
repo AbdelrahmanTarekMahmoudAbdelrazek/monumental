@@ -82,7 +82,7 @@ export interface ServerToClientEvents {
   ow_key: (k: { code: string; key: import("./oneword").OwColor[] | null }) => void;
   /** SQUAD RUSH rooms. */
   sq_meta: (m: import("./squad").SqMeta) => void;
-  sq_snap: (s: import("./squad").SqSnap) => void;
+  sq_snap: (s: import("./squad").SqWire) => void;
   /** NEON DRIFT arenas. */
   nd_meta: (m: import("./neon").NeonMeta) => void;
   nd_snap: (s: import("./neon").NeonSnap) => void;

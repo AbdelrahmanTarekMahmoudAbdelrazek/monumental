@@ -23,10 +23,14 @@ import {
   type SqSnap,
   type SqTeam,
   type SqUnit,
+  type SqWire,
+  encodeSnap,
 } from "@monumental/shared";
 
 interface Unit {
   id: string;
+  /** Short number for the wire format. */
+  n: number;
   nickname: string;
   isBot: boolean;
   connections: number;
@@ -70,7 +74,7 @@ const no = (error: string): R => ({ ok: false, error });
 
 export interface SqEvents {
   meta: (m: SqMeta) => void;
-  snap: (s: SqSnap) => void;
+  snap: (s: SqWire) => void;
   onIdle: () => void;
 }
 
@@ -91,6 +95,7 @@ export class SquadEngine {
   private mvpId: string | null = null;
   private feed: SqMeta["feed"] = [];
   private nextId = 1;
+  private nextN = 1;
   private tickNo = 0;
   private nextPowerAt = 0;
   private loop: ReturnType<typeof setInterval> | null = null;
@@ -281,7 +286,7 @@ export class SquadEngine {
     for (const u of this.units) if (u.life === "down" && !u.revThisTick) u.rev = Math.max(0, u.rev - dt * 1.5);
     this.updateBullets(dt);
     if (t >= this.nextPowerAt) { this.spawnPower(); this.nextPowerAt = t + 7000 + this.rnd() * 5000; }
-    this.sendSnap();
+    if (this.tickNo % 3 !== 0) this.sendSnap();
   }
 
   private updateUnit(u: Unit, dt: number, t: number) {
@@ -605,6 +610,7 @@ export class SquadEngine {
 
   private newUnit(id: string, nickname: string, isBot: boolean, team: SqTeam, role: SqRole): Unit {
     return {
+      n: this.nextN++,
       id, nickname, isBot, connections: 0, team, role, nextRole: role, ready: isBot,
       x: 0, y: 0, vx: 0, vy: 0, aim: 0, input: idle(), hp: SQ_ROLES[role].hp, life: "dead", downHp: 0, lifeAt: 0, rev: 0, revThisTick: false,
       ammo: SQ_ROLES[role].weapon.mag, reloadUntil: 0, nextShot: 0, abilityAt: 0, actUntil: 0, dashX: 0, dashY: 0,
@@ -627,7 +633,7 @@ export class SquadEngine {
       hostId: this.hostId,
       settings: this.settings,
       players: this.units.map((u) => ({
-        id: u.id, nickname: u.nickname, isBot: u.isBot, connected: u.connections > 0, team: u.team, role: u.nextRole, ready: u.ready,
+        id: u.id, n: u.n, nickname: u.nickname, isBot: u.isBot, connected: u.connections > 0, team: u.team, role: u.nextRole, ready: u.ready,
         kills: u.kills, knocks: u.knocks, deaths: u.deaths, revives: u.revives, damage: Math.round(u.damage),
       })),
       score: { ...this.score },
@@ -657,7 +663,11 @@ export class SquadEngine {
     return s;
   }
 
-  private sendSnap() { if (!this.destroyed) this.ev.snap(this.snapshot()); }
+  private sendSnap() {
+    if (this.destroyed) return;
+    const s = this.snapshot();
+    this.ev.snap(encodeSnap(s, (id) => this.units.find((u) => u.id === id)?.n ?? -1));
+  }
   private pushMeta() { if (!this.destroyed) this.ev.meta(this.meta()); }
   private startLoop() { this.stopLoop(); this.loop = setInterval(() => this.step(), SQ.TICK_MS); }
   private stopLoop() { if (this.loop) { clearInterval(this.loop); this.loop = null; } }

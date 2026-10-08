@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { SqAction, SqInput, SqMeta, SqPower, SqSnap } from "@monumental/shared";
+import { decodeSnap, type SqAction, type SqInput, type SqMeta, type SqPower, type SqSnap, type SqWire } from "@monumental/shared";
 import { getSocket, noteServerNow, syncClock } from "./socket";
 import { getGuestId, getNickname } from "./identity";
 
@@ -40,8 +40,11 @@ export function useSquad(code: string, userToken?: string | null) {
     fx: { flashes: new Map(), sparks: [], numbers: [], pulses: [] }, hurt: new Map(), meId: null, local: [],
   });
 
+  const nToId = useRef(new Map<number, string>());
+
   useEffect(() => {
     const s = getSocket();
+    const learn = (m: SqMeta) => { for (const p of m.players) nToId.current.set(p.n, p.id); };
     let cancelled = false;
     const join = () =>
       s.emit("sq_join", { code, nickname: getNickname(), guestId: getGuestId(), userToken: userToken ?? undefined }, (a) => {
@@ -49,14 +52,16 @@ export function useSquad(code: string, userToken?: string | null) {
         if (!a.ok || !a.meta) { setError(a.error ?? "Could not join"); return; }
         setError(null);
         setMe(a.playerId ?? null);
+        learn(a.meta);
         setMeta(a.meta);
         noteServerNow(a.meta.serverNow);
         void syncClock();
       });
     const onConnect = () => { setConnected(true); join(); };
     const onDisconnect = () => setConnected(false);
-    const onMeta = (m: SqMeta) => { if (m.code === code) setMeta(m); };
-    const onSnap = (sn: SqSnap) => {
+    const onMeta = (m: SqMeta) => { if (m.code === code) { learn(m); setMeta(m); } };
+    const onSnap = (wire: SqWire) => {
+      const sn: SqSnap = decodeSnap(wire, (n) => nToId.current.get(n));
       const w = world.current;
       const now = performance.now();
       if (sn.shots) for (let i = 0; i < sn.shots.length; i += 8) {

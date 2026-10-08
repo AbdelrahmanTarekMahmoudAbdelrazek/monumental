@@ -220,6 +220,8 @@ export type SqLife = "alive" | "down" | "dead";
 
 export interface SqPlayerPublic {
   id: string;
+  /** Short number used for this player in snapshots. */
+  n: number;
   nickname: string;
   isBot: boolean;
   connected: boolean;
@@ -292,6 +294,59 @@ export interface SqSnap {
   /** Heal pulses: flat [x, y] */
   pulses?: number[];
   powers: { id: number; x: number; y: number; kind: SqPower }[];
+}
+
+// ───────────────────────── compact wire format ─────────────────────────
+// Snapshots go out 20×/s to every player, so units travel as short number arrays (≈5× smaller than JSON objects).
+
+const ROLE_I: SqRole[] = ["healer", "tank", "fighter"];
+const LIFE_I: SqLife[] = ["alive", "down", "dead"];
+const POWER_I: SqPower[] = ["triple", "speed", "medkit", "bubble"];
+
+/** Wire snapshot: `u` rows are [n, team, role, x×10, y×10, aim×1000, vx, vy, hp, maxHp, life, rev, timer/100, ammo, reloading, cd/100, act, power, powerMs/100, bubble]. */
+export interface SqWire {
+  t: number;
+  k: number;
+  u: number[][];
+  s?: number[];
+  st?: number[];
+  d?: number[];
+  pl?: number[];
+  /** Power-ups: flat [id, x, y, kind]. */
+  w: number[];
+}
+
+export function encodeSnap(s: SqSnap, nOf: (id: string) => number): SqWire {
+  const w: SqWire = {
+    t: s.t,
+    k: s.tick,
+    u: s.units.map((u) => [
+      nOf(u.id), u.team === "red" ? 0 : 1, ROLE_I.indexOf(u.role), Math.round(u.x * 10), Math.round(u.y * 10), u.a, u.vx, u.vy,
+      u.hp, u.maxHp, LIFE_I.indexOf(u.life), u.rev, Math.round(u.timer / 100), u.ammo, u.reloading ? 1 : 0, Math.round(u.cd / 100),
+      u.act ? 1 : 0, u.power ? POWER_I.indexOf(u.power) : -1, Math.round(u.powerMs / 100), u.bubble,
+    ]),
+    w: s.powers.flatMap((p) => [p.id, p.x, p.y, POWER_I.indexOf(p.kind)]),
+  };
+  if (s.shots) w.s = s.shots;
+  if (s.stops) w.st = s.stops;
+  if (s.dmg) w.d = s.dmg;
+  if (s.pulses) w.pl = s.pulses;
+  return w;
+}
+
+export function decodeSnap(w: SqWire, idOf: (n: number) => string | undefined): SqSnap {
+  const units: SqUnit[] = [];
+  for (const r of w.u) {
+    const id = idOf(r[0]) ?? `#${r[0]}`; // keep row order: shots refer to units by index
+    units.push({
+      id, team: r[1] === 0 ? "red" : "blue", role: ROLE_I[r[2]] ?? "fighter", x: r[3] / 10, y: r[4] / 10, a: r[5], vx: r[6], vy: r[7],
+      hp: r[8], maxHp: r[9], life: LIFE_I[r[10]] ?? "alive", rev: r[11], timer: r[12] * 100, ammo: r[13], reloading: r[14] === 1,
+      cd: r[15] * 100, act: r[16] === 1, power: r[17] >= 0 ? POWER_I[r[17]] : null, powerMs: r[18] * 100, bubble: r[19],
+    });
+  }
+  const powers: SqSnap["powers"] = [];
+  for (let i = 0; i + 3 < w.w.length; i += 4) powers.push({ id: w.w[i], x: w.w[i + 1], y: w.w[i + 2], kind: POWER_I[w.w[i + 3]] ?? "medkit" });
+  return { t: w.t, tick: w.k, units, powers, shots: w.s, stops: w.st, dmg: w.d, pulses: w.pl };
 }
 
 export type SqAction =
