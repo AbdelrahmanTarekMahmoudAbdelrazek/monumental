@@ -18,6 +18,16 @@ export function getSocket(): GameSocket {
   return socket;
 }
 
+/** Round-trip time to the game server in ms (one quick ping). */
+export function measurePing(): Promise<number> {
+  return new Promise((res) => {
+    const s = getSocket();
+    const t0 = performance.now();
+    const timer = setTimeout(() => res(-1), 3000);
+    s.emit("ping_time", { t0: Date.now() }, () => { clearTimeout(timer); res(Math.round(performance.now() - t0)); });
+  });
+}
+
 export function serverNow() {
   return Date.now() + clockOffset;
 }

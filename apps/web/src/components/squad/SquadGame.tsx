@@ -2,11 +2,11 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  SQ, SQ_BUSHES, SQ_DASH_MULT, SQ_OBSTACLES, SQ_POWERS, SQ_ROLES, SQ_SHIELD, SQ_HEAL_PULSE, sqMove,
+  SQ, SQ_BUSHES, SQ_DASH_MULT, segCircle, sqRayBlock, SQ_OBSTACLES, SQ_POWERS, SQ_ROLES, SQ_SHIELD, SQ_HEAL_PULSE, sqMove,
   type SqInput, type SqMeta, type SqPower, type SqRole, type SqTeam, type SqUnit,
 } from "@monumental/shared";
 import { useSquad } from "@/lib/useSquad";
-import { serverNow } from "@/lib/socket";
+import { measurePing, serverNow } from "@/lib/socket";
 import { sfx } from "@/lib/sound";
 import { buildMap, buildSprites, drawBushes, SPRITE, TEAM_COLORS, type SpriteSet } from "./sprites";
 
@@ -30,6 +30,15 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
   const [hud, setHud] = useState<Hud | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [touch, setTouch] = useState(false);
+  const [ping, setPing] = useState<number | null>(null);
+  world.current.meId = me;
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => { const p = await measurePing(); if (alive && p >= 0) setPing(p); };
+    void tick();
+    const t = setInterval(tick, 2000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   const keys = useRef({ up: false, down: false, left: false, right: false, fire: false, ability: false, revive: false, reload: false });
   const mouse = useRef({ x: 0, y: 0, on: false });
   const sticks = useRef<{ move: { id: number; ox: number; oy: number; x: number; y: number } | null; aim: { id: number; ox: number; oy: number; x: number; y: number } | null }>({ move: null, aim: null });
@@ -90,6 +99,8 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
     let last = performance.now();
     let hudAt = 0;
     let shake = 0;
+    let localNextShot = 0;
+    const localAmmo = { n: 0, srv: -1 };
     /** My own position, simulated locally every frame. */
     const own = { x: 0, y: 0, init: false, dashUntil: 0, dashReady: 0, dx: 0, dy: 0 };
 
@@ -205,6 +216,37 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
 
       // send input when it changes
       const stickFire = !!st.aim && Math.hypot(st.aim.x - st.aim.ox, st.aim.y - st.aim.oy) > 28;
+
+      // fire my shots locally the instant I click — the server still decides what they hit
+      const srvMe = cur?.units.find((u) => u.id === myId);
+      if (mine && srvMe && srvMe.life === "alive" && (k.fire || stickFire) && !k.revive && !(srvMe.role === "tank" && srvMe.act) && !srvMe.reloading && localAmmo.n > 0 && now >= localNextShot) {
+        const wpn = SQ_ROLES[srvMe.role].weapon;
+        localNextShot = now + wpn.interval;
+        localAmmo.n--;
+        const lanes = srvMe.power === "triple" ? [-0.16, 0, 0.16] : [0];
+        const sx0 = mine.dx + Math.cos(aim) * (SQ.R + 6), sy0 = mine.dy + Math.sin(aim) * (SQ.R + 6);
+        for (const lane of lanes) for (let p = 0; p < wpn.pellets; p++) {
+          const spread = wpn.pellets > 1 ? (p / (wpn.pellets - 1) - 0.5) * wpn.spread * 2 : 0;
+          const a = aim + lane + spread + (Math.random() - 0.5) * wpn.spread * (wpn.pellets > 1 ? 0.5 : 1);
+          const ex = sx0 + Math.cos(a) * wpn.range, ey = sy0 + Math.sin(a) * wpn.range;
+          let stop = wpn.range;
+          const wb = sqRayBlock(sx0, sy0, ex, ey);
+          if (wb >= 0) stop = wb * wpn.range;
+          for (const o of draw) {
+            if (o.team === srvMe.team) continue;
+            const hc = segCircle(sx0, sy0, ex, ey, o.dx, o.dy, SQ.R);
+            if (hc >= 0 && hc * wpn.range < stop) stop = hc * wpn.range;
+          }
+          w.local.push({ x0: sx0, y0: sy0, a, speed: wpn.speed, stopDist: stop, at: now, team: srvMe.team === "red" ? 0 : 1, hit: stop < wpn.range - 1 });
+        }
+        w.fx.flashes.set(srvMe.id, now);
+      }
+      if (srvMe) {
+        if (srvMe.reloading) localAmmo.n = 0;
+        else if (srvMe.ammo > localAmmo.srv || localAmmo.srv < 0) localAmmo.n = srvMe.ammo; // reload finished / respawn
+        else localAmmo.n = Math.min(localAmmo.n, srvMe.ammo);
+        localAmmo.srv = srvMe.ammo;
+      }
       const inp: SqInput = { mx: Math.round(mx * 100) / 100, my: Math.round(my * 100) / 100, aim: Math.round(aim * 1000) / 1000, fire: k.fire || stickFire, ability: k.ability, revive: k.revive, reload: k.reload, seq };
       if (own.init && mine) { inp.px = Math.round(own.x * 10) / 10; inp.py = Math.round(own.y * 10) / 10; }
       if (m?.phase === "playing") {
@@ -341,6 +383,21 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
       // bullets
       ctx.globalCompositeOperation = "lighter";
       ctx.lineCap = "round";
+      for (let i = w.local.length - 1; i >= 0; i--) {
+        const b = w.local[i];
+        const dist = ((now - b.at) / 1000) * b.speed;
+        if (dist >= b.stopDist) {
+          if (b.hit) w.fx.sparks.push({ x: b.x0 + Math.cos(b.a) * b.stopDist, y: b.y0 + Math.sin(b.a) * b.stopDist, at: now, kind: 0 });
+          w.local.splice(i, 1);
+          continue;
+        }
+        const d0 = Math.max(0, dist - 46);
+        const x0 = b.x0 + Math.cos(b.a) * d0, y0 = b.y0 + Math.sin(b.a) * d0, x1 = b.x0 + Math.cos(b.a) * dist, y1 = b.y0 + Math.sin(b.a) * dist;
+        ctx.strokeStyle = b.team === 0 ? "rgba(255,150,120,0.35)" : "rgba(140,190,255,0.35)"; ctx.lineWidth = 7;
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+        ctx.strokeStyle = "rgba(255,240,200,0.95)"; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+      }
       for (const [id, b] of w.bullets) {
         const dist = ((T - b.t0) / 1000) * b.speed;
         const max = b.stopDist ?? b.range;
@@ -525,8 +582,9 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
               </div>
             ))}
           </div>
-          {/* invite + lobby */}
+          {/* invite + lobby + ping */}
           <div className="absolute left-4 flex gap-2 text-xs" style={{ top: touch ? 16 + 82 : 16 + 135 }}>
+            {ping !== null && <span className="rounded-full border border-[#2A3848] bg-[#0B1118]/80 px-3 py-1 font-bold" style={{ color: ping < 90 ? "#3DD68C" : ping < 160 ? "#FFB224" : "#FF8A8E" }} data-testid="sq-ping">{ping} ms</span>}
             <InviteButton code={code} />
             {isHost && <button className="rounded-full border border-[#2A3848] bg-[#0B1118]/80 px-3 py-1 font-semibold" onClick={() => void act({ type: "to_lobby" })}>End match</button>}
           </div>

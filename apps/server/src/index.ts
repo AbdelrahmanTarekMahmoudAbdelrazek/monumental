@@ -28,6 +28,9 @@ export async function createServer() {
     pingInterval: 10_000,
     pingTimeout: 20_000,
     transports: ["websocket", "polling"],
+    // small, frequent game packets: compressing them only adds CPU time and latency
+    perMessageDeflate: false,
+    httpCompression: false,
   });
 
   const store = createStore();

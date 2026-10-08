@@ -1,0 +1,31 @@
+# SQUAD RUSH / How Big? game server on a free Oracle Cloud VM (Jeddah / Dubai).
+#   server: the Socket.io game server (built from apps/server/Dockerfile)
+#   caddy : HTTPS in front of it, with a free auto-renewing Let's Encrypt certificate
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: apps/server/Dockerfile
+    env_file: .env
+    environment:
+      - PORT=4000
+    restart: unless-stopped
+    expose:
+      - "4000"
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  caddy_data: {}
+  caddy_config: {}

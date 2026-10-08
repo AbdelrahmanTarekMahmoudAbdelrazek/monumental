@@ -4,6 +4,7 @@ import Link from "next/link";
 import { NEON, NEON_COLORS, NEON_POWERS, aimTurn, type NeonCarSnap, type NeonMeta } from "@monumental/shared";
 import { useNeon } from "@/lib/useNeon";
 import { sfx } from "@/lib/sound";
+import { measurePing } from "@/lib/socket";
 
 type Act = ReturnType<typeof useNeon>["act"];
 
@@ -46,6 +47,14 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
   const keys = useRef({ left: false, right: false, boost: false, mouseBoost: false, px: 0, py: 0, pointer: false, aim: null as number | null });
   const sent = useRef({ turn: 9, boost: false, aim: null as number | null, at: 0 });
   const [touch, setTouch] = useState(false);
+  const [ping, setPing] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => { const p = await measurePing(); if (alive && p >= 0) setPing(p); };
+    void tick();
+    const t = setInterval(tick, 2000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   const touchRef = useRef(false);
   touchRef.current = touch;
 
@@ -446,6 +455,7 @@ export default function NeonGame({ code, userToken }: { code: string; userToken:
         <div className="pointer-events-auto flex flex-wrap items-center gap-2 text-xs">
           <span className="rounded-full bg-black/50 px-3 py-1 font-semibold ring-1 ring-white/15">🏎️ NEON DRIFT · <span className="font-mono">{code}</span></span>
           <InviteButton code={code} />
+          {ping !== null && <span className="rounded-full bg-black/50 px-3 py-1 font-bold ring-1 ring-white/15" style={{ color: ping < 90 ? "#3DD68C" : ping < 160 ? "#FFB224" : "#FF8A8E" }}>{ping} ms</span>}
           {isHost && meta?.phase !== "lobby" && <button className="rounded-full bg-black/50 px-3 py-1 font-semibold ring-1 ring-white/15 hover:bg-black/70" onClick={() => void act({ type: "to_lobby" })}>Lobby</button>}
           {!g.connected && <span className="font-bold text-rose-300">Reconnecting…</span>}
         </div>

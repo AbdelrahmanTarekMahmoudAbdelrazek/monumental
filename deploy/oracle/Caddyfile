@@ -1,0 +1,5 @@
+{$DOMAIN} {
+	reverse_proxy server:4000 {
+		flush_interval -1
+	}
+}

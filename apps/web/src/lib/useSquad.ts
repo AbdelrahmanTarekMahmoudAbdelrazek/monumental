@@ -23,6 +23,10 @@ export interface SqWorld {
   fx: SqFx;
   /** Unit id → local time it last lost health (hit flash). */
   hurt: Map<string, number>;
+  /** My player id — my own shots are drawn instantly by the client, so the server's copies are skipped. */
+  meId: string | null;
+  /** Shots I fired, drawn the moment I click (visual only; the server decides hits). */
+  local: { x0: number; y0: number; a: number; speed: number; stopDist: number; at: number; team: 0 | 1; hit: boolean }[];
 }
 
 /** Connects to one SQUAD RUSH room. Fast-changing world state lives in a ref. */
@@ -33,7 +37,7 @@ export function useSquad(code: string, userToken?: string | null) {
   const [connected, setConnected] = useState(false);
   const world = useRef<SqWorld>({
     cur: null, prev: null, curAt: 0, bullets: new Map(), powers: [],
-    fx: { flashes: new Map(), sparks: [], numbers: [], pulses: [] }, hurt: new Map(),
+    fx: { flashes: new Map(), sparks: [], numbers: [], pulses: [] }, hurt: new Map(), meId: null, local: [],
   });
 
   useEffect(() => {
@@ -57,8 +61,9 @@ export function useSquad(code: string, userToken?: string | null) {
       const now = performance.now();
       if (sn.shots) for (let i = 0; i < sn.shots.length; i += 8) {
         const [id, x, y, a, speed, range, team, ui] = sn.shots.slice(i, i + 8);
-        w.bullets.set(id, { x0: x, y0: y, a: a / 1000, speed, range, team: team as 0 | 1, t0: sn.t, stopDist: null, stopKind: -1 });
         const u = sn.units[ui];
+        if (u && u.id === w.meId) continue; // already drawn locally
+        w.bullets.set(id, { x0: x, y0: y, a: a / 1000, speed, range, team: team as 0 | 1, t0: sn.t, stopDist: null, stopKind: -1 });
         if (u) w.fx.flashes.set(u.id, now);
       }
       if (sn.stops) for (let i = 0; i < sn.stops.length; i += 4) {
