@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  SQ, SQ_BUSHES, SQ_OBSTACLES, SQ_POWERS, SQ_ROLES, SQ_SHIELD, SQ_HEAL_PULSE, sqMove,
+  SQ, SQ_BUSHES, SQ_DASH_MULT, SQ_OBSTACLES, SQ_POWERS, SQ_ROLES, SQ_SHIELD, SQ_HEAL_PULSE, sqMove,
   type SqInput, type SqMeta, type SqPower, type SqRole, type SqTeam, type SqUnit,
 } from "@monumental/shared";
 import { useSquad } from "@/lib/useSquad";
@@ -90,6 +90,8 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
     let last = performance.now();
     let hudAt = 0;
     let shake = 0;
+    /** My own position, simulated locally every frame. */
+    const own = { x: 0, y: 0, init: false, dashUntil: 0, dashReady: 0, dx: 0, dy: 0 };
 
     /** Where a unit is "now": the newest server state pushed forward by elapsed time (mine with my live keys). */
     const extrapolate = (u: SqUnit, secs: number, mine: boolean, mx: number, my: number) => {
@@ -138,7 +140,31 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
         let pr = preds.get(u.id);
         if (!pr) { pr = { tick: -1, base: null, baseAt: 0, ex: 0, ey: 0 }; preds.set(u.id, pr); }
         const isMe = u.id === myId;
-        if (u.life === "dead") { pr.base = null; continue; }
+        if (u.life === "dead") { pr.base = null; if (isMe) own.init = false; continue; }
+        if (isMe) {
+          // ── my own character moves on my screen, every frame, with my keys (no waiting for the server) ──
+          const def = SQ_ROLES[u.role];
+          const k2 = keys.current;
+          if (!own.init || Math.hypot(own.x - u.x, own.y - u.y) > 160) { own.x = u.x; own.y = u.y; own.init = true; }
+          // local dash (fighter): same burst the server does
+          if (u.life === "alive" && u.role === "fighter" && k2.ability && u.cd === 0 && now > own.dashReady) {
+            const l = Math.hypot(mx, my);
+            own.dx = l > 0.1 ? mx / l : Math.cos(aim); own.dy = l > 0.1 ? my / l : Math.sin(aim);
+            own.dashUntil = now + def.ability.durationMs;
+            own.dashReady = now + def.ability.cooldownMs;
+          }
+          let vx: number, vy: number;
+          if (u.life === "alive" && now < own.dashUntil) { vx = own.dx * def.speed * SQ_DASH_MULT; vy = own.dy * def.speed * SQ_DASH_MULT; }
+          else {
+            const sp = u.life === "down" ? SQ.CRAWL_SPEED : def.speed * (u.power === "speed" ? 1.35 : 1) * (u.role === "tank" && u.act ? 0.55 : 1);
+            vx = mx * sp; vy = my * sp;
+          }
+          [own.x, own.y] = sqMove(own.x, own.y, vx * dt, vy * dt);
+          const d = { ...u, vx, vy, dx: own.x, dy: own.y, ang: aim };
+          draw.push(d);
+          mine = d;
+          continue;
+        }
         const [x, y] = extrapolate(u, elapsed, isMe, mx, my);
         if (cur && pr.tick !== cur.tick) {
           if (pr.base && pr.base.life === u.life) {
@@ -154,22 +180,17 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
         if (isMe) mine = d;
       }
 
-      // camera: follow me, leaning toward the mouse / aim stick
+      // camera: locked on me — steady, no leaning toward the mouse
       const zoom = Math.max(W, H) / (W < 700 ? 1000 : 1500);
       const focus = mine ?? draw.find((u) => u.team === m?.players.find((p) => p.id === myId)?.team) ?? null;
       if (focus) {
-        let lx = 0, ly = 0;
-        if (mouse.current.on && !touch) { lx = (mouse.current.x - W / 2) * 0.25 / zoom; ly = (mouse.current.y - H / 2) * 0.25 / zoom; }
-        else if (st.aim) { lx = (st.aim.x - st.aim.ox) * 1.2; ly = (st.aim.y - st.aim.oy) * 1.2; }
-        const le = 1 - Math.exp(-dt / 0.25);
-        cam.lx += (lx - cam.lx) * le; cam.ly += (ly - cam.ly) * le;
-        const tx = focus.dx + cam.lx, ty = focus.dy + cam.ly;
+        const tx = focus.dx, ty = focus.dy;
         if (!cam.init || Math.hypot(tx - cam.x, ty - cam.y) > 500) { cam.x = tx; cam.y = ty; cam.init = true; }
         else if (focus === mine) { cam.x = tx; cam.y = ty; }
         else { const e = 1 - Math.exp(-dt / 0.15); cam.x += (tx - cam.x) * e; cam.y += (ty - cam.y) * e; }
       }
       const hurtMe = myId ? w.hurt.get(myId) ?? 0 : 0;
-      if (now - hurtMe < 40) shake = 7;
+      if (now - hurtMe < 40) shake = 3;
       shake *= Math.exp(-dt / 0.07);
       const sx = (Math.random() - 0.5) * shake, sy = (Math.random() - 0.5) * shake;
 
@@ -185,9 +206,11 @@ export default function SquadGame({ code, userToken }: { code: string; userToken
       // send input when it changes
       const stickFire = !!st.aim && Math.hypot(st.aim.x - st.aim.ox, st.aim.y - st.aim.oy) > 28;
       const inp: SqInput = { mx: Math.round(mx * 100) / 100, my: Math.round(my * 100) / 100, aim: Math.round(aim * 1000) / 1000, fire: k.fire || stickFire, ability: k.ability, revive: k.revive, reload: k.reload, seq };
+      if (own.init && mine) { inp.px = Math.round(own.x * 10) / 10; inp.py = Math.round(own.y * 10) / 10; }
       if (m?.phase === "playing") {
         const changed = !sent || sent.mx !== inp.mx || sent.my !== inp.my || sent.fire !== inp.fire || sent.ability !== inp.ability || sent.revive !== inp.revive || sent.reload !== inp.reload;
-        const aimMoved = !!sent && Math.abs(sent.aim - inp.aim) > 0.015 && now - sentAt > 33;
+        const moved = !!sent && (sent.px !== inp.px || sent.py !== inp.py) && now - sentAt > 30;
+        const aimMoved = (!!sent && Math.abs(sent.aim - inp.aim) > 0.015 && now - sentAt > 33) || moved;
         if (changed || aimMoved || now - sentAt > 500) { inp.seq = ++seq; g.input(inp); sent = inp; sentAt = now; }
       }
 

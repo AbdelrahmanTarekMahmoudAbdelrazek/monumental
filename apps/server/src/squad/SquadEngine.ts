@@ -9,6 +9,7 @@ import {
   SQ_SPAWN,
   otherSqTeam,
   segCircle,
+  sqFree,
   sqMove,
   sqRayBlock,
   type SqAction,
@@ -54,6 +55,8 @@ interface Unit {
   bubble: number;
   lastDamageAt: number;
   knockedBy: Unit | null;
+  /** Last time a client-reported position was accepted. */
+  posAt: number;
   kills: number; knocks: number; deaths: number; revives: number; damage: number;
   bot: { think: number; strafe: number; seen: number; targetId: string | null; wander: number };
 }
@@ -255,8 +258,9 @@ export class SquadEngine {
     Object.assign(u, {
       x, y, vx: 0, vy: 0, aim: u.team === "red" ? 0 : Math.PI, hp: def.hp, life: "alive" as SqLife, downHp: 0, lifeAt: 0, rev: 0,
       ammo: def.weapon.mag, reloadUntil: 0, nextShot: 0, abilityAt: 0, actUntil: 0, power: null, powerUntil: 0, bubble: 0,
-      lastDamageAt: 0, knockedBy: null,
+      lastDamageAt: 0, knockedBy: null, posAt: 0,
     });
+    u.input = { ...u.input, px: undefined, py: undefined };
     // brief spawn protection: a 2-hit bubble for 3 seconds
     u.bubble = 2;
     u.power = "bubble";
@@ -294,7 +298,7 @@ export class SquadEngine {
     const ox = u.x, oy = u.y;
     if (u.life === "down") {
       if (t >= u.lifeAt) { this.eliminate(u, u.knockedBy); return; }
-      [u.x, u.y] = sqMove(u.x, u.y, mx * SQ.CRAWL_SPEED * dt, my * SQ.CRAWL_SPEED * dt);
+      if (!this.acceptClientPos(u, SQ.CRAWL_SPEED, t)) [u.x, u.y] = sqMove(u.x, u.y, mx * SQ.CRAWL_SPEED * dt, my * SQ.CRAWL_SPEED * dt);
       u.vx = (u.x - ox) / dt; u.vy = (u.y - oy) / dt;
       return;
     }
@@ -303,8 +307,11 @@ export class SquadEngine {
     const shieldUp = u.role === "tank" && t < u.actUntil;
     if (shieldUp) speed *= 0.55;
     let dx = mx * speed * dt, dy = my * speed * dt;
+    const dashing = u.role === "fighter" && t < u.actUntil + 150;
     if (u.role === "fighter" && t < u.actUntil) { dx = u.dashX * def.speed * SQ_DASH_MULT * dt; dy = u.dashY * def.speed * SQ_DASH_MULT * dt; }
-    [u.x, u.y] = sqMove(u.x, u.y, dx, dy);
+    // humans move on their own screen (perfectly smooth); the server only checks the move is legal
+    const maxSpeed = def.speed * (u.power === "speed" ? 1.35 : 1) * (dashing ? SQ_DASH_MULT : 1);
+    if (!this.acceptClientPos(u, maxSpeed, t)) [u.x, u.y] = sqMove(u.x, u.y, dx, dy);
     u.vx = (u.x - ox) / dt; u.vy = (u.y - oy) / dt;
 
     if (u.lastDamageAt && t - u.lastDamageAt > SQ.REGEN_DELAY * 1000) u.hp = Math.min(def.hp, u.hp + SQ.REGEN_PER_S * dt);
@@ -377,6 +384,23 @@ export class SquadEngine {
         if (p.kind === "bubble") u.bubble = 3;
       }
     }
+  }
+
+  /**
+   * Accept the position the player's client reports if it's reachable from the last accepted one
+   * at their max speed (+ some slack for network jitter) and not inside a wall. Returns false to
+   * fall back to simulating the move here.
+   */
+  private acceptClientPos(u: Unit, maxSpeed: number, t: number): boolean {
+    const { px, py } = u.input;
+    if (u.isBot || px === undefined || py === undefined) return false;
+    if (!u.posAt) u.posAt = t;
+    const elapsed = Math.min(0.5, Math.max(SQ.TICK_MS / 1000, (t - u.posAt) / 1000));
+    const d = Math.hypot(px - u.x, py - u.y);
+    if (d > maxSpeed * elapsed * 1.35 + 12 || !sqFree(px, py)) return false;
+    u.x = px; u.y = py;
+    u.posAt = t;
+    return true;
   }
 
   private fire(u: Unit, def = SQ_ROLES[u.role]) {
@@ -584,7 +608,7 @@ export class SquadEngine {
       id, nickname, isBot, connections: 0, team, role, nextRole: role, ready: isBot,
       x: 0, y: 0, vx: 0, vy: 0, aim: 0, input: idle(), hp: SQ_ROLES[role].hp, life: "dead", downHp: 0, lifeAt: 0, rev: 0, revThisTick: false,
       ammo: SQ_ROLES[role].weapon.mag, reloadUntil: 0, nextShot: 0, abilityAt: 0, actUntil: 0, dashX: 0, dashY: 0,
-      power: null, powerUntil: 0, bubble: 0, lastDamageAt: 0, knockedBy: null,
+      power: null, powerUntil: 0, bubble: 0, lastDamageAt: 0, knockedBy: null, posAt: 0,
       kills: 0, knocks: 0, deaths: 0, revives: 0, damage: 0,
       bot: { think: 0, strafe: this.rnd() < 0.5 ? 1 : -1, seen: 0, targetId: null, wander: 0 },
     };

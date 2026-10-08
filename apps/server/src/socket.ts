@@ -428,7 +428,8 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       const me = socket.data.identity?.playerKey;
       if (!t || !me || sqBudget-- <= 0 || !raw) return;
       const n = (v: unknown, lo: number, hi: number) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : 0; };
-      t.input(me, { mx: n(raw.mx, -1, 1), my: n(raw.my, -1, 1), aim: n(raw.aim, -10, 10), fire: !!raw.fire, ability: !!raw.ability, revive: !!raw.revive, reload: !!raw.reload, seq: n(raw.seq, 0, 1e9) });
+      t.input(me, { mx: n(raw.mx, -1, 1), my: n(raw.my, -1, 1), aim: n(raw.aim, -10, 10), fire: !!raw.fire, ability: !!raw.ability, revive: !!raw.revive, reload: !!raw.reload, seq: n(raw.seq, 0, 1e9),
+        ...(Number.isFinite(Number(raw.px)) && Number.isFinite(Number(raw.py)) ? { px: n(raw.px, 0, 1e5), py: n(raw.py, 0, 1e5) } : {}) });
     });
     const sqAction = z.discriminatedUnion("type", [
       z.object({ type: z.literal("start") }),

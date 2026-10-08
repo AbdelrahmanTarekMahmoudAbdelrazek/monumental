@@ -148,6 +148,16 @@ export function sqMove(x: number, y: number, dx: number, dy: number, r = SQ.R): 
   return [nx, ny];
 }
 
+/** Is a circle at (x,y) inside the map and clear of every wall/crate? */
+export function sqFree(x: number, y: number, r = SQ.R - 1): boolean {
+  if (x < r || y < r || x > SQ.MAP_W - r || y > SQ.MAP_H - r) return false;
+  for (const o of SQ_OBSTACLES) {
+    const cx = Math.max(o.x, Math.min(x, o.x + o.w)), cy = Math.max(o.y, Math.min(y, o.y + o.h));
+    if ((cx - x) ** 2 + (cy - y) ** 2 < r * r) return false;
+  }
+  return true;
+}
+
 /** Does segment p→q cross the rect? Returns the fraction along the segment (0…1) of the first hit, or -1. */
 export function segRect(px: number, py: number, qx: number, qy: number, o: { x: number; y: number; w: number; h: number }): number {
   const dx = qx - px, dy = qy - py;
@@ -303,4 +313,7 @@ export interface SqInput {
   revive: boolean;
   reload: boolean;
   seq: number;
+  /** Where the player's own screen has them (client-side movement). The server accepts it if it's a legal move. */
+  px?: number;
+  py?: number;
 }
