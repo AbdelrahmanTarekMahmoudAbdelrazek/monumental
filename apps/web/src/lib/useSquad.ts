@@ -44,7 +44,7 @@ export function useSquad(code: string, userToken?: string | null) {
 
   useEffect(() => {
     const s = getSocket();
-    const learn = (m: SqMeta) => { for (const p of m.players) nToId.current.set(p.n, p.id); };
+    const learn = (m: SqMeta) => { for (const p of m.players) if (typeof p.n === "number") nToId.current.set(p.n, p.id); };
     let cancelled = false;
     const join = () =>
       s.emit("sq_join", { code, nickname: getNickname(), guestId: getGuestId(), userToken: userToken ?? undefined }, (a) => {
@@ -60,8 +60,13 @@ export function useSquad(code: string, userToken?: string | null) {
     const onConnect = () => { setConnected(true); join(); };
     const onDisconnect = () => setConnected(false);
     const onMeta = (m: SqMeta) => { if (m.code === code) { learn(m); setMeta(m); } };
-    const onSnap = (wire: SqWire) => {
-      const sn: SqSnap = decodeSnap(wire, (n) => nToId.current.get(n));
+    const onSnap = (wire: SqWire | SqSnap) => {
+      // Accept both formats so a server and website deployed minutes apart still work together.
+      let sn: SqSnap;
+      try {
+        sn = "units" in wire ? wire : decodeSnap(wire, (n) => nToId.current.get(n));
+        if (!Array.isArray(sn.units)) return;
+      } catch { return; }
       const w = world.current;
       const now = performance.now();
       if (sn.shots) for (let i = 0; i < sn.shots.length; i += 8) {
