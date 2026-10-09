@@ -85,7 +85,8 @@ export interface ServerToClientEvents {
   sq_snap: (s: import("./squad").SqWire | import("./squad").SqSnap) => void;
   /** ECHO HALLS. */
   eh_meta: (m: import("./echo").EchoMeta) => void;
-  eh_snap: (s: import("./echo").EchoSnap) => void;
+  eh_snap: (s: import("./echo").EchoSnap2) => void;
+  eh_event: (e: import("./echo").EchoEvent) => void;
   /** WebRTC voice set-up, relayed from another player (`from` = their wire number). */
   eh_signal: (p: { from: number; data: unknown }) => void;
   /** NEON DRIFT arenas. */
@@ -167,6 +168,12 @@ export interface ClientToServerEvents {
   eh_state: (p: import("./echo").EchoState) => void;
   /** WebRTC voice set-up for one other player (`to` = their wire number). */
   eh_signal: (p: { to: number; data: unknown }) => void;
+  /** A new piece of my own speech (labels only — the audio goes peer to peer). */
+  eh_clip: (p: { id: number; ms: number; tags: import("./echo").ClipTag[] }) => void;
+  /** Better labels for one of my pieces (speech-to-text). */
+  eh_tag: (p: { id: number; tags: import("./echo").ClipTag[] }) => void;
+  /** I received someone's piece. */
+  eh_have: (p: { key: string }) => void;
   /** NEON DRIFT arenas. */
   nd_create: (
     p: { settings?: Partial<import("./neon").NeonSettings>; nickname: string; guestId?: string; userToken?: string },

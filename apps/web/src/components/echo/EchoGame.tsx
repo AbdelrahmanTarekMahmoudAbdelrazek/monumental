@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { EchoMeta } from "@monumental/shared";
+import type { EchoEvent, EchoMeta } from "@monumental/shared";
 import { getSocket, measurePing } from "@/lib/socket";
 import { getGuestId, getNickname } from "@/lib/identity";
 import type { EchoEngine, EchoHud } from "./engine";
@@ -14,6 +14,8 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
   const meRef = useRef<number | null>(null);
   /** Voice set-up messages that arrive before the engine exists. */
   const pending = useRef<{ from: number; data: unknown }[]>([]);
+  /** Newest room info, even if it arrived while the engine was still loading. */
+  const latestMeta = useRef<EchoMeta | null>(null);
   const [meta, setMeta] = useState<EchoMeta | null>(null);
   const [me, setMe] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +26,18 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
   const [mobile, setMobile] = useState(false);
   const [sens, setSens] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [consent, setConsent] = useState(false);
+  const [smart, setSmart] = useState<string>("off");
+  const [toasts, setToasts] = useState<{ id: number; text: string; bad: boolean }[]>([]);
+  const [clockOff, setClockOff] = useState(0);
+  const [, setTick] = useState(0);
+  const metaRef = useRef<EchoMeta | null>(null);
+  useEffect(() => { metaRef.current = meta; if (meta) setClockOff(meta.serverNow - Date.now()); }, [meta]);
+  useEffect(() => {
+    try { setConsent(localStorage.getItem("eh:consent") === "1"); setSmart(localStorage.getItem("eh:smart") ?? "off"); } catch { /* private mode */ }
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => { setMobile(window.matchMedia("(pointer: coarse)").matches); }, []);
 
@@ -43,6 +57,9 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
         net: {
           sendState: (st) => s.volatile.emit("eh_state", st),
           sendSignal: (to, data) => s.emit("eh_signal", { to, data }),
+          sendClip: (p) => s.emit("eh_clip", p),
+          sendTag: (p) => s.emit("eh_tag", p),
+          sendHave: (key) => s.emit("eh_have", { key }),
         },
         onHud: (h) => setHud(h),
       });
@@ -51,7 +68,7 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
       for (const p of pending.current.splice(0)) void e.voice.signal(p.from, p.data as never);
       await e.init();
       if (cancelled) { e.destroy(); return; }
-      e.setMeta(m);
+      e.setMeta(latestMeta.current ?? m);
       if (window.location.search.includes("ehdebug")) (window as unknown as { __echo: EchoEngine }).__echo = e;
       setReady(true);
     };
@@ -62,19 +79,41 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
         setError(null);
         setMe(a.n);
         setMeta(a.meta);
+        latestMeta.current = a.meta;
         void makeEngine(a.n, a.spawn, a.meta);
       });
-    const onMeta = (m: EchoMeta) => { if (m.code !== code) return; setMeta(m); engineRef.current?.setMeta(m); };
+    const onMeta = (m: EchoMeta) => { if (m.code !== code) return; latestMeta.current = m; setMeta(m); engineRef.current?.setMeta(m); };
     const onSnap = (sn: Parameters<EchoEngine["onSnap"]>[0]) => engineRef.current?.onSnap(sn);
+    const toast = (text: string, bad = false) => {
+      const id = Math.random();
+      setToasts((ts) => [...ts.slice(-3), { id, text, bad }]);
+      setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 6000);
+    };
+    const onEvent = (e: EchoEvent) => {
+      engineRef.current?.onEvent(e);
+      const nm = (n: number) => metaRef.current?.players.find((p) => p.n === n)?.name ?? "Someone";
+      if (e.type === "wake") toast("Something in the building is awake.", true);
+      else if (e.type === "exposed") toast(`${e.by === meRef.current ? "You" : nm(e.by)} caught a mimic in the light. It ran.`);
+      else if (e.type === "taken") {
+        const owner = e.lure ? Number(e.lure.split(":")[0]) : null;
+        const who = e.n === meRef.current ? "You were" : `${nm(e.n)} was`;
+        toast(owner !== null ? `${who} taken — lured with ${owner === meRef.current ? "your" : `${nm(owner)}'s`} voice.` : `${who} taken.`, true);
+      }
+    };
     const onSignal = (p: { from: number; data: unknown }) => {
       const e = engineRef.current;
       if (e) void e.voice.signal(p.from, p.data as never);
-      else if (pending.current.length < 200) pending.current.push(p);
+      else if (pending.current.length < 200) {
+        const d = p.data as { description?: { type?: string } };
+        if (d.description?.type === "offer") pending.current = pending.current.filter((x) => x.from !== p.from || !(x.data as { description?: unknown }).description);
+        pending.current.push(p);
+      }
     };
     s.on("connect", join);
     s.on("eh_meta", onMeta);
     s.on("eh_snap", onSnap);
     s.on("eh_signal", onSignal);
+    s.on("eh_event", onEvent);
     if (s.connected) join();
     const pingTimer = setInterval(() => { void measurePing().then((p) => { if (!cancelled && p >= 0) setPing(p); }); }, 3000);
     return () => {
@@ -85,6 +124,7 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
       s.off("eh_meta", onMeta);
       s.off("eh_snap", onSnap);
       s.off("eh_signal", onSignal);
+      s.off("eh_event", onEvent);
       engineRef.current?.destroy();
       engineRef.current = null;
     };
@@ -133,7 +173,9 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
 
   const enter = async () => {
     const eng = engineRef.current;
-    if (!eng) return;
+    if (!eng || !consent) return;
+    try { localStorage.setItem("eh:consent", "1"); localStorage.setItem("eh:smart", smart); } catch { /* private mode */ }
+    eng.smartLang = smart === "off" ? null : smart;
     setEntered(true);
     requestAnimationFrame(() => eng.resize());
     await eng.enter();
@@ -199,8 +241,23 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
                 <input readOnly value={invite} aria-label="Invite link" className="min-w-0 flex-1 rounded-xl border border-[#2A312C] bg-black/40 px-3 py-2 text-sm" />
                 <button onClick={copy} className="rounded-xl border border-[#3A433D] px-4 text-sm font-semibold">{copied ? "Copied" : "Copy invite"}</button>
               </div>
+              <div className="rounded-xl border border-[#5A2621] bg-[#160E0D] p-4">
+                <div className="font-semibold text-[#F1C9C4]">This game uses your voice against you</div>
+                <p className="mt-1 text-sm leading-relaxed text-[#C7A7A2]">While you play, short pieces of what you say are cut on your device and sent straight to the other players. The monsters replay them in your voice to trick your friends. Pieces live only in this match and are deleted when you leave. They never go to our server and are never used to train anything.</p>
+                <label className="mt-3 flex items-center gap-3 text-sm text-[#F1C9C4]"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="h-5 w-5 accent-[#D9463B]" data-testid="eh-consent" /> I understand and agree</label>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <label htmlFor="eh-smart" className="text-[#9FA89F]">Smart mimic (understands words)</label>
+                <select id="eh-smart" value={smart} onChange={(e) => setSmart(e.target.value)} className="rounded-lg border border-[#2A312C] bg-black/40 px-2 py-1.5">
+                  <option value="off">Off</option>
+                  <option value="en-US">On · English</option>
+                  <option value="ar-EG">On · العربية (مصر)</option>
+                  <option value="ar-SA">On · العربية (السعودية)</option>
+                </select>
+                <span className="w-full text-xs text-[#6E786E]">Uses your browser's speech-to-text (in Chrome this sends your audio to Google). Off: the mimic still works, just less clever.</span>
+              </div>
               <p className="text-sm text-[#7E887E]">Your browser will ask for the microphone. Without one you can still listen.</p>
-              <button disabled={!ready} onClick={() => void enter()} data-testid="eh-enter" className={`${TITLE} h-16 rounded-2xl bg-[#E9E4D6] text-2xl text-black disabled:opacity-50`}>{ready ? "Enter the halls" : "Building the ward…"}</button>
+              <button disabled={!ready || !consent} onClick={() => void enter()} data-testid="eh-enter" className={`${TITLE} h-16 rounded-2xl bg-[#E9E4D6] text-2xl text-black disabled:opacity-50`}>{!ready ? "Building the ward…" : consent ? "Enter the halls" : "Agree above to enter"}</button>
             </div>
           </div>
         </div>
@@ -211,8 +268,8 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
         <>
           <div className="pointer-events-none absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#E9E4D6]/70" />
           <div className="pointer-events-none absolute left-4 top-3">
-            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>Explore the ward together</div>
-            <div className="text-xs text-[#9FA89F] md:text-sm">Phase 1 test · room {code}</div>
+            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.night?.awake ? "Trust no voice" : "Explore the ward together"}</div>
+            <div className="text-xs text-[#9FA89F] md:text-sm" data-testid="eh-night">{nightText(meta, clockOff)}</div>
           </div>
           <div className="pointer-events-none absolute right-4 top-3 flex gap-2 text-xs">
             {ping !== null && <span data-testid="eh-ping" className={`rounded-full px-2.5 py-1 ${ping < 100 ? "bg-[#16241C] text-[#7FB89A]" : ping < 180 ? "bg-[#2A2414] text-[#C9A66B]" : "bg-[#2A1512] text-[#E0675C]"}`}>{ping} ms</span>}
@@ -229,6 +286,18 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
           </div>
         </>
       )}
+
+      {entered && hud && hud.taken > 0 && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/85" data-testid="eh-taken">
+          <div className="text-center">
+            <div className={`${TITLE} text-6xl text-[#D9463B]`}>Taken</div>
+            <p className="mt-2 text-[#A6AFA6]">Back in the safe room in {hud.taken}…</p>
+          </div>
+        </div>
+      )}
+      <div className="pointer-events-none absolute left-1/2 top-16 flex w-[min(92vw,520px)] -translate-x-1/2 flex-col gap-2" aria-live="polite">
+        {toasts.map((t) => <div key={t.id} className={`rounded-xl px-4 py-2 text-center text-sm ${t.bad ? "bg-[#2A1512]/90 text-[#F1C9C4]" : "bg-[#16241C]/90 text-[#CFE3DA]"}`}>{t.text}</div>)}
+      </div>
 
       {/* ── pause (desktop, pointer released) ── */}
       {paused && (
@@ -256,6 +325,15 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
       {entered && mobile && hud && <TouchControls engine={engineRef} hud={hud} />}
     </div>
   );
+}
+
+function nightText(meta: EchoMeta | null, clockOff: number) {
+  const n = meta?.night;
+  if (!n) return "";
+  if (n.awake) return `Mimics exposed: ${n.exposed} · taken: ${n.taken}`;
+  if (!n.wakeAt) return "Waiting for a second player…";
+  const left = Math.max(0, Math.ceil((n.wakeAt - (Date.now() + clockOff)) / 1000));
+  return left > 0 ? `The night is calm… for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Something is stirring…";
 }
 
 function MicIcon({ off }: { off: boolean }) {

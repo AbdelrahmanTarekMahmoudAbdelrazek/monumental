@@ -103,6 +103,8 @@ export interface EchoMeta {
   hostId: string;
   players: EchoPlayer[];
   serverNow: number;
+  /** Phase 2: are the mimics awake, and how the night is going. */
+  night?: { awake: boolean; wakeAt: number; exposed: number; taken: number };
 }
 
 /** What a client sends about itself (positions in metres, angles in radians). */
@@ -137,4 +139,150 @@ export interface EchoPeerState {
 
 export function decodeEchoSnap(s: EchoSnap): EchoPeerState[] {
   return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2 }));
+}
+
+// ───────── Phase 2: the mimic ─────────
+
+export const MIMIC = {
+  /** Seconds after a second player arrives before mimics wake. */
+  WAKE_SEC: 75,
+  /** Voice pieces the room must hold before a mimic starts calling. */
+  MIN_CLIPS: 3,
+  WANDER: 1.3,
+  STALK: 1.9,
+  CHASE: 3.9,
+  FLEE: 5.5,
+  /** A mimic grabs you inside this distance (metres). */
+  CATCH: 1.1,
+  /** Coming this close to a mimic that lured you starts the chase. */
+  NOTICE: 3,
+  /** Hold your torch on it this long (seconds) to expose it. */
+  EXPOSE_SEC: 1.5,
+  EXPOSE_RANGE: 12,
+  /** Half-width of the torch beam used for exposing (radians). */
+  BEAM: 0.42,
+  /** It answers this long after you speak (the "late answer" tell), seconds. */
+  REPLY_MIN: 1,
+  REPLY_MAX: 1.5,
+  /** Time hiding after being exposed, seconds. */
+  FLEE_SEC: 90,
+  /** Seconds between two calls from the same mimic. */
+  LURE_GAP_MIN: 12,
+  LURE_GAP_MAX: 24,
+  /** A taken player comes back after this long (Phase 2 only). */
+  TAKEN_SEC: 8,
+  /** Longest voice piece kept (seconds) and the sample rate pieces travel at. */
+  PIECE_MAX: 3,
+  RATE: 16000,
+} as const;
+
+export type MimicState = "dormant" | "wander" | "stalk" | "lure" | "chase" | "flee";
+export const MIMIC_STATES: MimicState[] = ["dormant", "wander", "stalk", "lure", "chase", "flee"];
+
+/** What a voice piece is about. Text tags need the optional speech-to-text; the others come from the sound itself. */
+export type ClipTag = "short" | "long" | "loud" | "call" | "here" | "found" | "panic" | "question" | "laugh" | `name:${number}`;
+
+/** A voice piece as the server knows it: labels only, never audio. */
+export interface ClipInfo {
+  /** "<owner n>:<piece id>" */
+  key: string;
+  owner: number;
+  ms: number;
+  tags: ClipTag[];
+}
+
+/** Snapshot mimic rows: [id, x×100, z×100, yaw×1000, state index, speaking (0/1)]. */
+export interface EchoSnap2 extends EchoSnap {
+  m?: number[][];
+}
+
+export type EchoEvent =
+  | { type: "say"; mimic: number; clips: string[] }
+  | { type: "exposed"; mimic: number; by: number }
+  | { type: "taken"; n: number; mimic: number; lure: string | null }
+  | { type: "back"; n: number; x: number; z: number }
+  | { type: "wake" };
+
+/** Player flags in snapshot rows (bit 4 = taken). */
+export const ECHO_TAKEN = 4;
+
+/** Words that label a voice piece when speech-to-text is on (English + Arabic dialects). */
+export const CLIP_WORDS: Record<"call" | "here" | "found" | "panic" | "question", string[]> = {
+  call: ["come", "over here", "this way", "follow", "quick", "hurry", "تعال", "تعالي", "تعالو", "تعالوا", "بسرعة", "يلا"],
+  here: ["i'm here", "im here", "i am here", "here", "انا هنا", "أنا هنا", "هنا", "جنبك"],
+  found: ["found", "key", "fuse", "got it", "لقيت", "لقيته", "المفتاح", "معايا", "معي"],
+  panic: ["run", "help", "go go", "اجري", "الحق", "ساعدني", "ساعدوني", "يا لهوي", "اهرب"],
+  question: ["where", "who", "what", "are you", "فين", "وين", "مين", "ايه", "إيه", "شو", "انت فين", "إنت فين"],
+};
+
+/** Labels a transcript. `names` maps player number → lowercase name. */
+export function tagText(text: string, names: Record<number, string>): ClipTag[] {
+  const t = ` ${text.toLowerCase()} `;
+  const tags: ClipTag[] = [];
+  for (const [tag, words] of Object.entries(CLIP_WORDS) as [keyof typeof CLIP_WORDS, string[]][]) {
+    if (words.some((w) => t.includes(w))) tags.push(tag);
+  }
+  for (const [n, name] of Object.entries(names)) if (name.length >= 2 && t.includes(name.toLowerCase())) tags.push(`name:${Number(n)}`);
+  return tags;
+}
+
+/** Tiles a mimic may walk on (beds are in the way). */
+export function mimicOpen(tx: number, tz: number): boolean {
+  const c = echoTile(tx, tz);
+  return c !== "#" && c !== "b";
+}
+
+/** Shortest walk between two tiles (4-way), as tile coordinates excluding the start. Empty if unreachable. */
+export function echoPath(from: [number, number], to: [number, number]): [number, number][] {
+  const key = (x: number, z: number) => z * ECHO_W + x;
+  if (!mimicOpen(to[0], to[1])) return [];
+  const prev = new Map<number, number>();
+  const start = key(from[0], from[1]);
+  const goal = key(to[0], to[1]);
+  prev.set(start, -1);
+  const q = [start];
+  for (let i = 0; i < q.length; i++) {
+    const k = q[i];
+    if (k === goal) break;
+    const x = k % ECHO_W, z = Math.floor(k / ECHO_W);
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz;
+      const nk = key(nx, nz);
+      if (prev.has(nk) || !mimicOpen(nx, nz)) continue;
+      prev.set(nk, k);
+      q.push(nk);
+    }
+  }
+  if (!prev.has(goal)) return [];
+  const out: [number, number][] = [];
+  for (let k = goal; k !== start; k = prev.get(k)!) out.push([k % ECHO_W, Math.floor(k / ECHO_W)]);
+  return out.reverse();
+}
+
+// ── μ-law: voice pieces travel as 8-bit samples at 16 kHz (16 KB per second) ──
+export function muEncode(pcm: Float32Array): Uint8Array {
+  const out = new Uint8Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) {
+    let s = Math.max(-1, Math.min(1, pcm[i])) * 32635;
+    const sign = s < 0 ? 0x80 : 0;
+    if (s < 0) s = -s;
+    s += 0x84;
+    let exp = 7;
+    for (let m = 0x4000; (s & m) === 0 && exp > 0; m >>= 1) exp--;
+    const man = (s >> (exp + 3)) & 0x0f;
+    out[i] = ~(sign | (exp << 4) | man) & 0xff;
+  }
+  return out;
+}
+
+export function muDecode(bytes: Uint8Array): Float32Array {
+  const out = new Float32Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    const u = ~bytes[i] & 0xff;
+    const sign = u & 0x80, exp = (u >> 4) & 7, man = u & 0x0f;
+    let s = ((man << 3) + 0x84) << exp;
+    s -= 0x84;
+    out[i] = (sign ? -s : s) / 32635;
+  }
+  return out;
 }

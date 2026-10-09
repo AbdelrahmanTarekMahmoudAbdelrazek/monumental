@@ -150,6 +150,54 @@ export class SoundBank {
     o.stop(t + 1.2);
   }
 
+  /** Sudden hit when something grabs you. */
+  sting() {
+    const c = this.ctx, t = c.currentTime;
+    const src = c.createBufferSource();
+    src.buffer = this.noise;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.6, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+    const lp = c.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(4000, t);
+    lp.frequency.exponentialRampToValueAtTime(200, t + 1.1);
+    src.connect(lp).connect(g).connect(this.master);
+    src.start(t);
+    const o = c.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(80, t);
+    o.frequency.exponentialRampToValueAtTime(30, t + 1.4);
+    const og = c.createGain();
+    og.gain.setValueAtTime(0.4, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 1.5);
+    o.connect(og).connect(this.master);
+    o.start(t);
+    o.stop(t + 1.6);
+  }
+
+  /** A short human cry from someone being taken, played at their spot. */
+  cry(out: AudioNode, volume: number) {
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator();
+    o.type = "triangle";
+    o.frequency.setValueAtTime(420, t);
+    o.frequency.linearRampToValueAtTime(700, t + 0.15);
+    o.frequency.exponentialRampToValueAtTime(260, t + 0.9);
+    const vib = c.createOscillator();
+    vib.frequency.value = 7;
+    const vg = c.createGain();
+    vg.gain.value = 25;
+    vib.connect(vg).connect(o.frequency);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(volume, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 1);
+    o.connect(g).connect(out);
+    o.start(t); vib.start(t);
+    o.stop(t + 1.05); vib.stop(t + 1.05);
+  }
+
   close() {
     for (const n of this.ambience) { try { (n as AudioScheduledSourceNode).stop?.(); } catch { /* already stopped */ } }
     void this.ctx.close().catch(() => {});

@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ECHO, ECHO_MAP, ECHO_W, echoFree, echoSpawns, echoWallsBetween, decodeEchoSnap, type EchoMeta, type EchoSnap } from "@monumental/shared";
+import { ECHO, ECHO_MAP, ECHO_W, MIMIC, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap } from "@monumental/shared";
 import { EchoRoom } from "./EchoRoom";
 
 function room() {
   let t = 1_000_000;
   const metas: EchoMeta[] = [];
   const snaps: EchoSnap[] = [];
-  const r = new EchoRoom("TEST1", "a", { meta: (m) => metas.push(m), snap: (s) => snaps.push(s), onIdle: () => {} }, () => t);
-  return { r, metas, snaps, advance: (ms: number) => { t += ms; } };
+  const events: EchoEvent[] = [];
+  const r = new EchoRoom("TEST1", "a", { meta: (m) => metas.push(m), snap: (s) => snaps.push(s), event: (e) => events.push(e), onIdle: () => {} }, () => t, mulberry32(4));
+  return { r, metas, snaps, events, advance: (ms: number) => { t += ms; }, now: () => t };
 }
 const st = (o: Partial<{ x: number; z: number; yaw: number }>) => ({ x: 0, y: 0, z: 0, yaw: 0, pitch: 0, torch: true, crouch: false, seq: 1, ...o });
 
@@ -85,5 +86,92 @@ describe("ECHO HALLS rooms", () => {
     expect(metas[metas.length - 1].hostId).toBe("b");
     expect(r.idOf(2)).toBe("b");
     r.destroy();
+  });
+});
+
+describe("ECHO HALLS mimic", () => {
+  const T = ECHO.TILE;
+  /** Two players far apart, Bob has said a few things that Ann's device holds. */
+  function night() {
+    const x = room();
+    x.r.join("a", "Ann"); x.r.join("b", "Bob");
+    const d = x.r.debug();
+    const [ann, bob] = d.members;
+    // Ann alone in the bottom-right room, Bob in the spawn room
+    Object.assign(ann, { x: 20.5 * T, z: 11.5 * T, torch: false });
+    Object.assign(bob, { x: 1.5 * T, z: 1.5 * T });
+    for (let i = 0; i < 4; i++) { x.r.clip("b", i, 900 + i * 200, i === 1 ? ["call"] : ["short"]); x.r.have("a", `2:${i}`); }
+    const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { x.advance(50); x.r.step(); } };
+    return { ...x, d, ann, bob, run };
+  }
+
+  it("finds walking paths between rooms and never through walls", () => {
+    const p = echoPath([1, 1], [20, 12]);
+    expect(p.length).toBeGreaterThan(10);
+    for (const [tx, tz] of p) expect(ECHO_MAP[tz][tx]).not.toBe("#");
+    expect(echoPath([1, 1], [0, 0])).toEqual([]);
+  });
+
+  it("voice pieces survive the 8-bit trip, and transcripts get labels", () => {
+    const pcm = new Float32Array(200).map((_, i) => Math.sin(i / 5) * 0.6);
+    const back = muDecode(muEncode(pcm));
+    let err = 0;
+    for (let i = 0; i < pcm.length; i++) err = Math.max(err, Math.abs(back[i] - pcm[i]));
+    expect(err).toBeLessThan(0.03);
+    expect(tagText("Ann, come here quick", { 1: "ann", 2: "bob" })).toEqual(expect.arrayContaining(["call", "name:1"]));
+    expect(tagText("انت فين؟", {})).toContain("question");
+  });
+
+  it("sleeps until two players have been in for a while and there are voices to copy", () => {
+    const x = night();
+    x.run(MIMIC.WAKE_SEC - 5);
+    expect(x.d.mimics).toHaveLength(0);
+    x.run(6);
+    expect(x.d.mimics).toHaveLength(1);
+    expect(x.events.some((e) => e.type === "wake")).toBe(true);
+    x.r.destroy();
+  });
+
+  it("stalks the lonely player and calls them with a friend's voice, never their own and never twice", () => {
+    const x = night();
+    x.run(MIMIC.WAKE_SEC + 60);
+    const says = x.events.filter((e): e is Extract<EchoEvent, { type: "say" }> => e.type === "say");
+    expect(says.length).toBeGreaterThan(0);
+    const all = says.flatMap((s) => s.clips);
+    expect(all.every((k) => k.startsWith("2:"))).toBe(true); // Bob's voice, played to Ann
+    expect(new Set(all).size).toBe(all.length);
+    expect(all).toContain("2:1"); // the "come here" piece is preferred
+    x.r.destroy();
+  });
+
+  it("a torch held on it exposes it and it runs away", () => {
+    const x = night();
+    x.run(MIMIC.WAKE_SEC + 1);
+    const mm = x.d.mimics[0];
+    // put it 4 m in front of Ann in her room and point her torch at it
+    Object.assign(mm, { x: x.ann.x, z: x.ann.z - 4, state: "dormant", path: [] }); // standing still
+    Object.assign(x.ann, { yaw: 0, torch: true });
+    x.run(MIMIC.EXPOSE_SEC + 0.3);
+    expect(x.events.some((e) => e.type === "exposed")).toBe(true);
+    expect(mm.state).toBe("flee");
+    expect(x.r.exposed).toBe(1);
+    x.r.destroy();
+  });
+
+  it("catches a player who walks up to it; they come back to the safe room later", () => {
+    const x = night();
+    x.run(MIMIC.WAKE_SEC + 1);
+    const mm = x.d.mimics[0];
+    Object.assign(mm, { x: x.ann.x + 2, z: x.ann.z, state: "chase", target: 1, until: x.now() + 10_000, path: [] });
+    x.run(1);
+    expect(x.ann.taken).toBe(true);
+    const taken = x.events.find((e) => e.type === "taken");
+    expect(taken && taken.type === "taken" && taken.n).toBe(1);
+    expect(decodeEchoSnap(x.r.snapshot())[0]).toBeTruthy();
+    x.run(MIMIC.TAKEN_SEC + 0.2);
+    expect(x.ann.taken).toBe(false);
+    expect(x.events.some((e) => e.type === "back" && e.n === 1)).toBe(true);
+    expect(echoWallsBetween(x.ann.x, x.ann.z, 1.5 * T, 1.5 * T)).toBe(0);
+    x.r.destroy();
   });
 });

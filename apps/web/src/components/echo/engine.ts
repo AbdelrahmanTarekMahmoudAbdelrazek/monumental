@@ -1,11 +1,15 @@
 import * as THREE from "three";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
-import { ECHO, decodeEchoSnap, echoWallsBetween, type EchoMeta, type EchoPeerState, type EchoSnap } from "@monumental/shared";
+import { ECHO, ECHO_TAKEN, MIMIC_STATES, decodeEchoSnap, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
 import { buildLevel, flickerLights, type CeilingLight } from "./level";
 import { SoundBank } from "./sound";
-import { Voice, type PeerStatus } from "./voice";
+import { Voice, voiceMix, type PeerStatus } from "./voice";
 import { Avatar } from "./avatars";
+import { VoiceCapture, Transcriber } from "./capture";
+import { MimicFigure, MimicSound } from "./mimic";
+
+interface MimicView { fig: MimicFigure; snd: MimicSound; hist: { t: number; x: number; z: number; yaw: number; state: string; speaking: boolean }[] }
 
 type Rapier = typeof RAPIER_NS;
 
@@ -18,11 +22,17 @@ export interface EchoHud {
   mic: { has: boolean; muted: boolean; level: number; error: string | null };
   peers: { n: number; status: PeerStatus }[];
   quality: number;
+  /** I was grabbed; seconds until I'm back. */
+  taken: number;
+  pieces: number;
 }
 
 export interface EchoNet {
   sendState: (s: { x: number; y: number; z: number; yaw: number; pitch: number; torch: boolean; crouch: boolean; seq: number }) => void;
   sendSignal: (to: number, data: unknown) => void;
+  sendClip: (p: { id: number; ms: number; tags: ClipTag[] }) => void;
+  sendTag: (p: { id: number; tags: ClipTag[] }) => void;
+  sendHave: (key: string) => void;
 }
 
 const STEP = 1 / 60;
@@ -44,6 +54,19 @@ function sample(h: EchoPeerState[], t: number): EchoPeerState | null {
   if (Math.hypot(b.x - a.x, b.z - a.z) > 6) return b;
   const f = (t - a.t) / Math.max(1, b.t - a.t);
   return { ...b, x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f, yaw: lerpAngle(a.yaw, b.yaw, f), pitch: a.pitch + (b.pitch - a.pitch) * f };
+}
+
+function sampleMimic(h: MimicView["hist"], t: number) {
+  if (!h.length) return null;
+  const last = h[h.length - 1];
+  if (t >= last.t) return last;
+  let i = h.length - 1;
+  while (i > 0 && h[i - 1].t > t) i--;
+  if (i === 0) return h[0];
+  const a = h[i - 1], b = h[i];
+  if (Math.hypot(b.x - a.x, b.z - a.z) > 6) return b;
+  const f = (t - a.t) / Math.max(1, b.t - a.t);
+  return { ...b, x: a.x + (b.x - a.x) * f, z: a.z + (b.z - a.z) * f, yaw: lerpAngle(a.yaw, b.yaw, f) };
 }
 
 /**
@@ -70,6 +93,13 @@ export class EchoEngine {
   private tOff: number | null = null;
   private meta: EchoMeta | null = null;
   private raf = 0;
+  private mimics = new Map<number, MimicView>();
+  private takenSet = new Set<number>();
+  private takenUntil = 0;
+  private capture: VoiceCapture | null = null;
+  private transcriber: Transcriber | null = null;
+  private myPieces: { id: number; endedAt: number }[] = [];
+  private names: Record<number, string> = {};
   private ro: ResizeObserver | null = null;
   private destroyed = false;
 
@@ -104,12 +134,15 @@ export class EchoEngine {
   /** Touch stick, −1…1. */
   stick = { x: 0, y: 0 };
   sensitivity = 0.0022;
+  /** Speech-to-text language for the "smart mimic", or null (off). Set before enter(). */
+  smartLang: string | null = null;
   locked = false;
 
   constructor(private canvas: HTMLCanvasElement, private opts: { me: number; spawn: { x: number; z: number }; mobile: boolean; net: EchoNet; onHud: (h: EchoHud) => void }) {
     this.sounds = new SoundBank();
     // voice exists from the start so set-up messages that arrive while the ward is still building aren't lost
     this.voice = new Voice(this.sounds, opts.me, (to, d) => opts.net.sendSignal(to, d), () => this.pushHud(true));
+    this.voice.onClip = (key) => opts.net.sendHave(key);
     this.camera = new THREE.PerspectiveCamera(opts.mobile ? 78 : 72, 1, 0.05, 70);
   }
 
@@ -183,10 +216,38 @@ export class EchoEngine {
   async enter() {
     await this.sounds.resume();
     this.sounds.startAmbience();
-    await this.voice.startMic();
+    if (await this.voice.startMic()) await this.startCapture();
     if (this.meta) this.voice.sync(this.meta.players.map((p) => p.n).filter((n) => n !== this.opts.me));
     this.lock();
     this.pushHud(true);
+  }
+
+  /** Cut my speech into pieces (for the mimics) and share them with the group. */
+  private async startCapture() {
+    const stream = this.voice.micStream;
+    if (!stream || this.capture) return;
+    this.capture = new VoiceCapture(this.sounds.ctx, stream, (p) => {
+      const tags: ClipTag[] = [p.ms <= 1200 ? "short" : "long"];
+      if (p.peak > 0.5) tags.push("loud");
+      this.voice.shareMine(p.id, p.pcm, p.ms, tags);
+      this.opts.net.sendClip({ id: p.id, ms: p.ms, tags });
+      this.myPieces.push({ id: p.id, endedAt: p.endedAt });
+      if (this.myPieces.length > 20) this.myPieces.shift();
+    });
+    await this.capture.start();
+    if (this.smartLang && Transcriber.available()) {
+      this.transcriber = new Transcriber();
+      this.transcriber.start(this.smartLang, (text) => {
+        // the words belong to the piece that just ended
+        const now = performance.now();
+        const piece = [...this.myPieces].reverse().find((x) => now - x.endedAt < 3000);
+        if (!piece) return;
+        const tags = tagText(text, this.names);
+        if (!tags.length) return;
+        this.voice.tagMine(piece.id, tags);
+        this.opts.net.sendTag({ id: piece.id, tags });
+      });
+    }
   }
 
   lock() {
@@ -200,6 +261,7 @@ export class EchoEngine {
 
   setMeta(m: EchoMeta) {
     this.meta = m;
+    this.names = Object.fromEntries(m.players.map((p) => [p.n, p.name.toLowerCase()]));
     const others = m.players.filter((p) => p.n !== this.opts.me);
     for (const p of others) {
       if (this.avatars.has(p.n)) continue;
@@ -223,10 +285,22 @@ export class EchoEngine {
     this.voice.sync(others.map((p) => p.n));
   }
 
-  onSnap(s: EchoSnap) {
+  onSnap(s: EchoSnap2) {
     const now = performance.now();
     const sample = s.t - now;
     this.tOff = this.tOff === null || sample > this.tOff ? sample : this.tOff - 0.25;
+    this.takenSet = new Set(s.p.filter((r) => (r[6] & ECHO_TAKEN) !== 0).map((r) => r[0]));
+    for (const r of s.m ?? []) {
+      let v = this.mimics.get(r[0]);
+      if (!v) {
+        v = { fig: new MimicFigure(true), snd: new MimicSound(this.sounds), hist: [] };
+        this.mimics.set(r[0], v);
+        this.scene.add(v.fig.root);
+      }
+      if (v.hist.length && v.hist[v.hist.length - 1].t >= s.t) continue;
+      v.hist.push({ t: s.t, x: r[1] / 100, z: r[2] / 100, yaw: r[3] / 1000, state: MIMIC_STATES[r[4]] ?? "wander", speaking: r[5] === 1 });
+      while (v.hist.length > 2 && v.hist[1].t < s.t - 1500) v.hist.shift();
+    }
     for (const p of decodeEchoSnap(s)) {
       if (p.n === this.opts.me) continue;
       let h = this.hist.get(p.n);
@@ -237,7 +311,55 @@ export class EchoEngine {
     }
   }
 
+  /** Something happened in the night. */
+  /** Recent events (debugging and tests). */
+  readonly events: EchoEvent[] = [];
+
+  onEvent(e: EchoEvent) {
+    this.events.push(e);
+    if (this.events.length > 50) this.events.shift();
+    if (e.type === "say") {
+      const v = this.mimics.get(e.mimic);
+      const clips = e.clips.map((k) => this.voice.bank.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
+      if (v && clips.length) v.snd.say(clips);
+    } else if (e.type === "exposed") {
+      this.mimics.get(e.mimic)?.snd.shriek();
+    } else if (e.type === "taken") {
+      if (e.n === this.opts.me) {
+        this.takenUntil = performance.now() + 8000;
+        this.sounds.sting();
+        if (this.capture) this.capture.enabled = false;
+      } else {
+        const a = this.avatars.get(e.n);
+        if (a) {
+          const p = this.sounds.panner();
+          this.sounds.place(p, a.root.position.x, 1.6, a.root.position.z);
+          const mix = voiceMix({ x: this.cur.x, z: this.cur.z }, { x: a.root.position.x, z: a.root.position.z });
+          this.sounds.cry(p, Math.min(0.6, mix.gain * 0.5 + 0.05));
+          setTimeout(() => p.disconnect(), 1500);
+        }
+      }
+    } else if (e.type === "back" && e.n === this.opts.me) {
+      this.takenUntil = 0;
+      this.teleport(e.x, e.z);
+      if (this.capture) this.capture.enabled = !this.voice.muted;
+    }
+    this.pushHud(true);
+  }
+
+  private teleport(x: number, z: number) {
+    this.body.setTranslation({ x, y: CENTER_Y, z }, true);
+    this.cur.set(x, CENTER_Y, z);
+    this.prev.copy(this.cur);
+    this.vel.set(0, 0, 0);
+    this.yaw = Math.PI;
+    this.pitch = 0;
+  }
+
+  get isTaken() { return this.takenUntil > performance.now(); }
+
   look(dx: number, dy: number) {
+    if (this.isTaken) return;
     this.yaw -= dx * this.sensitivity;
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - dy * this.sensitivity));
   }
@@ -250,7 +372,11 @@ export class EchoEngine {
 
   toggleCrouch() { this.crouch = !this.crouch; this.pushHud(true); }
 
-  toggleMute() { this.voice.setMuted(!this.voice.muted); this.pushHud(true); }
+  toggleMute() {
+    this.voice.setMuted(!this.voice.muted);
+    if (this.capture) this.capture.enabled = !this.voice.muted && !this.isTaken;
+    this.pushHud(true);
+  }
 
   resize() {
     if (!this.renderer) return;
@@ -264,8 +390,9 @@ export class EchoEngine {
   // ───────── one physics step (60 per second) ─────────
   private physics(dt: number) {
     const k = this.keys;
-    let fx = (k.f ? 1 : 0) - (k.b ? 1 : 0) - this.stick.y;
-    let sx = (k.r ? 1 : 0) - (k.l ? 1 : 0) + this.stick.x;
+    const frozen = this.isTaken;
+    let fx = frozen ? 0 : (k.f ? 1 : 0) - (k.b ? 1 : 0) - this.stick.y;
+    let sx = frozen ? 0 : (k.r ? 1 : 0) - (k.l ? 1 : 0) + this.stick.x;
     const len = Math.hypot(fx, sx);
     if (len > 1) { fx /= len; sx /= len; }
     const crouching = this.crouch || k.crouch;
@@ -335,8 +462,9 @@ export class EchoEngine {
     }
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     const strafe = this.vel.x * cos - this.vel.z * sin;
-    this.camera.position.set(px + cos * bobX, feet + this.eye + bobY, pz - sin * bobX);
-    this.camera.rotation.set(this.pitch, this.yaw, -strafe * 0.008, "YXZ");
+    const slump = this.isTaken ? 1 : 0;
+    this.camera.position.set(px + cos * bobX, feet + this.eye + bobY - slump * 1.2, pz - sin * bobX);
+    this.camera.rotation.set(this.pitch + slump * 0.9, this.yaw, -strafe * 0.008 + slump * 0.6, "YXZ");
     this.camera.updateMatrixWorld();
 
     // ── torch follows the head with a little lag, like a real hand ──
@@ -352,7 +480,7 @@ export class EchoEngine {
     const others = new Map<number, { x: number; y: number; z: number }>();
     for (const [num, a] of this.avatars) {
       const s = sample(this.hist.get(num) ?? [], rt);
-      if (!s) { a.root.visible = false; continue; }
+      if (!s || this.takenSet.has(num)) { a.root.visible = false; continue; }
       a.root.visible = true;
       const d = Math.hypot(s.x - px, s.z - pz);
       const seen = d < 12 && echoWallsBetween(px, pz, s.x, s.z) === 0;
@@ -375,6 +503,17 @@ export class EchoEngine {
         }
       }
     }
+    // ── mimics, drawn in the past like friends ──
+    for (const v of this.mimics.values()) {
+      const m = sampleMimic(v.hist, rt);
+      if (!m) { v.fig.root.visible = false; continue; }
+      v.fig.root.visible = m.state !== "dormant";
+      v.fig.update(m.x, m.z, m.yaw, m.state, m.speaking, dt, now / 1000);
+      const mix = voiceMix({ x: px, z: pz }, m);
+      const d = Math.hypot(m.x - px, m.z - pz);
+      v.snd.update(m.x, m.z, this.isTaken ? 0 : mix.gain, mix.cutoff, d, d < 20 ? echoWallsBetween(px, pz, m.x, m.z) : 3, m.state === "chase");
+    }
+
     this.sounds.listener(this.camera.position.x, this.camera.position.y, this.camera.position.z, this.yaw);
     this.voice.update({ x: px, z: pz }, others);
 
@@ -426,6 +565,8 @@ export class EchoEngine {
       mic: { has: this.voice.hasMic ?? false, muted: this.voice.muted ?? false, level: this.voice.micLevel() ?? 0, error: this.voice.micError ?? null },
       peers: this.voice.statuses() ?? [],
       quality: this.pixelRatio,
+      taken: Math.max(0, Math.ceil((this.takenUntil - now) / 1000)),
+      pieces: [...this.voice.bank.keys()].filter((k) => k.startsWith(`${this.opts.me}:`)).length,
     });
   }
 
@@ -436,6 +577,9 @@ export class EchoEngine {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
     this.ro?.disconnect();
+    this.capture?.stop();
+    this.transcriber?.stop();
+    for (const v of this.mimics.values()) { v.snd.dispose(); v.fig.dispose(); }
     this.voice.destroy();
     this.sounds.close();
     for (const a of this.avatars.values()) a.dispose();

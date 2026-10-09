@@ -1,6 +1,6 @@
 import type { Socket } from "socket.io";
 import { z } from "zod";
-import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, normaliseNeonSettings, normaliseSqSettings, type SqSettings, type SqAction, type NeonSettings, type NeonAction, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
+import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, normaliseNeonSettings, normaliseSqSettings, type ClipTag, type SqSettings, type SqAction, type NeonSettings, type NeonAction, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
 import type { ShakManager } from "./shak/ShakManager.js";
 import type { OneWordManager } from "./oneword/OneWordManager.js";
 import type { SmuggleManager } from "./smuggle/SmuggleManager.js";
@@ -517,6 +517,33 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       if (size > 20_000) return;
       eh.relay(r.code, from, to, raw.data);
     });
+    const tagOk = (t: unknown): t is ClipTag => typeof t === "string" && (/^name:\d{1,2}$/.test(t) || ["short", "long", "loud", "call", "here", "found", "panic", "question", "laugh"].includes(t));
+    const cleanTags = (raw: unknown): ClipTag[] => (Array.isArray(raw) ? raw.filter(tagOk).slice(0, 8) : []);
+    let ehClipBudget = 4;
+    const ehClipRefill = setInterval(() => { ehClipBudget = 4; }, 1000);
+    socket.on("eh_clip", (raw) => {
+      const r = ehRoom();
+      const me = socket.data.identity?.playerKey;
+      if (!r || !me || !raw || ehClipBudget-- <= 0) return;
+      const id = Number(raw.id), ms = Number(raw.ms);
+      if (!Number.isInteger(id) || id < 0 || id > 1e6 || !Number.isFinite(ms) || ms < 200 || ms > 4000) return;
+      r.clip(me, id, Math.round(ms), cleanTags(raw.tags));
+    });
+    socket.on("eh_tag", (raw) => {
+      const r = ehRoom();
+      const me = socket.data.identity?.playerKey;
+      if (!r || !me || !raw || ehBudget-- <= 0) return;
+      const id = Number(raw.id);
+      if (!Number.isInteger(id)) return;
+      r.tag(me, id, cleanTags(raw.tags));
+    });
+    socket.on("eh_have", (raw) => {
+      const r = ehRoom();
+      const me = socket.data.identity?.playerKey;
+      if (!r || !me || !raw || typeof raw.key !== "string" || raw.key.length > 20 || ehSignalBudget-- <= 0) return;
+      r.have(me, raw.key);
+    });
+    socket.on("disconnect", () => clearInterval(ehClipRefill));
     socket.on("eh_leave", () => ehLeave());
     socket.on("disconnect", () => { clearInterval(ehRefill); ehLeave(); });
     socket.on("disconnect", () => clearInterval(sqRefill));

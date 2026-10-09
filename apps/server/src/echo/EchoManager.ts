@@ -14,8 +14,11 @@ export class EchoManager {
     const r = new EchoRoom(code, hostId, {
       meta: (m) => this.io.to(room).emit("eh_meta", m),
       snap: (s) => this.io.to(room).volatile.emit("eh_snap", s),
+      event: (e) => this.io.to(room).emit("eh_event", e),
       onIdle: () => this.destroy(code),
     });
+    const wake = Number(process.env.ECHO_WAKE_SEC);
+    if (Number.isFinite(wake) && wake > 0) r.wakeSec = wake;
     this.rooms.set(code, r);
     return r;
   }
