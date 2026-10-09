@@ -162,11 +162,12 @@ describe("ECHO HALLS mimic", () => {
     const x = night();
     x.run(MIMIC.WAKE_SEC + 1);
     const mm = x.d.mimics[0];
-    Object.assign(mm, { x: x.ann.x, z: x.ann.z - 4, state: "wander", path: [], nextLure: x.now() + 60_000 });
-    Object.assign(x.ann, { yaw: 0, torch: true });
+    // 8 m away across the room, lit from afar
+    Object.assign(mm, { x: x.ann.x - 8, z: x.ann.z, state: "wander", path: [], nextLure: x.now() + 60_000 });
+    Object.assign(x.ann, { yaw: Math.PI / 2, torch: true });
     x.run(3);
     expect(x.events.some((e) => e.type === "exposed")).toBe(false);
-    expect(Math.hypot(mm.x - x.ann.x, mm.z - (x.ann.z - 4))).toBeGreaterThan(1); // it moved away
+    expect(Math.hypot(mm.x - (x.ann.x - 8), mm.z - x.ann.z)).toBeGreaterThan(1); // it moved away
     x.r.destroy();
   });
 
@@ -232,6 +233,46 @@ describe("ECHO HALLS mimic — spotted", () => {
     run(2.2);
     expect(events.some((e) => e.type === "exposed")).toBe(true);
     expect(ann.taken).toBe(false);
+    r.destroy();
+  });
+});
+
+describe("ECHO HALLS mimic — never harmless", () => {
+  it("grabs a player who walks right up to it, even right after a catch", () => {
+    let t = 1_000_000;
+    const events: EchoEvent[] = [];
+    const r = new EchoRoom("T4", "a", { meta: () => {}, snap: () => {}, event: (e) => events.push(e), onIdle: () => {} }, () => t, mulberry32(6));
+    r.join("a", "Ann"); r.join("b", "Bob");
+    const d = r.debug();
+    const [ann, bob] = d.members;
+    Object.assign(ann, { x: 61.5, z: 34.5, yaw: 0, torch: false });
+    Object.assign(bob, { x: 7.5, z: 4.5 });
+    for (let i = 0; i < 6; i++) { r.clip("b", i, 1200, ["short"]); r.have("a", `2:${i}`); }
+    const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { t += 50; r.step(); } };
+    run(MIMIC.WAKE_SEC + 1);
+    const mm = d.mimics[0];
+    // just wandering (calm after a catch), Ann bumps into it from behind
+    Object.assign(mm, { x: ann.x + 2, z: ann.z, state: "wander", target: null, path: [], nextLure: t + 60_000 });
+    run(1.5);
+    expect(ann.taken).toBe(true);
+    r.destroy();
+  });
+
+  it("prefers full phrases over tiny fragments", () => {
+    let t = 1_000_000;
+    const events: EchoEvent[] = [];
+    const r = new EchoRoom("T5", "a", { meta: () => {}, snap: () => {}, event: (e) => events.push(e), onIdle: () => {} }, () => t, mulberry32(7));
+    r.join("a", "Ann"); r.join("b", "Bob");
+    const d = r.debug();
+    const [ann, bob] = d.members;
+    Object.assign(ann, { x: 61.5, z: 37.5, yaw: Math.PI });
+    Object.assign(bob, { x: 7.5, z: 4.5 });
+    const lens = [420, 480, 520, 1400, 1600, 2200];
+    lens.forEach((ms, i) => { r.clip("b", i, ms, ["short"]); r.have("a", `2:${i}`); });
+    for (let i = 0; i < (MIMIC.WAKE_SEC + 120) * 20; i++) { t += 50; r.step(); }
+    const said = events.filter((e): e is Extract<EchoEvent, { type: "say" }> => e.type === "say").flatMap((e) => e.clips);
+    expect(said.length).toBeGreaterThan(0);
+    for (const k of said) expect(lens[Number(k.split(":")[1])]).toBeGreaterThanOrEqual(1400);
     r.destroy();
   });
 });

@@ -74,6 +74,7 @@ export class EchoRoom {
   private wakeAt = 0;
   private awake = false;
   private lastStep = 0;
+  private debugAt = 0;
   exposed = 0;
   takenCount = 0;
   /** Seconds before mimics wake (tests and local play-testing can shorten it). */
@@ -187,6 +188,11 @@ export class EchoRoom {
     }
     this.wake(t);
     for (const mm of this.mimics) this.think(mm, dt, t);
+    if (process.env.ECHO_DEBUG && t - this.debugAt > 3000) {
+      this.debugAt = t;
+      // eslint-disable-next-line no-console
+      console.log(`[echo ${this.code}]`, this.mimics.map((m) => `${m.state} t=${m.target} next=${Math.round((m.nextLure - t) / 1000)}s`).join(" | "), "| players", this.members.map((m) => `${m.n}@${m.x.toFixed(0)},${m.z.toFixed(0)} lone=${this.loneliness(m).toFixed(0)} pick=${this.pick(m, false, false).length}${m.taken ? " TAKEN" : ""}`).join(" "), "| clips", this.clips.size);
+    }
     this.ev.snap(this.snapshot());
   }
 
@@ -231,6 +237,21 @@ export class EchoRoom {
       mm.pendingSay = null;
     }
     if (mm.state !== "flee" && this.checkExposed(mm, dt, t)) return;
+    // always dangerous up close: walk into it, or look straight at it nearby, and it comes for you
+    if (mm.state === "wander" || mm.state === "stalk" || mm.state === "lure") {
+      for (const p of this.alive()) {
+        const d = Math.hypot(p.x - mm.x, p.z - mm.z);
+        if (d >= 6) continue;
+        const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+        const facing = d > 0.01 && ((mm.x - p.x) * fx + (mm.z - p.z) * fz) / d > Math.cos(0.6);
+        const sees = facing && echoWallsBetween(mm.x, mm.z, p.x, p.z) === 0;
+        if (d < MIMIC.NOTICE || sees) {
+          mm.state = "chase"; mm.target = p.n; mm.until = t + 12_000; mm.path = []; mm.pendingSay = null;
+          mm.windUp = d < MIMIC.NOTICE ? 0 : t + 1200;
+          break;
+        }
+      }
+    }
     const target = this.members.find((m) => m.n === mm.target && !m.taken);
 
     switch (mm.state) {
@@ -352,7 +373,7 @@ export class EchoRoom {
       // only a mimic that is calling or hunting can be exposed; caught sneaking around, it just slips back into the dark
       const exposable = mm.state === "lure" || mm.state === "chase" || t < mm.speakingUntil + 3000;
       if (!exposable) {
-        if (lit && t > mm.slipUntil) { mm.slipUntil = t + 2500; mm.path = echoPath(this.tileOf(mm), this.farTile(6)); }
+        if (lit && d >= 6 && t > mm.slipUntil) { mm.slipUntil = t + 2500; mm.path = echoPath(this.tileOf(mm), this.farTile(6)); }
         continue;
       }
       const v = Math.max(0, (mm.expose.get(m.n) ?? 0) + (lit ? dt : -dt * 2));
@@ -388,15 +409,18 @@ export class EchoRoom {
     const owner = recent !== null && byOwner.has(recent) ? recent : [...byOwner.entries()].sort((a, b) => b[1].length - a[1].length)[0][0];
     const pool = byOwner.get(owner)!;
     const has = (tag: ClipTag) => pool.filter((c) => c.tags.includes(tag));
-    const short = pool.filter((c) => c.ms <= 1800).sort((a, b) => a.ms - b.ms);
+    // the best "plain" pieces sound like a full short phrase: 0.9–2.6 s, the closer to 1.5 s the better
+    const short = pool.filter((c) => c.ms >= 700).sort((a, b) => Math.abs(a.ms - 1500) - Math.abs(b.ms - 1500));
     let chosen: Clip[] = [];
     if (answering) chosen = [has("here")[0] ?? has("call")[0] ?? short[0]].filter(Boolean) as Clip[];
     else {
       const name = has(`name:${target.n}`)[0];
       const call = has("call").find((c) => c !== name);
       if (name && call) chosen = [name, call];
-      else chosen = [call ?? has("found")[0] ?? short[short.length > 2 ? 1 : 0] ?? pool[0]].filter(Boolean) as Clip[];
+      // tiny fragments ("ah", a breath) give it away: better to stay quiet than play one
+      else chosen = [call ?? has("found")[0] ?? short[Math.floor(this.rnd() * Math.min(3, short.length))]].filter(Boolean) as Clip[];
     }
+    if (!chosen.length) return [];
     if (commit) chosen.forEach((c) => { c.used = true; });
     return chosen.map((c) => c.key);
   }

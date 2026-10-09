@@ -13,7 +13,9 @@ const RATE = MIMIC.RATE;
 const FRAME = 320; // 20 ms at 16 kHz
 const PRE_ROLL = 6; // frames kept from just before speech starts
 const HANG = 13; // frames of quiet that end a piece (~260 ms)
-const MIN_MS = 400;
+const MIN_MS = 600;
+/** At least this share of a piece must be speech (not breath, a click or room noise). */
+const MIN_VOICED = 0.45;
 
 // Forwards raw mic samples to the main thread in blocks of 2048.
 const WORKLET = `
@@ -42,6 +44,7 @@ export class VoiceCapture {
   private fi = 0;
   private recent: Float32Array[] = [];
   private current: Float32Array[] | null = null;
+  private voiced = 0;
   private quiet = 0;
   private loud = 0;
   private floor = 0.004;
@@ -98,10 +101,11 @@ export class VoiceCapture {
       this.recent.push(f);
       if (this.recent.length > PRE_ROLL) this.recent.shift();
       this.loud = speaking ? this.loud + 1 : 0;
-      if (this.loud >= 2) { this.current = [...this.recent]; this.recent = []; this.quiet = 0; }
+      if (this.loud >= 2) { this.current = [...this.recent]; this.recent = []; this.quiet = 0; this.voiced = 2; }
       return;
     }
     this.current.push(f);
+    if (speaking) this.voiced++;
     this.quiet = speaking ? 0 : this.quiet + 1;
     const frames = this.current.length;
     if (this.quiet >= HANG || frames * 20 >= MIMIC.PIECE_MAX * 1000) this.finish();
@@ -115,7 +119,7 @@ export class VoiceCapture {
     const keep = Math.max(1, frames.length - Math.max(0, this.quiet - 4));
     const used = frames.slice(0, keep);
     const ms = used.length * 20;
-    if (ms < MIN_MS) return;
+    if (ms < MIN_MS || this.voiced / used.length < MIN_VOICED) return;
     const pcm = new Float32Array(used.length * FRAME);
     used.forEach((fr, i) => pcm.set(fr, i * FRAME));
     let peak = 0;
