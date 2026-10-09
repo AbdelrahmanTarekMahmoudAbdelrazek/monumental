@@ -95,6 +95,20 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
       </section>
 
       <section className="mt-10">
+        <Link href="/echo" onClick={saveNick} className="relative flex flex-col items-start gap-3 overflow-hidden rounded-3xl bg-[#07080A] bg-[radial-gradient(ellipse_at_20%_50%,#1B231E,transparent_70%)] p-5 text-[#D9DED8] shadow-lg ring-1 ring-[#E9E4D6]/25 transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
+          <svg viewBox="0 0 48 48" className="h-12 w-12 shrink-0" aria-hidden>
+            <path d="M24 6c-8 0-12 7-12 14v22l4-3 4 3 4-3 4 3 4-3 4 3V20c0-7-4-14-12-14z" fill="none" stroke="#E9E4D6" strokeWidth="2.5" strokeLinejoin="round" />
+            <circle cx="19" cy="20" r="2" fill="#E0675C" /><circle cx="29" cy="20" r="2" fill="#E0675C" />
+          </svg>
+          <div className="flex-1">
+            <h2 className="text-xl font-black tracking-wide">ECHO HALLS <span className="ml-1 rounded-full bg-[#E9E4D6] px-2 py-0.5 align-middle text-xs font-bold text-black">TEST</span></h2>
+            <p className="text-sm text-[#A6AFA6]">Co-op horror for 2–4 friends in first person. Walk a dark hospital ward with your torch and talk with 3D voice chat. Phase 1 test.</p>
+          </div>
+          <span className="btn w-full bg-[#E9E4D6] text-black sm:w-auto">Enter the halls →</span>
+        </Link>
+      </section>
+
+      <section className="mt-6">
         <Link href="/squad" onClick={saveNick} className="relative flex flex-col items-start gap-3 overflow-hidden rounded-3xl bg-[#0B1118] p-5 text-white shadow-lg ring-1 ring-[#FFB224]/40 transition hover:-translate-y-0.5 hover:shadow-xl sm:flex-row sm:items-center sm:gap-4">
           <div className="flex shrink-0 gap-1" aria-hidden>
             {["#3DD68C", "#A9B6C6", "#FFB224"].map((c) => <span key={c} className="h-12 w-3 rounded-full" style={{ background: c }} />)}

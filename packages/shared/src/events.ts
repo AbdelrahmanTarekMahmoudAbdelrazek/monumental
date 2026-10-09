@@ -83,6 +83,11 @@ export interface ServerToClientEvents {
   /** SQUAD RUSH rooms. */
   sq_meta: (m: import("./squad").SqMeta) => void;
   sq_snap: (s: import("./squad").SqWire | import("./squad").SqSnap) => void;
+  /** ECHO HALLS. */
+  eh_meta: (m: import("./echo").EchoMeta) => void;
+  eh_snap: (s: import("./echo").EchoSnap) => void;
+  /** WebRTC voice set-up, relayed from another player (`from` = their wire number). */
+  eh_signal: (p: { from: number; data: unknown }) => void;
   /** NEON DRIFT arenas. */
   nd_meta: (m: import("./neon").NeonMeta) => void;
   nd_snap: (s: import("./neon").NeonSnap) => void;
@@ -149,6 +154,19 @@ export interface ClientToServerEvents {
   sq_leave: () => void;
   sq_act: (p: import("./squad").SqAction, ack: (a: { ok: boolean; error?: string }) => void) => void;
   sq_input: (p: import("./squad").SqInput) => void;
+  /** ECHO HALLS rooms. */
+  eh_create: (
+    p: { nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; code?: string; error?: string }) => void,
+  ) => void;
+  eh_join: (
+    p: { code: string; nickname: string; guestId?: string; userToken?: string },
+    ack: (a: { ok: boolean; error?: string; playerId?: string; n?: number; meta?: import("./echo").EchoMeta; spawn?: { x: number; z: number } }) => void,
+  ) => void;
+  eh_leave: () => void;
+  eh_state: (p: import("./echo").EchoState) => void;
+  /** WebRTC voice set-up for one other player (`to` = their wire number). */
+  eh_signal: (p: { to: number; data: unknown }) => void;
   /** NEON DRIFT arenas. */
   nd_create: (
     p: { settings?: Partial<import("./neon").NeonSettings>; nickname: string; guestId?: string; userToken?: string },

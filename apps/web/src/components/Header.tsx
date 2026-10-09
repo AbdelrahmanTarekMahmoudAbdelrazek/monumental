@@ -7,6 +7,7 @@ import type { AppSessionUser } from "@/lib/auth";
 const nav = [
   { href: "/", label: "Play" },
   { href: "/duel", label: "Which is more?" },
+  { href: "/echo", label: "Echo Halls" },
   { href: "/squad", label: "Squad Rush" },
   { href: "/neon", label: "Neon Drift" },
   { href: "/smugglers", label: "Smugglers" },

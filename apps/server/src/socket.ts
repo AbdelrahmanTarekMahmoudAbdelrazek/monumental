@@ -6,11 +6,12 @@ import type { OneWordManager } from "./oneword/OneWordManager.js";
 import type { SmuggleManager } from "./smuggle/SmuggleManager.js";
 import type { NeonManager } from "./neon/NeonManager.js";
 import type { SquadManager } from "./squad/SquadManager.js";
+import type { EchoManager } from "./echo/EchoManager.js";
 import { resolveIdentity, type Identity } from "./auth.js";
 import type { RoomManager, IO } from "./room/RoomManager.js";
 import type { LiveStore } from "./store.js";
 
-type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string; sm?: string; nd?: string; sq?: string }>;
+type Sock = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, { identity?: Identity; roomId?: string; shak?: string; ow?: string; sm?: string; nd?: string; sq?: string; eh?: string; ehN?: number }>;
 
 const joinSchema = z.object({
   roomId: z.string().max(64).optional(),
@@ -28,7 +29,7 @@ const guessSchema = z.object({
   lock: z.boolean().default(false),
 });
 
-export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager, sm?: SmuggleManager, nd?: NeonManager, sq?: SquadManager) {
+export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveStore, shak?: ShakManager, ow?: OneWordManager, sm?: SmuggleManager, nd?: NeonManager, sq?: SquadManager, eh?: EchoManager) {
   io.on("connection", (socket: Sock) => {
     // naive per-socket rate limit for guesses (drag streams are throttled client-side to ~10/s)
     let guessBudget = 40;
@@ -450,6 +451,74 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       ack?.(t.act(me, a));
     });
     socket.on("sq_leave", () => sqLeave());
+
+    // ───────── ECHO HALLS ─────────
+    const ehRoom = () => (socket.data.eh && eh ? eh.get(socket.data.eh) : undefined);
+    const ehLeave = () => {
+      const r = ehRoom();
+      if (r && socket.data.identity) r.leave(socket.data.identity.playerKey);
+      if (socket.data.eh) {
+        socket.leave(`eh:${socket.data.eh}`);
+        if (socket.data.ehN) socket.leave(`eh:${socket.data.eh}:${socket.data.ehN}`);
+      }
+      socket.data.eh = undefined;
+      socket.data.ehN = undefined;
+    };
+    socket.on("eh_create", async (raw, ack) => {
+      if (!eh) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        if (Date.now() - lastCreate < 5000) return ack({ ok: false, error: "Slow down a little" });
+        lastCreate = Date.now();
+        ack({ ok: true, code: eh.create(identity.playerKey).code });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    socket.on("eh_join", async (raw, ack) => {
+      if (!eh) return ack({ ok: false, error: "Not available" });
+      try {
+        const p = idSchema.extend({ code: z.string().min(4).max(10) }).parse(raw);
+        const identity = await resolveIdentity({ ...p, levelId: 1 });
+        const r = eh.get(p.code);
+        if (!r) return ack({ ok: false, error: "Room not found — ask the host for a new link" });
+        if (socket.data.eh && socket.data.eh !== r.code) ehLeave();
+        socket.data.identity = identity;
+        const res = r.join(identity.playerKey, identity.nickname);
+        if (!res.ok) return ack(res);
+        socket.join(`eh:${r.code}`);
+        socket.join(`eh:${r.code}:${res.n}`);
+        socket.data.eh = r.code;
+        socket.data.ehN = res.n;
+        ack({ ok: true, playerId: identity.playerKey, n: res.n, meta: r.meta(), spawn: res.spawn });
+      } catch (e) {
+        ack({ ok: false, error: e instanceof z.ZodError ? "Invalid request" : (e as Error).message });
+      }
+    });
+    let ehBudget = 40;
+    let ehSignalBudget = 120;
+    const ehRefill = setInterval(() => { ehBudget = 40; ehSignalBudget = 120; }, 1000);
+    socket.on("eh_state", (raw) => {
+      const r = ehRoom();
+      const me = socket.data.identity?.playerKey;
+      if (!r || !me || ehBudget-- <= 0 || !raw) return;
+      const n = (v: unknown, lo: number, hi: number) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : 0; };
+      r.state(me, { x: n(raw.x, 0, 1000), y: n(raw.y, -5, 5), z: n(raw.z, 0, 1000), yaw: n(raw.yaw, -1e3, 1e3), pitch: n(raw.pitch, -2, 2), torch: !!raw.torch, crouch: !!raw.crouch, seq: n(raw.seq, 0, 1e9) });
+    });
+    socket.on("eh_signal", (raw) => {
+      const r = ehRoom();
+      const from = socket.data.ehN;
+      if (!r || !from || !eh || ehSignalBudget-- <= 0 || !raw) return;
+      const to = Number(raw.to);
+      if (!Number.isInteger(to) || to === from || !r.idOf(to)) return;
+      let size = 0;
+      try { size = JSON.stringify(raw.data ?? null).length; } catch { return; }
+      if (size > 20_000) return;
+      eh.relay(r.code, from, to, raw.data);
+    });
+    socket.on("eh_leave", () => ehLeave());
+    socket.on("disconnect", () => { clearInterval(ehRefill); ehLeave(); });
     socket.on("disconnect", () => clearInterval(sqRefill));
     socket.on("disconnect", () => clearInterval(inputRefill));
 

@@ -1,0 +1,455 @@
+import * as THREE from "three";
+import type RAPIER_NS from "@dimforge/rapier3d-compat";
+import { ECHO, decodeEchoSnap, echoWallsBetween, type EchoMeta, type EchoPeerState, type EchoSnap } from "@monumental/shared";
+import { makeTextures } from "./textures";
+import { buildLevel, flickerLights, type CeilingLight } from "./level";
+import { SoundBank } from "./sound";
+import { Voice, type PeerStatus } from "./voice";
+import { Avatar } from "./avatars";
+
+type Rapier = typeof RAPIER_NS;
+
+export interface EchoHud {
+  fps: number;
+  stamina: number;
+  torch: boolean;
+  crouch: boolean;
+  locked: boolean;
+  mic: { has: boolean; muted: boolean; level: number; error: string | null };
+  peers: { n: number; status: PeerStatus }[];
+  quality: number;
+}
+
+export interface EchoNet {
+  sendState: (s: { x: number; y: number; z: number; yaw: number; pitch: number; torch: boolean; crouch: boolean; seq: number }) => void;
+  sendSignal: (to: number, data: unknown) => void;
+}
+
+const STEP = 1 / 60;
+const INTERP_MS = 120;
+const CAPSULE_HALF = 0.55;
+const CENTER_Y = CAPSULE_HALF + ECHO.RADIUS; // 0.9: capsule centre above the feet
+
+/** Smooth angle blend along the short way round. */
+const lerpAngle = (a: number, b: number, f: number) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * f;
+
+function sample(h: EchoPeerState[], t: number): EchoPeerState | null {
+  if (!h.length) return null;
+  const last = h[h.length - 1];
+  if (t >= last.t) return last;
+  let i = h.length - 1;
+  while (i > 0 && h[i - 1].t > t) i--;
+  if (i === 0) return h[0];
+  const a = h[i - 1], b = h[i];
+  if (Math.hypot(b.x - a.x, b.z - a.z) > 6) return b;
+  const f = (t - a.t) / Math.max(1, b.t - a.t);
+  return { ...b, x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f, yaw: lerpAngle(a.yaw, b.yaw, f), pitch: a.pitch + (b.pitch - a.pitch) * f };
+}
+
+/**
+ * ECHO HALLS Phase 1: first-person walking in a dark ward, a torch with real shadows,
+ * friends drawn smoothly, and proximity voice. Owns the canvas; React only draws the HUD.
+ */
+export class EchoEngine {
+  readonly sounds: SoundBank;
+  readonly voice: Voice;
+  private R!: Rapier;
+  private world!: RAPIER_NS.World;
+  private body!: RAPIER_NS.RigidBody;
+  private collider!: RAPIER_NS.Collider;
+  private ctrl!: RAPIER_NS.KinematicCharacterController;
+  private renderer!: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private camera: THREE.PerspectiveCamera;
+  private torch!: THREE.SpotLight;
+  private torchRig = new THREE.Group();
+  private lights: CeilingLight[] = [];
+  private avatars = new Map<number, Avatar>();
+  private remoteSteps = new Map<number, { panner: PannerNode; gain: GainNode; phase: number; lx: number; lz: number }>();
+  private hist = new Map<number, EchoPeerState[]>();
+  private tOff: number | null = null;
+  private meta: EchoMeta | null = null;
+  private raf = 0;
+  private ro: ResizeObserver | null = null;
+  private destroyed = false;
+
+  // my state
+  private yaw = 0;
+  private pitch = 0;
+  private vel = new THREE.Vector3();
+  private vy = 0;
+  private prev = new THREE.Vector3();
+  private cur = new THREE.Vector3();
+  private eye: number = ECHO.EYE;
+  private bob = 0;
+  private stepCount = 0;
+  private stamina = 1;
+  private tired = false;
+  private torchOn = true;
+  private crouch = false;
+  private grounded = true;
+  private realSpeed = 0;
+  private acc = 0;
+  private last = 0;
+  private seq = 0;
+  private sentAt = 0;
+  private hudAt = 0;
+  private noiseAt = 0;
+  private frameMs = 16;
+  private pixelRatio = 1;
+  private maxRatio = 1;
+
+  // input
+  keys = { f: false, b: false, l: false, r: false, run: false, crouch: false };
+  /** Touch stick, −1…1. */
+  stick = { x: 0, y: 0 };
+  sensitivity = 0.0022;
+  locked = false;
+
+  constructor(private canvas: HTMLCanvasElement, private opts: { me: number; spawn: { x: number; z: number }; mobile: boolean; net: EchoNet; onHud: (h: EchoHud) => void }) {
+    this.sounds = new SoundBank();
+    // voice exists from the start so set-up messages that arrive while the ward is still building aren't lost
+    this.voice = new Voice(this.sounds, opts.me, (to, d) => opts.net.sendSignal(to, d), () => this.pushHud(true));
+    this.camera = new THREE.PerspectiveCamera(opts.mobile ? 78 : 72, 1, 0.05, 70);
+  }
+
+  async init() {
+    const R = (await import("@dimforge/rapier3d-compat")).default;
+    await R.init();
+    if (this.destroyed) return;
+    this.R = R;
+    const mobile = this.opts.mobile;
+
+    // ── renderer ──
+    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: !mobile, powerPreference: "high-performance" });
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.maxRatio = Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2);
+    this.pixelRatio = Math.min(this.maxRatio, mobile ? 1.1 : 1.5);
+    this.scene.background = new THREE.Color(0x020303);
+    this.scene.fog = new THREE.FogExp2(0x030404, 0.055);
+
+    // ── the ward ──
+    const tex = makeTextures(mobile ? 512 : 1024, Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
+    const level = buildLevel(tex, true);
+    this.scene.add(level.group);
+    this.lights = level.lights;
+    this.scene.add(new THREE.HemisphereLight(0x3a4550, 0x0b0907, 0.12));
+
+    // ── my torch: one shadowed spot light that lags a little behind my head ──
+    this.torch = new THREE.SpotLight(0xfff2d6, 75, 30, 0.5, 0.45, 2);
+    this.torch.map = tex.cookie;
+    this.torch.castShadow = true;
+    this.torch.shadow.mapSize.set(mobile ? 512 : 1024, mobile ? 512 : 1024);
+    this.torch.shadow.camera.near = 0.2;
+    this.torch.shadow.camera.far = 26;
+    this.torch.shadow.bias = -0.0004;
+    this.torch.shadow.normalBias = 0.035;
+    this.torch.position.set(0, 0, 0);
+    this.torch.target.position.set(0, 0, -1);
+    this.torchRig.add(this.torch, this.torch.target);
+    this.scene.add(this.torchRig);
+    // a very faint glow around me so total darkness still shows the nearest walls
+    const fill = new THREE.PointLight(0x9fb0c0, 0.35, 3.5, 2);
+    this.camera.add(fill);
+    this.scene.add(this.camera);
+
+    // ── physics ──
+    this.world = new R.World({ x: 0, y: -9.81, z: 0 });
+    this.world.timestep = STEP;
+    for (const b of level.boxes) this.world.createCollider(R.ColliderDesc.cuboid(b.hx, b.hy, b.hz).setTranslation(b.x, b.y, b.z));
+    this.body = this.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(this.opts.spawn.x, CENTER_Y, this.opts.spawn.z));
+    this.collider = this.world.createCollider(R.ColliderDesc.capsule(CAPSULE_HALF, ECHO.RADIUS), this.body);
+    this.ctrl = this.world.createCharacterController(0.02);
+    this.ctrl.setSlideEnabled(true);
+    this.ctrl.enableAutostep(0.3, 0.2, true);
+    this.ctrl.enableSnapToGround(0.3);
+    this.ctrl.setMaxSlopeClimbAngle((45 * Math.PI) / 180);
+    this.cur.set(this.opts.spawn.x, CENTER_Y, this.opts.spawn.z);
+    this.prev.copy(this.cur);
+    this.yaw = Math.PI; // face into the ward
+
+    this.resize();
+    this.ro = new ResizeObserver(() => this.resize());
+    this.ro.observe(this.canvas);
+    this.last = performance.now();
+    this.raf = requestAnimationFrame(this.frame);
+  }
+
+  /** Call from the "Enter" click: starts sound, the mic and pointer lock. */
+  async enter() {
+    await this.sounds.resume();
+    this.sounds.startAmbience();
+    await this.voice.startMic();
+    if (this.meta) this.voice.sync(this.meta.players.map((p) => p.n).filter((n) => n !== this.opts.me));
+    this.lock();
+    this.pushHud(true);
+  }
+
+  lock() {
+    if (this.opts.mobile) return;
+    const c = this.canvas as HTMLCanvasElement & { requestPointerLock: (o?: { unadjustedMovement?: boolean }) => Promise<void> | void };
+    try {
+      const p = c.requestPointerLock({ unadjustedMovement: true });
+      if (p && typeof (p as Promise<void>).catch === "function") (p as Promise<void>).catch(() => { try { c.requestPointerLock(); } catch { /* not allowed now */ } });
+    } catch { try { c.requestPointerLock(); } catch { /* not allowed now */ } }
+  }
+
+  setMeta(m: EchoMeta) {
+    this.meta = m;
+    const others = m.players.filter((p) => p.n !== this.opts.me);
+    for (const p of others) {
+      if (this.avatars.has(p.n)) continue;
+      const a = new Avatar(p.name, p.color, true);
+      this.avatars.set(p.n, a);
+      this.scene.add(a.root);
+      const gain = this.sounds.ctx.createGain();
+      const panner = this.sounds.panner();
+      gain.connect(panner);
+      this.remoteSteps.set(p.n, { panner, gain, phase: 0, lx: 0, lz: 0 });
+    }
+    for (const [n, a] of [...this.avatars]) {
+      if (others.some((p) => p.n === n)) continue;
+      this.scene.remove(a.root);
+      a.dispose();
+      this.avatars.delete(n);
+      this.hist.delete(n);
+      this.remoteSteps.get(n)?.panner.disconnect();
+      this.remoteSteps.delete(n);
+    }
+    this.voice.sync(others.map((p) => p.n));
+  }
+
+  onSnap(s: EchoSnap) {
+    const now = performance.now();
+    const sample = s.t - now;
+    this.tOff = this.tOff === null || sample > this.tOff ? sample : this.tOff - 0.25;
+    for (const p of decodeEchoSnap(s)) {
+      if (p.n === this.opts.me) continue;
+      let h = this.hist.get(p.n);
+      if (!h) { h = []; this.hist.set(p.n, h); }
+      if (h.length && h[h.length - 1].t >= p.t) continue;
+      h.push(p);
+      while (h.length > 2 && h[1].t < s.t - 1500) h.shift();
+    }
+  }
+
+  look(dx: number, dy: number) {
+    this.yaw -= dx * this.sensitivity;
+    this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - dy * this.sensitivity));
+  }
+
+  toggleTorch() {
+    this.torchOn = !this.torchOn;
+    this.sounds.click();
+    this.pushHud(true);
+  }
+
+  toggleCrouch() { this.crouch = !this.crouch; this.pushHud(true); }
+
+  toggleMute() { this.voice.setMuted(!this.voice.muted); this.pushHud(true); }
+
+  resize() {
+    if (!this.renderer) return;
+    const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+    this.renderer.setPixelRatio(this.pixelRatio);
+    this.renderer.setSize(w, h, false);
+    this.camera.aspect = w / Math.max(1, h);
+    this.camera.updateProjectionMatrix();
+  }
+
+  // ───────── one physics step (60 per second) ─────────
+  private physics(dt: number) {
+    const k = this.keys;
+    let fx = (k.f ? 1 : 0) - (k.b ? 1 : 0) - this.stick.y;
+    let sx = (k.r ? 1 : 0) - (k.l ? 1 : 0) + this.stick.x;
+    const len = Math.hypot(fx, sx);
+    if (len > 1) { fx /= len; sx /= len; }
+    const crouching = this.crouch || k.crouch;
+    const moving = len > 0.05;
+    const wantsRun = k.run && moving && !crouching && fx > 0.2;
+    if (wantsRun && !this.tired) {
+      this.stamina = Math.max(0, this.stamina - dt / 5);
+      if (this.stamina === 0) this.tired = true;
+    } else {
+      this.stamina = Math.min(1, this.stamina + dt / 4);
+      if (this.stamina > 0.35) this.tired = false;
+    }
+    const speed = crouching ? ECHO.CROUCH : wantsRun && !this.tired ? ECHO.SPRINT : ECHO.WALK;
+    const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
+    // forward is −z when yaw = 0
+    const tx = (-sin * fx + cos * sx) * speed;
+    const tz = (-cos * fx - sin * sx) * speed;
+    const accel = moving ? 9 : 11; // speed up and slow down over a few frames, never instantly
+    const f = 1 - Math.exp(-accel * dt);
+    this.vel.x += (tx - this.vel.x) * f;
+    this.vel.z += (tz - this.vel.z) * f;
+    this.vy = this.grounded ? -1 : this.vy - 9.81 * dt;
+
+    this.ctrl.computeColliderMovement(this.collider, { x: this.vel.x * dt, y: this.vy * dt, z: this.vel.z * dt });
+    const m = this.ctrl.computedMovement();
+    this.grounded = this.ctrl.computedGrounded();
+    const p = this.body.translation();
+    this.prev.copy(this.cur);
+    this.cur.set(p.x + m.x, p.y + m.y, p.z + m.z);
+    this.body.setNextKinematicTranslation({ x: this.cur.x, y: this.cur.y, z: this.cur.z });
+    this.world.step();
+    // the speed I really moved (walking into a wall makes no footsteps)
+    this.realSpeed = Math.hypot(m.x, m.z) / dt;
+    if (this.realSpeed < Math.hypot(this.vel.x, this.vel.z) * 0.5) { this.vel.x *= 0.8; this.vel.z *= 0.8; }
+  }
+
+  private frame = () => {
+    if (this.destroyed) return;
+    this.raf = requestAnimationFrame(this.frame);
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - this.last) / 1000);
+    this.last = now;
+    this.frameMs = this.frameMs * 0.95 + dt * 1000 * 0.05;
+
+    this.acc += dt;
+    let steps = 0;
+    while (this.acc >= STEP && steps < 6) { this.physics(STEP); this.acc -= STEP; steps++; }
+    if (steps === 6) this.acc = 0;
+    const alpha = this.acc / STEP;
+    const px = this.prev.x + (this.cur.x - this.prev.x) * alpha;
+    const py = this.prev.y + (this.cur.y - this.prev.y) * alpha;
+    const pz = this.prev.z + (this.cur.z - this.prev.z) * alpha;
+    const feet = py - CENTER_Y;
+
+    // ── head: crouch height, bob, footsteps ──
+    const crouching = this.crouch || this.keys.crouch;
+    this.eye += ((crouching ? ECHO.CROUCH_EYE : ECHO.EYE) - this.eye) * (1 - Math.exp(-dt * 10));
+    const sp = this.grounded ? this.realSpeed : 0;
+    this.bob += sp * dt * 2.15;
+    const amp = Math.min(1, sp / ECHO.WALK);
+    const bobY = Math.sin(this.bob * 2) * 0.035 * amp;
+    const bobX = Math.cos(this.bob) * 0.025 * amp;
+    const n = Math.floor(this.bob / Math.PI);
+    if (n !== this.stepCount) {
+      this.stepCount = n;
+      if (sp > 0.6) this.sounds.step(crouching ? 0.05 : sp > ECHO.WALK + 0.5 ? 0.32 : 0.18);
+    }
+    const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
+    const strafe = this.vel.x * cos - this.vel.z * sin;
+    this.camera.position.set(px + cos * bobX, feet + this.eye + bobY, pz - sin * bobX);
+    this.camera.rotation.set(this.pitch, this.yaw, -strafe * 0.008, "YXZ");
+    this.camera.updateMatrixWorld();
+
+    // ── torch follows the head with a little lag, like a real hand ──
+    const off = new THREE.Vector3(0.2, -0.2, -0.15).applyQuaternion(this.camera.quaternion);
+    this.torchRig.position.copy(this.camera.position).add(off);
+    this.torchRig.quaternion.slerp(this.camera.quaternion, 1 - Math.exp(-dt * 16));
+    this.torch.intensity = this.torchOn ? 75 * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
+
+    flickerLights(this.lights, now / 1000, px, pz);
+
+    // ── friends, shown 0.12 s in the past so their movement is smooth ──
+    const rt = this.tOff !== null ? now + this.tOff - INTERP_MS : 0;
+    const others = new Map<number, { x: number; y: number; z: number }>();
+    for (const [num, a] of this.avatars) {
+      const s = sample(this.hist.get(num) ?? [], rt);
+      if (!s) { a.root.visible = false; continue; }
+      a.root.visible = true;
+      const d = Math.hypot(s.x - px, s.z - pz);
+      const seen = d < 12 && echoWallsBetween(px, pz, s.x, s.z) === 0;
+      a.update(s.x, s.y, s.z, s.yaw, s.pitch, s.torch, s.crouch, dt, seen, d);
+      others.set(num, { x: s.x, y: s.y, z: s.z });
+      // their footsteps, from their feet, quieter through walls
+      const st = this.remoteSteps.get(num);
+      if (st) {
+        const moved = Math.hypot(s.x - st.lx, s.z - st.lz);
+        st.lx = s.x; st.lz = s.z;
+        if (moved < 2) st.phase += moved * 2.15 * 2;
+        if (st.phase > Math.PI * 2 && a.speed > 0.6) {
+          st.phase = 0;
+          const walls = d < 20 ? echoWallsBetween(px, pz, s.x, s.z) : 3;
+          const v = Math.max(0, 1 - d / 20) * (walls === 0 ? 1 : walls === 1 ? 0.4 : 0.15);
+          if (v > 0.01) {
+            this.sounds.place(st.panner, s.x, s.y + 0.1, s.z);
+            this.sounds.step(v * (s.crouch ? 0.1 : a.speed > ECHO.WALK + 0.5 ? 0.35 : 0.22), st.gain);
+          }
+        }
+      }
+    }
+    this.sounds.listener(this.camera.position.x, this.camera.position.y, this.camera.position.z, this.yaw);
+    this.voice.update({ x: px, z: pz }, others);
+
+    // a creak somewhere in the building every 20–45 s
+    if (now > this.noiseAt) {
+      if (this.noiseAt) {
+        const p = this.sounds.panner();
+        const a = Math.random() * Math.PI * 2;
+        this.sounds.place(p, px + Math.cos(a) * 14, 1.5, pz + Math.sin(a) * 14);
+        this.sounds.distantNoise(p);
+        setTimeout(() => p.disconnect(), 1500);
+      }
+      this.noiseAt = now + 20000 + Math.random() * 25000;
+    }
+
+    // ── tell the server where I am, 20 times a second ──
+    if (now - this.sentAt >= ECHO.SEND_MS) {
+      this.sentAt = now;
+      this.opts.net.sendState({ x: px, y: feet, z: pz, yaw: this.yaw, pitch: this.pitch, torch: this.torchOn, crouch: crouching, seq: ++this.seq });
+    }
+
+    this.adaptQuality();
+    this.renderer.render(this.scene, this.camera);
+    this.pushHud(false);
+  };
+
+  /** Lower the resolution a little when frames get slow, raise it again when there's room. */
+  private qualityAt = 0;
+  private adaptQuality() {
+    const now = performance.now();
+    if (now - this.qualityAt < 2000) return;
+    this.qualityAt = now;
+    let r = this.pixelRatio;
+    if (this.frameMs > 22) r = Math.max(0.6, r - 0.15);
+    else if (this.frameMs < 13 && r < this.maxRatio) r = Math.min(this.maxRatio, r + 0.1);
+    if (Math.abs(r - this.pixelRatio) > 0.01) { this.pixelRatio = r; this.resize(); }
+  }
+
+  private pushHud(force: boolean) {
+    const now = performance.now();
+    if (!force && now - this.hudAt < 100) return;
+    this.hudAt = now;
+    this.opts.onHud({
+      fps: Math.round(1000 / Math.max(1, this.frameMs)),
+      stamina: this.stamina,
+      torch: this.torchOn,
+      crouch: this.crouch || this.keys.crouch,
+      locked: this.locked,
+      mic: { has: this.voice.hasMic ?? false, muted: this.voice.muted ?? false, level: this.voice.micLevel() ?? 0, error: this.voice.micError ?? null },
+      peers: this.voice.statuses() ?? [],
+      quality: this.pixelRatio,
+    });
+  }
+
+  /** Debug / tests: where I am. */
+  position() { return { x: this.cur.x, z: this.cur.z, yaw: this.yaw }; }
+
+  destroy() {
+    this.destroyed = true;
+    cancelAnimationFrame(this.raf);
+    this.ro?.disconnect();
+    this.voice.destroy();
+    this.sounds.close();
+    for (const a of this.avatars.values()) a.dispose();
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      m.geometry?.dispose?.();
+      const mats = (Array.isArray(m.material) ? m.material : [m.material]) as (THREE.Material | undefined)[];
+      for (const mat of mats) {
+        if (!mat) continue;
+        for (const v of Object.values(mat)) if (v && (v as THREE.Texture).isTexture) (v as THREE.Texture).dispose();
+        mat.dispose();
+      }
+    });
+    this.renderer?.dispose();
+    this.world?.free();
+  }
+}
