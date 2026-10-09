@@ -270,6 +270,9 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
           <div className="pointer-events-none absolute left-4 top-3">
             <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.night?.awake ? "Trust no voice" : "Explore the ward together"}</div>
             <div className="text-xs text-[#9FA89F] md:text-sm" data-testid="eh-night">{nightText(meta, clockOff)}</div>
+            {hud.peers.filter((p) => p.status !== "connected").map((p) => (
+              <div key={p.n} className="mt-1 text-xs text-[#C9A66B]">No voice link with {nameOf(p.n)?.name ?? "a player"} yet — you can't hear each other and the mimic can't copy them.</div>
+            ))}
           </div>
           <div className="pointer-events-none absolute right-4 top-3 flex gap-2 text-xs">
             {ping !== null && <span data-testid="eh-ping" className={`rounded-full px-2.5 py-1 ${ping < 100 ? "bg-[#16241C] text-[#7FB89A]" : ping < 180 ? "bg-[#2A2414] text-[#C9A66B]" : "bg-[#2A1512] text-[#E0675C]"}`}>{ping} ms</span>}

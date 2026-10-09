@@ -144,17 +144,29 @@ describe("ECHO HALLS mimic", () => {
     x.r.destroy();
   });
 
-  it("a torch held on it exposes it and it runs away", () => {
+  it("a torch held on it while it calls exposes it and it runs away", () => {
     const x = night();
     x.run(MIMIC.WAKE_SEC + 1);
     const mm = x.d.mimics[0];
-    // put it 4 m in front of Ann in her room and point her torch at it
-    Object.assign(mm, { x: x.ann.x, z: x.ann.z - 4, state: "dormant", path: [] }); // standing still
-    Object.assign(x.ann, { yaw: 0, torch: true });
+    // it is calling Ann from 7 m away across her room; she turns her torch on it
+    Object.assign(mm, { x: x.ann.x - 7, z: x.ann.z, state: "lure", target: 1, until: x.now() + 60_000, path: [], lures: 1 });
+    Object.assign(x.ann, { yaw: Math.PI / 2, torch: true });
     x.run(MIMIC.EXPOSE_SEC + 0.3);
     expect(x.events.some((e) => e.type === "exposed")).toBe(true);
     expect(mm.state).toBe("flee");
     expect(x.r.exposed).toBe(1);
+    x.r.destroy();
+  });
+
+  it("caught in a torch while just sneaking around, it slips away instead of being exposed", () => {
+    const x = night();
+    x.run(MIMIC.WAKE_SEC + 1);
+    const mm = x.d.mimics[0];
+    Object.assign(mm, { x: x.ann.x, z: x.ann.z - 4, state: "wander", path: [], nextLure: x.now() + 60_000 });
+    Object.assign(x.ann, { yaw: 0, torch: true });
+    x.run(3);
+    expect(x.events.some((e) => e.type === "exposed")).toBe(false);
+    expect(Math.hypot(mm.x - x.ann.x, mm.z - (x.ann.z - 4))).toBeGreaterThan(1); // it moved away
     x.r.destroy();
   });
 
@@ -173,5 +185,53 @@ describe("ECHO HALLS mimic", () => {
     expect(x.events.some((e) => e.type === "back" && e.n === 1)).toBe(true);
     expect(echoWallsBetween(x.ann.x, x.ann.z, 1.5 * T, 1.5 * T)).toBe(0);
     x.r.destroy();
+  });
+});
+
+describe("ECHO HALLS mimic — audible calls", () => {
+  it("only calls when the target is close enough to hear; follows them otherwise", () => {
+    let t = 1_000_000;
+    const events: EchoEvent[] = [];
+    const r = new EchoRoom("T2", "a", { meta: () => {}, snap: () => {}, event: (e) => events.push(e), onIdle: () => {} }, () => t, mulberry32(3));
+    r.join("a", "Ann"); r.join("b", "Bob");
+    const d = r.debug();
+    const [ann, bob] = d.members;
+    Object.assign(ann, { x: 61.5, z: 37.5, yaw: Math.PI });
+    Object.assign(bob, { x: 7.5, z: 4.5 });
+    for (let i = 0; i < 10; i++) { r.clip("b", i, 1000, ["short"]); r.have("a", `2:${i}`); }
+    let say = 0;
+    for (let i = 0; i < (MIMIC.WAKE_SEC + 120) * 20; i++) {
+      t += 50; r.step();
+      const mm = d.mimics[0];
+      const e = events[events.length - 1];
+      if (mm && e && e.type === "say" && events.length > say) {
+        say = events.length;
+        expect(Math.hypot(ann.x - mm.x, ann.z - mm.z)).toBeLessThanOrEqual(14.5);
+      }
+    }
+    expect(say).toBeGreaterThan(0);
+    r.destroy();
+  });
+});
+
+describe("ECHO HALLS mimic — spotted", () => {
+  it("freezes for a moment when you turn and see it, so a quick torch beats it", () => {
+    let t = 1_000_000;
+    const events: EchoEvent[] = [];
+    const r = new EchoRoom("T3", "a", { meta: () => {}, snap: () => {}, event: (e) => events.push(e), onIdle: () => {} }, () => t, mulberry32(5));
+    r.join("a", "Ann"); r.join("b", "Bob");
+    const d = r.debug();
+    const [ann, bob] = d.members;
+    Object.assign(ann, { x: 61.5, z: 34.5, yaw: Math.PI / 2, torch: true }); // facing −x
+    Object.assign(bob, { x: 7.5, z: 4.5 });
+    for (let i = 0; i < 6; i++) { r.clip("b", i, 1000, ["short"]); r.have("a", `2:${i}`); }
+    const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { t += 50; r.step(); } };
+    run(MIMIC.WAKE_SEC + 1);
+    const mm = d.mimics[0];
+    Object.assign(mm, { x: ann.x - 5, z: ann.z, state: "lure", target: 1, until: t + 60_000, path: [], lures: 1, pendingSay: null });
+    run(2.2);
+    expect(events.some((e) => e.type === "exposed")).toBe(true);
+    expect(ann.taken).toBe(false);
+    r.destroy();
   });
 });

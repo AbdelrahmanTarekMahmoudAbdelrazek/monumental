@@ -108,6 +108,8 @@ export class MimicSound {
   private breath: GainNode;
   private breathSrc: AudioBufferSourceNode;
   private lfo: OscillatorNode;
+  private growl: GainNode;
+  private growlOsc: OscillatorNode;
   private playing: AudioBufferSourceNode[] = [];
 
   constructor(private sounds: SoundBank) {
@@ -144,6 +146,18 @@ export class MimicSound {
     this.breathSrc.connect(bp).connect(swell).connect(this.breath).connect(this.panner);
     this.breathSrc.start();
     this.lfo.start();
+
+    // a low, wet growl you only hear when it is right next to you
+    this.growlOsc = ctx.createOscillator();
+    this.growlOsc.type = "sawtooth";
+    this.growlOsc.frequency.value = 58;
+    const gl = ctx.createBiquadFilter();
+    gl.type = "lowpass";
+    gl.frequency.value = 260;
+    this.growl = ctx.createGain();
+    this.growl.gain.value = 0;
+    this.growlOsc.connect(gl).connect(this.growl).connect(this.panner);
+    this.growlOsc.start();
   }
 
   /** Play stolen pieces one after another, as if a friend said them. */
@@ -170,8 +184,10 @@ export class MimicSound {
     this.sounds.place(this.panner, x, 2.1, z);
     this.gain.gain.setTargetAtTime(voiceGain, t, 0.08);
     this.filter.frequency.setTargetAtTime(cutoff, t, 0.1);
-    const near = Math.max(0, 1 - distance / (chasing ? 10 : 6)) * (walls === 0 ? 1 : 0.3);
-    this.breath.gain.setTargetAtTime(near * (chasing ? 0.35 : 0.16), t, 0.2);
+    const near = Math.max(0, 1 - distance / (chasing ? 12 : 8)) * (walls === 0 ? 1 : 0.35);
+    this.breath.gain.setTargetAtTime(near * (chasing ? 0.9 : 0.5), t, 0.2);
+    const close = Math.max(0, 1 - distance / 4) * (walls === 0 ? 1 : 0);
+    this.growl.gain.setTargetAtTime(close * (chasing ? 0.35 : 0.18), t, 0.15);
     this.lfo.frequency.setTargetAtTime(chasing ? 1.4 : 0.32, t, 0.3);
   }
 
@@ -199,7 +215,7 @@ export class MimicSound {
 
   dispose() {
     for (const s of this.playing) { try { s.stop(); } catch { /* done */ } }
-    try { this.breathSrc.stop(); this.lfo.stop(); } catch { /* done */ }
+    try { this.breathSrc.stop(); this.lfo.stop(); this.growlOsc.stop(); } catch { /* done */ }
     this.panner.disconnect();
   }
 }

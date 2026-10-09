@@ -46,6 +46,10 @@ interface Mimic {
   speakingUntil: number;
   pendingSay: { at: number; clips: string[] } | null;
   expose: Map<number, number>;
+  /** Until when it is busy slipping out of a torch beam. */
+  slipUntil: number;
+  /** Spotted: it freezes for a moment before it charges (your chance to light it up). */
+  windUp: number;
 }
 
 export interface EchoEvents {
@@ -192,7 +196,7 @@ export class EchoRoom {
     const count = this.members.length >= 3 ? 2 : 1;
     for (let i = 0; i < count; i++) {
       const [tx, tz] = this.farTile();
-      this.mimics.push({ id: i + 1, x: center(tx), z: center(tz), yaw: 0, state: "wander", path: [], target: null, until: 0, nextLure: t + 10_000 + i * 15_000, lures: 0, lastLure: null, speakingUntil: 0, pendingSay: null, expose: new Map() });
+      this.mimics.push({ id: i + 1, x: center(tx), z: center(tz), yaw: 0, state: "wander", path: [], target: null, until: 0, nextLure: t + 10_000 + i * 15_000, lures: 0, lastLure: null, speakingUntil: 0, pendingSay: null, expose: new Map(), slipUntil: 0, windUp: 0 });
     }
     this.ev.event({ type: "wake" });
     this.pushMeta();
@@ -213,6 +217,13 @@ export class EchoRoom {
 
   private think(mm: Mimic, dt: number, t: number) {
     // a call that waits for its "late answer" moment
+    // never waste a voice on someone too far away to hear it: follow them instead
+    const prey = this.members.find((m) => m.n === mm.target && !m.taken);
+    if (mm.pendingSay && prey && Math.hypot(prey.x - mm.x, prey.z - mm.z) > 14) {
+      for (const k of mm.pendingSay.clips) { const c = this.clips.get(k); if (c) c.used = false; }
+      mm.pendingSay = null;
+      if (mm.state === "lure") { mm.state = "stalk"; mm.path = []; mm.until = t + 30_000; }
+    }
     if (mm.pendingSay && t >= mm.pendingSay.at) {
       const ms = mm.pendingSay.clips.reduce((a, k) => a + (this.clips.get(k)?.ms ?? 0) + 150, 0);
       mm.speakingUntil = t + ms;
@@ -228,7 +239,7 @@ export class EchoRoom {
         this.walk(mm, MIMIC.WANDER, dt);
         if (t >= mm.nextLure) {
           const prey = this.alive().filter((m) => this.loneliness(m) > 9 && this.pick(m, false, false).length).sort((a, b) => this.loneliness(b) - this.loneliness(a))[0];
-          if (prey) { mm.state = "stalk"; mm.target = prey.n; mm.until = t + 30_000; mm.path = []; mm.lures = 0; }
+          if (prey) { mm.state = "stalk"; mm.target = prey.n; mm.until = t + 45_000; mm.path = []; mm.lures = 0; }
           else mm.nextLure = t + 4000;
         }
         break;
@@ -241,16 +252,22 @@ export class EchoRoom {
           mm.path = echoPath(this.tileOf(mm), spot);
           if (!mm.path.length) { this.startLure(mm, target, t); break; }
         }
-        this.walk(mm, MIMIC.STALK, dt);
+        // hurries while far away (nobody can see it), creeps the last stretch
+        const far = Math.hypot(target.x - mm.x, target.z - mm.z) > 15;
+        this.walk(mm, far ? MIMIC.STALK * 1.7 : MIMIC.STALK, dt);
         if (!mm.path.length) this.startLure(mm, target, t);
         break;
       }
       case "lure": {
         if (!target) { this.calm(mm); break; }
+        if (Math.hypot(target.x - mm.x, target.z - mm.z) > 14) { mm.state = "stalk"; mm.path = []; mm.until = t + 30_000; break; }
         mm.yaw = Math.atan2(-(target.x - mm.x), -(target.z - mm.z));
         const d = Math.hypot(target.x - mm.x, target.z - mm.z);
-        const sees = echoWallsBetween(mm.x, mm.z, target.x, target.z) === 0;
-        if (d < MIMIC.NOTICE || (sees && d < 6)) { mm.state = "chase"; mm.until = t + 12_000; mm.path = []; break; }
+        // it pounces when you come close, or when you turn round and see it
+        const fx = -Math.sin(target.yaw), fz = -Math.cos(target.yaw);
+        const facing = d > 0.01 && ((mm.x - target.x) * fx + (mm.z - target.z) * fz) / d > Math.cos(0.6);
+        const sees = facing && echoWallsBetween(mm.x, mm.z, target.x, target.z) === 0;
+        if (d < MIMIC.NOTICE || (sees && d < 6)) { mm.state = "chase"; mm.until = t + 12_000; mm.path = []; mm.windUp = d < MIMIC.NOTICE ? 0 : t + 1200; break; }
         // they asked "where are you?" → answer, late
         if (target.askedAt > t - 1500 && !mm.pendingSay && t > mm.speakingUntil + 1500) {
           const clips = this.pick(target, true);
@@ -268,6 +285,7 @@ export class EchoRoom {
         const d = Math.hypot(target.x - mm.x, target.z - mm.z);
         if (d > 18) { this.calm(mm); break; }
         if (d < MIMIC.CATCH) { this.take(mm, target, t); break; }
+        if (t < mm.windUp) { mm.yaw = Math.atan2(-(target.x - mm.x), -(target.z - mm.z)); break; }
         const sees = echoWallsBetween(mm.x, mm.z, target.x, target.z) === 0;
         if (sees && d < 5) {
           this.stepTo(mm, target.x, target.z, MIMIC.CHASE, dt);
@@ -330,6 +348,12 @@ export class EchoRoom {
         const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
         const cos = (fx * dx + fz * dz) / d;
         lit = cos > Math.cos(MIMIC.BEAM) && echoWallsBetween(m.x, m.z, mm.x, mm.z) === 0;
+      }
+      // only a mimic that is calling or hunting can be exposed; caught sneaking around, it just slips back into the dark
+      const exposable = mm.state === "lure" || mm.state === "chase" || t < mm.speakingUntil + 3000;
+      if (!exposable) {
+        if (lit && t > mm.slipUntil) { mm.slipUntil = t + 2500; mm.path = echoPath(this.tileOf(mm), this.farTile(6)); }
+        continue;
       }
       const v = Math.max(0, (mm.expose.get(m.n) ?? 0) + (lit ? dt : -dt * 2));
       mm.expose.set(m.n, v);
@@ -407,25 +431,33 @@ export class EchoRoom {
     for (let z = 0; z < ECHO_H; z++) for (let x = 0; x < ECHO_W; x++) {
       if (!mimicOpen(x, z)) continue;
       const d = Math.min(99, ...this.members.map((m) => Math.hypot(center(x) - m.x, center(z) - m.z)));
-      opts.push({ t: [x, z], d });
+      const seen = this.members.some((m) => echoWallsBetween(m.x, m.z, center(x), center(z)) === 0 && Math.hypot(center(x) - m.x, center(z) - m.z) < 15);
+      opts.push({ t: [x, z], d: seen ? d * 0.3 : d });
     }
     const far = opts.filter((o) => o.d >= Math.max(min, 1));
     const pool = far.length ? far : opts.sort((a, b) => b.d - a.d).slice(0, 5);
     return pool[Math.floor(this.rnd() * pool.length)].t;
   }
 
-  /** A tile 5–11 m from the target, out of their sight, closest to the mimic. */
+  /**
+   * Where to call from: out of the target's sight (behind a wall, or behind their back), 4–14 m away.
+   * Closer spots win (louder, scarier), then spots near the mimic.
+   */
   private hideSpot(target: Member, mm: Mimic): [number, number] | null {
     let best: [number, number] | null = null;
-    let bestD = Infinity;
+    let bestScore = Infinity;
+    const fx = -Math.sin(target.yaw), fz = -Math.cos(target.yaw);
     for (let z = 0; z < ECHO_H; z++) for (let x = 0; x < ECHO_W; x++) {
       if (!mimicOpen(x, z)) continue;
       const cx = center(x), cz = center(z);
       const d = Math.hypot(cx - target.x, cz - target.z);
-      if (d < 5 || d > 11 || echoWallsBetween(cx, cz, target.x, target.z) === 0) continue;
+      if (d < 4 || d > 14) continue;
+      const walled = echoWallsBetween(cx, cz, target.x, target.z) > 0;
+      const behind = ((cx - target.x) * fx + (cz - target.z) * fz) / d < -0.2; // more than ~100° from where they look
+      if (!walled && !behind) continue;
       if (this.members.some((m) => m !== target && Math.hypot(cx - m.x, cz - m.z) < 5)) continue;
-      const md = Math.hypot(cx - mm.x, cz - mm.z);
-      if (md < bestD) { bestD = md; best = [x, z]; }
+      const score = d + Math.hypot(cx - mm.x, cz - mm.z) * 0.3;
+      if (score < bestScore) { bestScore = score; best = [x, z]; }
     }
     return best;
   }
