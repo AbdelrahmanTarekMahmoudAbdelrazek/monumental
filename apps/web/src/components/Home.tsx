@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LEVELS, MONUMENTS, MIXED_GROUPS, GROUP_LABEL, groupOf, type CatalogGroup, type LevelConfig } from "@monumental/shared";
 import { getNickname, setNickname as persistNickname, randomNickname } from "@/lib/identity";
+import VersionBanner from "./VersionBanner";
 
 interface Overview { levels: { levelId: number; players: number; phase: string; roundIndex: number }[]; offline?: boolean }
 
@@ -40,6 +41,7 @@ export default function Home({ signedInNickname }: { signedInNickname?: string |
 
   return (
     <div className="mx-auto max-w-6xl px-3 md:px-4">
+      <VersionBanner />
       {/* hero */}
       <section className="mt-6 grid gap-6 md:mt-10 md:grid-cols-[1.2fr_1fr] md:items-center">
         <div>

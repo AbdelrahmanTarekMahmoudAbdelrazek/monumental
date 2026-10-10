@@ -2,6 +2,8 @@
 export class SoundBank {
   readonly ctx: AudioContext;
   readonly master: GainNode;
+  /** The hospital's acoustics: every voice (real or copied) gets the same tiled-room echo, so a copy can't sound "drier" than a friend. */
+  readonly room: ConvolverNode;
   private noise: AudioBuffer;
   private ambience: AudioNode[] = [];
 
@@ -11,6 +13,22 @@ export class SoundBank {
     this.master = this.ctx.createGain();
     this.master.gain.value = 0.9;
     this.master.connect(this.ctx.destination);
+    this.room = this.ctx.createConvolver();
+    const sr = this.ctx.sampleRate, n = Math.floor(sr * 1.3);
+    const ir = this.ctx.createBuffer(2, n, sr);
+    for (let c = 0; c < 2; c++) {
+      const d = ir.getChannelData(c);
+      for (let i = 0; i < n; i++) {
+        const t = i / sr;
+        // a few early reflections off the tiles, then a damped tail
+        const early = [0.011, 0.019, 0.027, 0.041].some((e) => Math.abs(t - e - c * 0.002) < 0.0006) ? 0.5 : 0;
+        d[i] = (Math.random() * 2 - 1) * Math.exp(-t * 5.2) * (t < 0.008 ? t / 0.008 : 1) * 0.45 + early;
+      }
+    }
+    this.room.buffer = ir;
+    const wet = this.ctx.createGain();
+    wet.gain.value = 0.55;
+    this.room.connect(wet).connect(this.master);
     const len = Math.floor(this.ctx.sampleRate * 0.4);
     this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noise.getChannelData(0);

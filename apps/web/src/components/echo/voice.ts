@@ -1,4 +1,4 @@
-import { ECHO, echoWallsBetween, muEncode, type ClipTag } from "@monumental/shared";
+import { ECHO, MIMIC, echoWallsBetween, pcmEncode, type ClipTag } from "@monumental/shared";
 import type { SoundBank } from "./sound";
 import { RadioFx } from "./radio";
 
@@ -8,17 +8,19 @@ export interface BankClip { bytes: Uint8Array; ms: number; tags: ClipTag[] }
 /**
  * How a voice at `o` sounds from `me`: full volume within VOICE_NEAR, silent at VOICE_RANGE,
  * quieter and muffled through walls. Real voices and the mimic's copies both use this, so nothing gives the copy away.
- * Everything is also capped at 7 kHz — the band the copies are recorded in.
+ * Everything is also capped at 11 kHz — the band the copies are recorded in.
  */
 export function voiceMix(me: { x: number; z: number }, o: { x: number; z: number }) {
   const d = Math.hypot(o.x - me.x, o.z - me.z);
   let v = d <= ECHO.VOICE_NEAR ? 1 : Math.max(0, 1 - (d - ECHO.VOICE_NEAR) / (ECHO.VOICE_RANGE - ECHO.VOICE_NEAR)) ** 1.6;
   const walls = d < ECHO.VOICE_RANGE ? echoWallsBetween(me.x, me.z, o.x, o.z) : 0;
   v *= walls === 0 ? 1 : walls === 1 ? 0.55 : 0.28;
-  return { gain: v * 1.4, cutoff: walls === 0 ? 7000 : walls === 1 ? 1300 : 650 };
+  return { gain: v * 1.4, cutoff: walls === 0 ? 11000 : walls === 1 ? 1300 : 650 };
 }
 
 const CHUNK = 16 * 1024;
+/** A piece at most PIECE_MAX seconds of 16-bit audio, plus a little slack. */
+const MAX_BYTES = Math.ceil(MIMIC.PIECE_MAX * MIMIC.RATE * 2) + 4096;
 
 type Signal = { description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit | null; ask?: boolean; gen?: number };
 export type PeerStatus = "connecting" | "connected" | "failed";
@@ -176,7 +178,7 @@ export class Voice {
   // ───────── voice pieces ─────────
   /** Keep one of my own pieces and send it straight to everyone connected. */
   shareMine(id: number, pcm: Float32Array, ms: number, tags: ClipTag[]) {
-    const bytes = muEncode(pcm);
+    const bytes = pcmEncode(pcm);
     this.store(`${this.me}:${id}`, { bytes, ms, tags });
     for (const p of this.peers.values()) this.sendClip(p, id, { bytes, ms, tags });
   }
@@ -205,12 +207,12 @@ export class Voice {
 
   private onData(p: Peer, data: string | ArrayBuffer) {
     if (typeof data !== "string") {
-      if (p.incoming && p.incoming.len < 64000) { const b = new Uint8Array(data); p.incoming.parts.push(b); p.incoming.len += b.length; }
+      if (p.incoming && p.incoming.len < MAX_BYTES) { const b = new Uint8Array(data); p.incoming.parts.push(b); p.incoming.len += b.length; }
       return;
     }
     let m: { k: string; id: number; ms?: number; tags?: ClipTag[]; len?: number };
     try { m = JSON.parse(data); } catch { return; }
-    if (m.k === "clip" && Number.isInteger(m.id) && (m.len ?? 0) <= 64000) p.incoming = { id: m.id, ms: Number(m.ms) || 0, tags: Array.isArray(m.tags) ? m.tags : [], parts: [], len: 0 };
+    if (m.k === "clip" && Number.isInteger(m.id) && (m.len ?? 0) <= MAX_BYTES) p.incoming = { id: m.id, ms: Number(m.ms) || 0, tags: Array.isArray(m.tags) ? m.tags : [], parts: [], len: 0 };
     else if (m.k === "end" && p.incoming && p.incoming.id === m.id) {
       const inc = p.incoming;
       p.incoming = null;
@@ -266,11 +268,14 @@ export class Voice {
     const ctx = this.sounds.ctx;
     const filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
-    filter.frequency.value = 7000;
+    filter.frequency.value = 11000;
     const gain = ctx.createGain();
     gain.gain.value = 0;
     const panner = this.sounds.panner();
     filter.connect(gain).connect(panner);
+    const send = ctx.createGain();
+    send.gain.value = 0.2;
+    gain.connect(send).connect(this.sounds.room);
     const radio = ctx.createGain();
     radio.gain.value = 0;
     radio.connect(this.radio.input);

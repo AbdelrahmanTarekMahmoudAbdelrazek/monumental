@@ -27,14 +27,20 @@ export const ECHO = {
  * Walls stand on the edges between two different rooms, except where ECHO_DOORS opens them.
  * Rooms: c corridor · r reception · a ward A · b ward B · n nurses' station · o office · p pharmacy · s stairs
  * w washrooms · t operating theatre · m morgue · i isolation (room 7) · k store · x boiler room
+ * East wing (v34): h chapel · f cafeteria · y playroom · q police checkpoint
+ * Lower floor band (v34): l laundry · d records · g ward C · j kitchen · v ambulance bay
  */
-export const ECHO_W = 20;
-export const ECHO_H = 14;
+export const ECHO_W = 31;
+export const ECHO_H = 23;
 const PLAN: [string, number, number, number, number][] = [
   ["r", 1, 1, 5, 5], ["a", 6, 1, 8, 5], ["c", 9, 1, 10, 5], ["b", 11, 1, 14, 5], ["n", 15, 1, 16, 5], ["o", 17, 1, 18, 5],
-  ["c", 1, 6, 18, 7],
+  ["h", 19, 1, 23, 5], ["f", 24, 1, 29, 5],
+  ["c", 1, 6, 29, 7],
   ["p", 1, 8, 3, 12], ["s", 4, 8, 5, 9], ["w", 4, 10, 5, 12], ["t", 6, 8, 8, 12], ["c", 9, 8, 10, 12],
   ["m", 11, 8, 14, 12], ["i", 15, 8, 16, 10], ["k", 15, 11, 16, 12], ["x", 17, 8, 18, 12],
+  ["y", 19, 8, 22, 12], ["q", 23, 8, 26, 12], ["c", 27, 8, 28, 12],
+  ["c", 1, 13, 29, 14],
+  ["l", 1, 15, 6, 21], ["d", 7, 15, 11, 21], ["g", 12, 15, 18, 21], ["j", 19, 15, 23, 21], ["v", 24, 15, 29, 21],
 ];
 export const ECHO_MAP: readonly string[] = (() => {
   const g = Array.from({ length: ECHO_H }, () => Array<string>(ECHO_W).fill("#"));
@@ -42,11 +48,16 @@ export const ECHO_MAP: readonly string[] = (() => {
   return g.map((r) => r.join(""));
 })();
 export const ECHO_ROOMS: Record<string, { name: string; sub: string }> = {
-  c: { name: "Main Corridor", sub: "" }, r: { name: "Reception", sub: "the front doors are buried" }, a: { name: "Ward A", sub: "eight beds, curtains drawn" },
+  c: { name: "Corridor", sub: "" }, r: { name: "Reception", sub: "the front doors are buried" }, a: { name: "Ward A", sub: "eight beds, curtains drawn" },
   b: { name: "Ward B", sub: "children's ward" }, n: { name: "Nurses' Station", sub: "the phone is off the hook" }, o: { name: "Matron's Office", sub: "October 2011" },
   p: { name: "Pharmacy", sub: "behind the grille" }, s: { name: "Stairs & Lift", sub: "the way up is buried" }, w: { name: "Washrooms", sub: "" },
   t: { name: "Operating Theatre", sub: "the emergency light is still on" }, m: { name: "Morgue", sub: "cold, even now" }, i: { name: "Isolation Room", sub: "Room 7" },
   k: { name: "Store Room", sub: "" }, x: { name: "Boiler Room", sub: "something has been sleeping here" },
+  h: { name: "Chapel", sub: "someone kept praying" }, f: { name: "Cafeteria", sub: "lunch was never cleared" },
+  y: { name: "Playroom", sub: "the drawings are new" }, q: { name: "Police Checkpoint", sub: "Team Two held here" },
+  l: { name: "Laundry", sub: "the machines are still wet" }, d: { name: "Records", sub: "every file says the same date" },
+  g: { name: "Ward C", sub: "long-stay patients" }, j: { name: "Kitchen", sub: "the cold room is locked from inside" },
+  v: { name: "Ambulance Bay", sub: "the ramp goes into rock" },
 };
 export type EchoDoorKind = "single" | "double" | "open" | "front";
 /** [cell x, cell z, edge ("E" = east side of the cell, "S" = south side), kind] */
@@ -54,6 +65,15 @@ export const ECHO_DOORS: readonly [number, number, "E" | "S", EchoDoorKind][] = 
   [3, 5, "S", "double"], [7, 5, "S", "single"], [12, 5, "S", "double"], [15, 5, "S", "open"], [16, 5, "S", "open"], [17, 5, "S", "single"],
   [2, 7, "S", "single"], [4, 7, "S", "single"], [4, 9, "S", "single"], [7, 7, "S", "double"], [8, 10, "E", "single"], [10, 10, "E", "double"],
   [15, 7, "S", "single"], [14, 11, "E", "single"], [17, 7, "S", "single"], [5, 3, "E", "single"], [2, 0, "S", "front"],
+  // east wing
+  [21, 5, "S", "double"], [26, 5, "S", "double"], [23, 3, "E", "single"], [20, 7, "S", "single"], [24, 7, "S", "double"],
+  [22, 10, "E", "single"], [26, 10, "E", "single"],
+  // row B → service corridor
+  [2, 12, "S", "single"], [4, 12, "S", "single"], [7, 12, "S", "double"], [12, 12, "S", "single"], [15, 12, "S", "single"],
+  [17, 12, "S", "single"], [20, 12, "S", "double"], [24, 12, "S", "double"],
+  // service corridor → lower band
+  [3, 14, "S", "single"], [9, 14, "S", "single"], [14, 14, "S", "double"], [17, 14, "S", "single"], [21, 14, "S", "single"], [26, 14, "S", "open"],
+  [6, 18, "E", "single"], [11, 18, "E", "single"], [23, 18, "E", "double"],
 ];
 /** Width of each kind of opening, metres. */
 export const ECHO_DOOR_W: Record<EchoDoorKind, number> = { single: 1.2, double: 2.2, front: 2.4, open: 2.9 };
@@ -232,7 +252,7 @@ export interface EchoPlayer {
 export const GOAL = {
   FUSES: 3,
   /** A match lasts this long before the lights go out for good. */
-  MATCH_SEC: 20 * 60,
+  MATCH_SEC: 10 * 60,
   /** How close you must be to pick up a fuse or use the fuse box (metres). */
   REACH: 1.9,
   /** The fuse box in the boiler room, and the lift in the stairwell. */
@@ -244,13 +264,53 @@ export const GOAL = {
   /** Prying a fuse out takes this long (s); stay close. */
   PRY_SEC: 2.5,
   /** Called with the power on, the lift takes this long to come down (s). */
-  LIFT_CALL_SEC: 45,
+  LIFT_CALL_SEC: 30,
   /** Where a fuse can be hidden: [x, y, z] — on a morgue drawer, the theatre trolley, a desk, a bed... */
   SPOTS: [
     [43.9, 1.31, 29.7], [23.9, 1.0, 30.9], [7.5, 0.05, 33.0], [54.3, 0.81, 9.0], [38.4, 0.8, 13.6], [48.6, 0.8, 28.5],
     [17.2, 0.94, 30.9], [48.0, 0.05, 36.0], [48.6, 0.81, 7.4], [22.5, 0.05, 6.5], [30.6, 0.05, 37.0], [3.6, 1.07, 29.5],
+    // v34: the east wing and the lower floor
+    [64.5, 1.02, 5.0], [78.3, 0.78, 9.2], [66.0, 0.05, 27.5], [79.0, 0.8, 34.5], [14.0, 0.92, 45.5], [30.0, 0.05, 60.0],
+    [40.5, 0.8, 52.0], [68.0, 0.94, 45.5], [80.0, 0.9, 61.0],
   ] as [number, number, number][],
+  /** Where the dead officer's pistol can be (one per match): [x, y, z]. */
+  GUN_SPOTS: [[75.6, 0.06, 30.6], [85.2, 0.06, 42.4], [82.5, 0.06, 58.6]] as [number, number, number][],
+  /** Bullets in the pistol. */
+  AMMO: 3,
+  /** How far a shot carries (m) and how far away the Copies hear it. */
+  GUN_RANGE: 30,
+  GUN_HEAR: 45,
 } as const;
+/**
+ * Lockers you can hide in: [x, z, yaw] (metres; yaw = the way the door faces, as player yaw: forward is (−sin, −cos)).
+ * Inside, the Copy can't find you unless it saw you get in, hears you talk, or opens the door while searching.
+ */
+export const ECHO_LOCKERS: readonly [number, number, number][] = [
+  [3.38, 6.6, -Math.PI / 2], [3.38, 49.4, -Math.PI / 2], [3.38, 50.05, -Math.PI / 2], [24.5, 65.62, 0], [38.0, 45.38, Math.PI],
+  [56.0, 45.38, Math.PI], [71.62, 49.0, Math.PI / 2], [78.0, 24.38, Math.PI], [78.65, 24.38, Math.PI], [58.0, 38.62, 0],
+  [40.5, 39.38, Math.PI], [79.5, 39.38, Math.PI], [16.5, 44.62, 0], [40.5, 18.38, Math.PI], [85.5, 18.38, Math.PI],
+  [70.5, 3.38, Math.PI], [88.62, 50.0, Math.PI / 2],
+];
+/** Where you step out of a locker. */
+export function lockerFront(i: number, out = 0.85): { x: number; z: number } {
+  const [x, z, yaw] = ECHO_LOCKERS[i];
+  return { x: x - Math.sin(yaw) * out, z: z - Math.cos(yaw) * out };
+}
+export const HIDE = {
+  /** How close you must stand to the locker door to get in (m). */
+  REACH: 1.5,
+  /** A Copy that can see you from this far when you get in remembers which locker. */
+  SEEN_RANGE: 22,
+  /** Talking inside a locker: a Copy this close hears you. */
+  HEAR: 9,
+  /** A searching Copy opens a locker within this distance, sometimes. */
+  CHECK_RANGE: 3.2,
+  CHECK_CHANCE: 0.4,
+} as const;
+
+/** The dead officer's pistol: `by` = who has it (null = lying at x, y, z). */
+export interface EchoGun { x: number; y: number; z: number; by: number | null; ammo: number }
+
 /** `by`: who carries it (player number), or a negative number while the Copy has it (−copy id). */
 export interface EchoFuse { id: number; x: number; y: number; z: number; by: number | null; placed: boolean }
 
@@ -290,8 +350,14 @@ export interface EchoGoal {
   /** Players grabbed twice: gone for the rest of the match. */
   gone: number[];
   summary: EchoSummary | null;
+  /** The one pistol in the building. */
+  gun: EchoGun;
+  /** Who is hiding where: [player, locker]. */
+  hidden: [number, number][];
 }
-export type EchoAct = { type: "enter" } | { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | { type: "restart" };
+export type EchoAct =
+  | { type: "enter" } | { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | { type: "restart" }
+  | { type: "hide"; locker: number } | { type: "unhide" } | { type: "gun" } | { type: "shoot"; yaw: number; pitch: number };
 
 export interface EchoMeta {
   code: string;
@@ -337,22 +403,24 @@ export interface EchoPeerState {
   crouch: boolean;
   talk: boolean;
   radio: boolean;
+  hidden?: boolean;
+  armed?: boolean;
 }
 
 export const ECHO_TALK = 8;
 export const ECHO_RADIO = 16;
 /** The mimic speaks on Channel 4 now and then, with a stolen voice. */
-export const RADIO = { FIRST_SEC: 45, GAP_MIN: 50, GAP_MAX: 110 } as const;
+export const RADIO = { FIRST_SEC: 25, GAP_MIN: 35, GAP_MAX: 70 } as const;
 
 export function decodeEchoSnap(s: EchoSnap): EchoPeerState[] {
-  return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2, talk: (r[6] & 8) === 8, radio: (r[6] & 16) === 16 }));
+  return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2, talk: (r[6] & 8) === 8, radio: (r[6] & 16) === 16, hidden: (r[6] & 32) === 32, armed: (r[6] & 64) === 64 }));
 }
 
 // ───────── Phase 2: the mimic ─────────
 
 export const MIMIC = {
   /** Seconds after a second player arrives before mimics wake. */
-  WAKE_SEC: 75,
+  WAKE_SEC: 20,
   /** Voice pieces the room must hold before a mimic starts calling. */
   MIN_CLIPS: 3,
   WANDER: 1.3,
@@ -379,8 +447,8 @@ export const MIMIC = {
   /** A taken player comes back after this long (Phase 2 only). */
   TAKEN_SEC: 8,
   /** Longest voice piece kept (seconds) and the sample rate pieces travel at. */
-  PIECE_MAX: 3,
-  RATE: 16000,
+  PIECE_MAX: 3.5,
+  RATE: 24000,
 } as const;
 
 /**
@@ -469,10 +537,20 @@ export type EchoEvent =
   /** A voice on Channel 4 that nobody pressed the button for. `as` is whose voice it is. */
   | { type: "radio"; clips: string[]; as: number }
   | { type: "end"; result: "win" | "lose" }
+  /** Someone got into / out of a locker. */
+  | { type: "hide"; n: number; locker: number }
+  | { type: "unhide"; n: number; locker: number; x: number; z: number }
+  /** The Copy tore a locker open with someone inside. */
+  | { type: "yank"; n: number; mimic: number; locker: number }
+  | { type: "gun"; n: number }
+  /** A shot: from (x, z), toward (hx, hz) where it stopped; what it hit. */
+  | { type: "shot"; n: number; x: number; z: number; hx: number; hz: number; hy: number; ammo: number; hit: null | { copy: number } | { n: number; gone: boolean } }
   | { type: "restart"; spawns: [number, number, number][] };
 
-/** Player flags in snapshot rows (bit 4 = taken). */
+/** Player flags in snapshot rows (bit 4 = taken, 32 = hiding in a locker, 64 = holding the pistol). */
 export const ECHO_TAKEN = 4;
+export const ECHO_HIDDEN = 32;
+export const ECHO_ARMED = 64;
 
 /** Words that label a voice piece when speech-to-text is on (English + Arabic dialects). */
 export const CLIP_WORDS: Record<"call" | "here" | "found" | "panic" | "question", string[]> = {
@@ -539,6 +617,21 @@ export function muEncode(pcm: Float32Array): Uint8Array {
     const man = (s >> (exp + 3)) & 0x0f;
     out[i] = ~(sign | (exp << 4) | man) & 0xff;
   }
+  return out;
+}
+
+/** Voice pieces travel as 16-bit PCM (little-endian): clean enough that a copy sounds like the real thing. */
+export function pcmEncode(pcm: Float32Array): Uint8Array {
+  const out = new Uint8Array(pcm.length * 2);
+  const v = new DataView(out.buffer);
+  for (let i = 0; i < pcm.length; i++) v.setInt16(i * 2, Math.round(Math.max(-1, Math.min(1, pcm[i])) * 32767), true);
+  return out;
+}
+export function pcmDecode(bytes: Uint8Array): Float32Array {
+  const n = bytes.length >> 1;
+  const out = new Float32Array(n);
+  const v = new DataView(bytes.buffer, bytes.byteOffset, n * 2);
+  for (let i = 0; i < n; i++) out[i] = v.getInt16(i * 2, true) / 32767;
   return out;
 }
 

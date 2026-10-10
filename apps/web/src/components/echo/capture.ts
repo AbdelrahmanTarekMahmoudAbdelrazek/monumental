@@ -2,7 +2,7 @@ import { MIMIC } from "@monumental/shared";
 
 export interface Piece {
   id: number;
-  /** Mono, 16 kHz. */
+  /** Mono, MIMIC.RATE (24 kHz), levelled. */
   pcm: Float32Array;
   ms: number;
   peak: number;
@@ -10,10 +10,12 @@ export interface Piece {
 }
 
 const RATE = MIMIC.RATE;
-const FRAME = 320; // 20 ms at 16 kHz
-const PRE_ROLL = 6; // frames kept from just before speech starts
-const HANG = 13; // frames of quiet that end a piece (~260 ms)
-const MIN_MS = 600;
+const FRAME = RATE / 50; // 20 ms
+const PRE_ROLL = 8; // frames kept from just before speech starts (160 ms: the first consonant survives)
+const HANG = 18; // frames of quiet that end a piece (~360 ms: a short breath doesn't cut a phrase in half)
+const MIN_MS = 800;
+/** Pieces are levelled to this loudness (RMS), like a voice at talking distance. */
+const TARGET_RMS = 0.11;
 /** At least this share of a piece must be speech (not breath, a click or room noise). */
 const MIN_VOICED = 0.45;
 
@@ -31,7 +33,7 @@ registerProcessor("eh-capture", EhCapture);
 `;
 
 /**
- * Cuts my own speech into short pieces (0.4–3 s) at the pauses, on my device.
+ * Cuts my own speech into short pieces (0.8–3.5 s) at the pauses, on my device.
  * Nothing leaves this file except the finished pieces handed to `onPiece`.
  */
 export class VoiceCapture {
@@ -73,7 +75,10 @@ export class VoiceCapture {
       sp.onaudioprocess = (e) => this.push(e.inputBuffer.getChannelData(0).slice(0));
       this.node = sp;
     }
-    this.src.connect(this.node).connect(this.sink);
+    // no harsh aliasing when we drop to RATE: two gentle low-pass stages first
+    const lp1 = this.ctx.createBiquadFilter(), lp2 = this.ctx.createBiquadFilter();
+    for (const f of [lp1, lp2]) { f.type = "lowpass"; f.frequency.value = RATE * 0.45; f.Q.value = 0.6; }
+    this.src.connect(lp1).connect(lp2).connect(this.node).connect(this.sink);
   }
 
   /** Resample to 16 kHz and feed 20 ms frames to the voice detector. */
@@ -122,10 +127,15 @@ export class VoiceCapture {
     if (ms < MIN_MS || this.voiced / used.length < MIN_VOICED) return;
     const pcm = new Float32Array(used.length * FRAME);
     used.forEach((fr, i) => pcm.set(fr, i * FRAME));
-    let peak = 0;
-    for (const v of pcm) peak = Math.max(peak, Math.abs(v));
-    // gentle fade in/out against clicks
-    const fade = 160;
+    let peak = 0, sq = 0;
+    for (const v of pcm) { peak = Math.max(peak, Math.abs(v)); sq += v * v; }
+    // level it: quiet mumbles and shouts both come back at talking loudness, never clipped
+    const rms = Math.sqrt(sq / pcm.length);
+    const g = Math.min(4, TARGET_RMS / Math.max(1e-4, rms), 0.95 / Math.max(1e-4, peak));
+    for (let i = 0; i < pcm.length; i++) pcm[i] *= g;
+    peak *= g;
+    // gentle fade in/out against clicks (8 ms)
+    const fade = Math.round(RATE * 0.008);
     for (let i = 0; i < fade && i < pcm.length; i++) { pcm[i] *= i / fade; pcm[pcm.length - 1 - i] *= i / fade; }
     this.onPiece({ id: this.nextId++, pcm, ms, peak, endedAt: performance.now() });
   }

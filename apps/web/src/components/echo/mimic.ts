@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { muDecode, MIMIC } from "@monumental/shared";
+import { pcmDecode, MIMIC } from "@monumental/shared";
 import type { SoundBank } from "./sound";
 import type { BankClip } from "./voice";
 
@@ -130,11 +130,15 @@ export class MimicSound {
     const ctx = sounds.ctx;
     this.filter = ctx.createBiquadFilter();
     this.filter.type = "lowpass";
-    this.filter.frequency.value = 7000;
+    this.filter.frequency.value = 11000;
     this.gain = ctx.createGain();
     this.gain.gain.value = 0;
     this.panner = sounds.panner();
     this.filter.connect(this.gain).connect(this.panner);
+    // the same room echo a friend's voice gets
+    const send = ctx.createGain();
+    send.gain.value = 0.2;
+    this.gain.connect(send).connect(sounds.room);
 
     // slow, wet breathing: noise through a band filter, swelling in and out
     const len = ctx.sampleRate * 2;
@@ -179,7 +183,7 @@ export class MimicSound {
     const ctx = this.sounds.ctx;
     let at = ctx.currentTime + 0.02;
     for (const c of clips) {
-      const pcm = muDecode(c.bytes);
+      const pcm = pcmDecode(c.bytes);
       const buf = ctx.createBuffer(1, pcm.length, MIMIC.RATE);
       buf.getChannelData(0).set(pcm);
       const src = ctx.createBufferSource();

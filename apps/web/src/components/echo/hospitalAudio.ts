@@ -6,7 +6,12 @@ const HT = 3.2;
 const CLIPS = ["cry", "v_look_radio", "v_look_whisper", "v_here", "v_hate", "v_earth"] as const;
 type Clip = (typeof CLIPS)[number];
 const RADIO = { x: 16 * T, y: 1.0, z: 2.6 * T }; // the radio at the nurses' station
-const CRY_SPOTS: [number, number][] = [[12.5 * T, 10 * T], [7.5 * T, 2 * T], [17.5 * T, 10.5 * T], [2 * T, 10 * T]];
+const CRY_SPOTS: [number, number][] = [[12.5 * T, 10 * T], [7.5 * T, 2 * T], [17.5 * T, 10.5 * T], [2 * T, 10 * T], [63, 31.5], [46.5, 58], [24, 60], [80, 12]];
+/** Places that are never quiet: children crying where there are no children, people in pain, a dead radio still talking. */
+const ZONES: { x: number; z: number; r: number; kind: "child" | "moan" | "radio" }[] = [
+  { x: 63, z: 31.5, r: 17, kind: "child" }, { x: 37.5, z: 9, r: 14, kind: "child" }, { x: 46.5, z: 58, r: 18, kind: "moan" },
+  { x: 64, z: 65.5, r: 14, kind: "moan" }, { x: 40, z: 31, r: 12, kind: "moan" }, { x: 76, z: 32, r: 14, kind: "radio" }, { x: 12, z: 58, r: 14, kind: "moan" },
+];
 // a little original tune for the music box in the children's ward
 const TUNE = [76, 72, 74, 71, 72, 69, 71, 68, 69, 72, 76, 81, 79, 76, 77, 74, 76];
 
@@ -26,7 +31,11 @@ export class HospitalAudio {
   private buf: Partial<Record<Clip, AudioBuffer>> = {};
   private nodes: AudioScheduledSourceNode[] = [];
   private noiseCache = new Map<string, AudioBuffer>();
-  private next = { event: 0, music: 0, drip: 0, voice: 0, cry: 0 };
+  private next = { event: 0, music: 0, drip: 0, voice: 0, cry: 0, zone: 0, gliss: 0, boom: 0, pad: 0, scream: 0 };
+  private padGain!: GainNode;
+  private highGain!: GainNode;
+  private padOsc: OscillatorNode[] = [];
+  private danger = 0;
   private voiceOrder: string[] = [];
   private heart = 0;
   private lastBeat = 0;
@@ -61,7 +70,8 @@ export class HospitalAudio {
     this.osc("sawtooth", 100, bf); this.osc("square", 120, bf); bf.connect(this.buzz).connect(this.buzzPan);
     this.beat = ac.createGain(); this.beat.connect(this.bus);
     const now = ac.currentTime;
-    this.next = { event: now + 4, music: now + 30, drip: now + 1, voice: now + 12, cry: now + 22 };
+    this.next = { event: now + 4, music: now + 30, drip: now + 1, voice: now + 12, cry: now + 22, zone: now + 6, gliss: now + 25, boom: now + 40, pad: now, scream: now + 70 };
+    this.startScore();
     for (const name of CLIPS) {
       fetch(`/echo/sfx/${name}.mp3`).then((r) => r.arrayBuffer()).then((b) => ac.decodeAudioData(b)).then((b) => { this.buf[name] = b; }).catch(() => {});
     }
@@ -96,7 +106,29 @@ export class HospitalAudio {
       this.tone("triangle", 88, this.beat, now, 0.55 * this.heart, 0.16);
       this.tone("triangle", 76, this.beat, now + 0.22, 0.4 * this.heart, 0.18);
     }
+    this.danger = danger;
+    this.score(now, danger, torch);
     if (quiet) return;
+    // the nearest place that is never quiet
+    if (now > this.next.zone) {
+      const z = ZONES.map((q) => ({ q, d: Math.hypot(q.x - ears.x, q.z - ears.z) })).filter((o) => o.d < o.q.r).sort((a, b) => a.d - b.d)[0];
+      this.next.zone = now + (z ? 5 + Math.random() * 8 : 3);
+      if (z) {
+        const a = Math.random() * Math.PI * 2, r = Math.random() * 3;
+        const p = this.panner(z.q.x + Math.cos(a) * r, z.q.kind === "child" ? 0.9 : 0.6, z.q.z + Math.sin(a) * r, 2.2);
+        if (z.q.kind === "child") { if (Math.random() < 0.35) this.clip("cry", p, 1.2, 0.95 + Math.random() * 0.15); else this.childCry(p); }
+        else if (z.q.kind === "moan") this.moan(p);
+        else { this.staticBurst(p); if (Math.random() < 0.5) this.timers.push(window.setTimeout(() => this.clip("v_look_radio", p, 1.6, 0.9), 600)); }
+        this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 9000));
+      }
+    }
+    // far away, someone screams
+    if (now > this.next.scream) {
+      this.next.scream = now + 55 + Math.random() * 70;
+      const a = Math.random() * Math.PI * 2, far = 22 + Math.random() * 14;
+      const p = this.panner(ears.x + Math.cos(a) * far, 1.4, ears.z + Math.sin(a) * far, 4);
+      this.scream(p);
+    }
     if (now > this.next.drip) { this.next.drip = now + 0.8 + Math.random() * 3; this.drip(ears); }
     if (now > this.next.music) { this.next.music = now + 45 + Math.random() * 40; this.musicBox(); }
     if (now > this.next.voice) { this.next.voice = now + 18 + Math.random() * 20; this.voiceEvent(ears); }
@@ -104,21 +136,21 @@ export class HospitalAudio {
       this.next.cry = now + 35 + Math.random() * 30;
       const far = CRY_SPOTS.filter((q) => Math.hypot(q[0] - ears.x, q[1] - ears.z) > 9);
       const q = far[Math.floor(Math.random() * far.length)];
-      if (q) this.clip("cry", this.panner(q[0], 1.0, q[1], 3), 1.4, 0.92 + Math.random() * 0.12);
+      if (q) { const p = this.panner(q[0], 1.0, q[1], 3); if (Math.random() < 0.5) this.clip("cry", p, 1.4, 0.92 + Math.random() * 0.12); else this.childCry(p); }
     }
     if (now > this.next.event) {
       this.next.event = now + 6 + Math.random() * 10;
       const a = Math.random() * Math.PI * 2, far = 7 + Math.random() * 12;
       const p = this.panner(ears.x + Math.cos(a) * far, 1.2, ears.z + Math.sin(a) * far, 2.5);
       const r = Math.random();
-      if (r < 0.24) this.knocks(p); else if (r < 0.44) this.groan(p); else if (r < 0.58) this.squeak(p); else if (r < 0.7) this.slam(p);
+      if (r < 0.2) this.knocks(p); else if (r < 0.34) this.groan(p); else if (r < 0.44) this.moan(p); else if (r < 0.58) this.squeak(p); else if (r < 0.7) this.slam(p);
       else if (r < 0.82) this.staticBurst(this.panner(RADIO.x, RADIO.y, RADIO.z, 2));
       else { const b = ears.yaw; this.breath(this.panner(ears.x + Math.sin(b) * 1.6, 1.55, ears.z + Math.cos(b) * 1.6, 1)); } // right behind you
     }
   }
 
   /** Goal sounds: a fuse picked up / dropped / installed, the power coming back, the end. */
-  sfx(kind: "pickup" | "drop" | "install" | "power" | "win" | "lose" | "call" | "lift" | "reveal") {
+  sfx(kind: "pickup" | "drop" | "install" | "power" | "win" | "lose" | "call" | "lift" | "reveal" | "powerdown") {
     if (!this.started) return;
     const ac = this.ctx, t0 = ac.currentTime, out = this.bus;
     if (kind === "pickup") { this.tone("triangle", 880, out, t0, 0.12, 0.12); this.tone("triangle", 1320, out, t0 + 0.08, 0.1, 0.2); }
@@ -130,6 +162,13 @@ export class HospitalAudio {
       for (let i = 0; i < 2; i++) this.tone("sine", 1318.5, out, t0 + 3 + i * 0.35, 0.12, 1.4); // the lift bell
     }
     if (kind === "call") { this.tone("square", 660, out, t0, 0.05, 0.12); this.thud(out, t0 + 0.4, 50, 0.6); this.tone("sawtooth", 48, out, t0 + 0.4, 0.07, 6); } // the button, then the motor far above
+    if (kind === "powerdown") {
+      // the hum winds down, a relay clunks, far away something answers in the dark
+      const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.setValueAtTime(100, t0); o.frequency.exponentialRampToValueAtTime(28, t0 + 1.4);
+      const f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 500; const g = ac.createGain(); this.env(g, t0, 0.02, 0.16, 1.4); o.connect(f).connect(g).connect(out); o.start(t0); o.stop(t0 + 1.6);
+      this.thud(out, t0 + 0.05, 55, 0.7);
+      this.burst(out, t0 + 0.03, 0.08, "highpass", 3000, 1, 0.25);
+    }
     if (kind === "lift") { this.thud(out, t0, 60, 0.9); for (let i = 0; i < 2; i++) this.tone("sine", 1318.5, out, t0 + 0.3 + i * 0.35, 0.14, 1.4); }
     if (kind === "reveal") {
       // a wet tearing and a scream, the lights blowing
@@ -154,6 +193,114 @@ export class HospitalAudio {
     }
     this.burst(p, t0 + 2.3, 0.1, "highpass", 4000, 1, 0.3);
     this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 3500));
+  }
+
+  /** A gunshot from (x, y, z): the crack, the slap back off the tiles, and (close by) the ringing in your ears. */
+  gunshot(x: number, y: number, z: number, d: number) {
+    if (!this.started) return;
+    const ac = this.ctx, t0 = ac.currentTime, p = this.panner(x, y, z, 6);
+    const near = Math.max(0, 1 - d / 40);
+    this.burst(p, t0, 0.09, "highpass", 1800, 0.7, 1.4 * (0.3 + near), 0.0008);
+    this.burst(p, t0, 0.35, "lowpass", 900, 0.8, 1.1 * (0.3 + near), 0.001);
+    this.thud(p, t0, 48, 1);
+    const s = ac.createGain(); s.gain.value = 1.4; p.connect(s).connect(this.send);
+    if (d < 7) { const o = ac.createOscillator(); o.frequency.value = 3900 + Math.random() * 300; const g = ac.createGain(); this.env(g, t0 + 0.05, 0.05, 0.035 * (1 - d / 7), 4); o.connect(g).connect(this.out); o.start(t0); o.stop(t0 + 4.3); }
+    this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 6000));
+  }
+  /** A bullet hitting something soft. */
+  impact(x: number, y: number, z: number) { if (!this.started) return; const p = this.panner(x, y, z, 2), t0 = this.ctx.currentTime; this.burst(p, t0, 0.12, "lowpass", 500, 1, 0.9, 0.002); this.thud(p, t0, 80, 0.6); }
+  /** A locker door: shut quietly, or torn open. */
+  locker(x: number, z: number, hard: boolean) {
+    if (!this.started) return;
+    const p = this.panner(x, 1.2, z, hard ? 4 : 1.5), t0 = this.ctx.currentTime;
+    for (const [f, a] of [[318, 1], [547, 0.6], [893, 0.45], [1311, 0.3], [2033, 0.2]]) this.tone("triangle", f * (hard ? 0.9 : 1), p, t0, (hard ? 0.18 : 0.05) * a, hard ? 1.6 : 0.5);
+    this.thud(p, t0, hard ? 60 : 120, hard ? 1 : 0.25);
+    if (hard) this.burst(p, t0, 0.6, "bandpass", 2600, 2, 0.3, 0.004);
+    this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 3000));
+  }
+
+  // ── the score: a cluster that never resolves, strings scraping, something huge falling far below ──
+  private startScore() {
+    const ac = this.ctx;
+    const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 900; lp.Q.value = 0.7;
+    this.padGain = ac.createGain(); this.padGain.gain.value = 0; lp.connect(this.padGain); this.padGain.connect(this.bus); this.padGain.connect(this.send);
+    for (const f of [73.4, 77.8, 103.8, 146.8, 155.6]) for (const det of [-7, 6]) { const o = this.osc("sawtooth", f, lp); o.detune.value = det; this.padOsc.push(o); }
+    // the high strings: a minor second that sits on your nerves
+    const hp = ac.createBiquadFilter(); hp.type = "bandpass"; hp.frequency.value = 1300; hp.Q.value = 1.2;
+    this.highGain = ac.createGain(); this.highGain.gain.value = 0; hp.connect(this.highGain); this.highGain.connect(this.send); this.highGain.connect(this.bus);
+    for (const f of [1174.7, 1244.5, 1661.2]) { const o = this.osc("sawtooth", f, hp); const v = this.osc("sine", 5.3 + Math.random()); const vg = ac.createGain(); vg.gain.value = 6; v.connect(vg).connect(o.frequency); }
+  }
+  private score(now: number, danger: number, torch: boolean) {
+    if (!this.padGain) return;
+    if (now > this.next.pad) {
+      // swells in and out; the chord slides somewhere worse
+      this.next.pad = now + 7 + Math.random() * 9;
+      const lvl = (0.012 + Math.random() * 0.03) * (1 + danger * 2.5) * (torch ? 1 : 1.4);
+      this.padGain.gain.setTargetAtTime(lvl, now, 2.5);
+      const k = [1, 0.944, 1.059, 0.891, 1.122][Math.floor(Math.random() * 5)];
+      this.padOsc.forEach((o, i) => o.frequency.setTargetAtTime([73.4, 77.8, 103.8, 146.8, 155.6][Math.floor(i / 2)] * k, now, 4));
+    }
+    this.highGain.gain.setTargetAtTime(danger > 0.25 ? 0.012 + danger * 0.03 : 0.0015 + 0.002 * Math.max(0, Math.sin(now * 0.07)), now, danger > 0.25 ? 0.15 : 3);
+    if (now > this.next.gliss) {
+      this.next.gliss = now + 22 + Math.random() * 30;
+      // a violin bow dragged across one string, too slowly
+      const ac = this.ctx, o = ac.createOscillator(); o.type = "sawtooth"; const up = Math.random() < 0.5;
+      o.frequency.setValueAtTime(up ? 900 : 2100, now); o.frequency.exponentialRampToValueAtTime(up ? 2300 : 700, now + 4);
+      const v = ac.createOscillator(); v.frequency.value = 6.5; const vg = ac.createGain(); vg.gain.value = 18; v.connect(vg).connect(o.frequency);
+      const f = ac.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 1800; f.Q.value = 2.5;
+      const g = ac.createGain(); this.env(g, now, 1.6, 0.03, 3.2); o.connect(f).connect(g); g.connect(this.send); g.connect(this.bus);
+      o.start(now); v.start(now); o.stop(now + 5); v.stop(now + 5);
+    }
+    if (now > this.next.boom) {
+      this.next.boom = now + 45 + Math.random() * 45;
+      // a swell of air rushing in... then something enormous hits the floor far below
+      this.burst(this.send, now, 2.8, "lowpass", 1400, 0.5, 0.14, 2.6);
+      this.thud(this.send, now + 2.9, 32, 1); this.thud(this.bus, now + 2.9, 32, 0.6);
+    }
+  }
+
+  /** A synthetic voice: a buzzing source shaped by vowel formants, its pitch drawn along a contour. */
+  private voice(p: AudioNode, t0: number, dur: number, f0: number, contour: [number, number][], formants: [number, number, number][], peak: number, opts: { vib?: number; breath?: number; rough?: number; attack?: number } = {}) {
+    const ac = this.ctx;
+    const o = ac.createOscillator(); o.type = "sawtooth";
+    o.frequency.setValueAtTime(f0 * contour[0][1], t0);
+    for (const [k, m] of contour.slice(1)) o.frequency.linearRampToValueAtTime(f0 * m, t0 + k * dur);
+    const v = ac.createOscillator(); v.frequency.value = 5 + Math.random() * 2.5; const vg = ac.createGain(); vg.gain.value = f0 * (opts.vib ?? 0.025); v.connect(vg).connect(o.frequency);
+    const j = ac.createOscillator(); j.frequency.value = 13 + Math.random() * 5; const jg = ac.createGain(); jg.gain.value = f0 * 0.012; j.connect(jg).connect(o.frequency);
+    const env = ac.createGain(); this.env(env, t0, opts.attack ?? Math.min(0.25, dur * 0.2), peak, dur);
+    let src: AudioNode = o;
+    if (opts.rough) { const ws = ac.createWaveShaper(); const n = 512, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / n) * 2 - 1; c[i] = Math.tanh(x * (1 + opts.rough * 6)); } ws.curve = c; o.connect(ws); src = ws; }
+    for (const [f, q, gn] of formants) { const b = ac.createBiquadFilter(); b.type = "bandpass"; b.frequency.value = f; b.Q.value = q; const g = ac.createGain(); g.gain.value = gn; src.connect(b).connect(g).connect(env); }
+    if (opts.breath) { const n = ac.createBufferSource(); n.buffer = this.noise(Math.ceil(dur + 1), false); const b = ac.createBiquadFilter(); b.type = "bandpass"; b.frequency.value = formants[1][0]; b.Q.value = 1.5; const g = ac.createGain(); g.gain.value = opts.breath; n.connect(b).connect(g).connect(env); n.start(t0); n.stop(t0 + dur + 0.6); }
+    env.connect(p);
+    o.start(t0); v.start(t0); j.start(t0); const end = t0 + dur + 0.5; o.stop(end); v.stop(end); j.stop(end);
+  }
+  /** A small child sobbing: wails that rise and break, gasps in between. */
+  private childCry(p: AudioNode) {
+    const t0 = this.ctx.currentTime; let t = t0;
+    const f0 = 430 + Math.random() * 120, n = 3 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < n; i++) {
+      const d = 0.55 + Math.random() * 0.9;
+      this.voice(p, t, d, f0 * (1 + (Math.random() - 0.5) * 0.1), [[0, 0.85], [0.2, 1.18], [0.6, 1.05], [1, 0.72]], [[1100, 6, 1.2], [1900, 8, 0.7], [3300, 9, 0.35]], 0.22, { vib: 0.04, breath: 0.25, rough: 0.35, attack: 0.06 });
+      t += d + 0.05;
+      // the catch of breath
+      this.burst(p, t, 0.22, "bandpass", 2400, 1.5, 0.06, 0.12);
+      t += 0.28 + Math.random() * 0.35;
+    }
+  }
+  /** Someone in pain: a long low groan that swells, catches, and fades. */
+  private moan(p: AudioNode) {
+    const t0 = this.ctx.currentTime, female = Math.random() < 0.4, f0 = female ? 190 + Math.random() * 40 : 98 + Math.random() * 30;
+    const d = 1.6 + Math.random() * 1.8;
+    const vowel: [number, number, number][] = Math.random() < 0.5 ? [[480, 7, 1.3], [820, 8, 0.7], [2600, 8, 0.15]] : [[640, 7, 1.2], [1100, 8, 0.6], [2500, 8, 0.15]];
+    this.voice(p, t0, d, f0, [[0, 0.95], [0.3, 1.1], [0.55, 1.02], [0.7, 1.16], [1, 0.82]], vowel, 0.35, { vib: 0.03, breath: 0.35, rough: 0.25, attack: 0.5 });
+    if (Math.random() < 0.5) this.voice(p, t0 + d + 0.6, d * 0.6, f0 * 1.1, [[0, 1], [0.4, 1.25], [1, 0.9]], vowel, 0.25, { vib: 0.05, breath: 0.4, rough: 0.4, attack: 0.15 });
+  }
+  /** A scream, far off. */
+  private scream(p: AudioNode) {
+    const t0 = this.ctx.currentTime, f0 = 620 + Math.random() * 260, d = 0.9 + Math.random() * 0.8;
+    this.voice(p, t0, d, f0, [[0, 0.8], [0.12, 1.12], [0.7, 1.0], [1, 0.62]], [[950, 5, 1.2], [1550, 6, 0.8], [2900, 7, 0.4]], 0.5, { vib: 0.05, breath: 0.4, rough: 0.8, attack: 0.03 });
+    this.timers.push(window.setTimeout(() => { try { (p as PannerNode).disconnect(); } catch { /* gone */ } }, 4000));
   }
 
   // ── building blocks ──

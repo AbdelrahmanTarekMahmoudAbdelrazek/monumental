@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
-import { COPY, ECHO, ECHO_ROOMS, GOAL, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoPath, type EchoTeenId, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
+import { COPY, ECHO, ECHO_LOCKERS, ECHO_ROOMS, GOAL, HIDE, lockerFront, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoPath, type EchoTeenId, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
 import { buildLevel, flickerLights, type HospitalLights } from "./hospital";
 import { HospitalAudio } from "./hospitalAudio";
@@ -9,6 +9,7 @@ import { Voice, voiceMix, type PeerStatus } from "./voice";
 import { Avatar } from "./avatars";
 import { VoiceCapture, Transcriber } from "./capture";
 import { MimicFigure, MimicSound } from "./mimic";
+import { NOTES } from "./story";
 
 interface MimicView {
   fig: MimicFigure;
@@ -22,6 +23,8 @@ interface MimicView {
 }
 
 type Rapier = typeof RAPIER_NS;
+/** What E / Use does: server actions, or reading something (local). */
+export type EchoUse = { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | { type: "hide"; locker: number } | { type: "unhide" } | { type: "gun" } | { type: "read"; note: number };
 
 export interface EchoHud {
   fps: number;
@@ -59,6 +62,14 @@ export interface EchoHud {
   /** Seconds until the lift arrives (null = not called / already here). */
   liftIn: number | null;
   liftHere: boolean;
+  /** Hiding in a locker. */
+  hidden: boolean;
+  /** I hold the pistol: bullets left. */
+  ammo: number | null;
+  /** A note / phone / radio log within reach (its id), for E. */
+  note: number | null;
+  /** Just got shot (0..1 fading). */
+  hurt: number;
 }
 
 export interface EchoNet {
@@ -129,7 +140,16 @@ export class EchoEngine {
   private fuses = new Map<number, { g: THREE.Group; glow: THREE.MeshStandardMaterial }>();
   private doorOpen = 0;
   /** What E / Use would do right now. */
-  private act: { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | null = null;
+  private act: EchoUse | null = null;
+  private hiddenIn: number | null = null;
+  private gunWorld: THREE.Group | null = null;
+  private gunHeld: THREE.Group | null = null;
+  private muzzle: THREE.PointLight | null = null;
+  private muzzleSprite: THREE.Mesh | null = null;
+  private flashUntil = 0;
+  private recoil = 0;
+  private hurtAt = 0;
+  private hits: THREE.Mesh[] = [];
   private avatars = new Map<number, Avatar>();
   private remoteSteps = new Map<number, { panner: PannerNode; gain: GainNode; phase: number; lx: number; lz: number }>();
   private hist = new Map<number, EchoPeerState[]>();
@@ -387,7 +407,34 @@ export class EchoEngine {
       const h = v?.hist[v.hist.length - 1];
       if (h) { const d = Math.hypot(h.x - this.cur.x, h.z - this.cur.z); if (d < 16) { this.shake = Math.max(this.shake, 1 - d / 16); this.hospital?.sfx("reveal"); } }
     }
+    if (e.type === "hide") {
+      const [lx, lz] = ECHO_LOCKERS[e.locker];
+      this.hospital?.locker(lx, lz, false);
+      if (e.n === this.opts.me) { this.hiddenIn = e.locker; this.yaw = ECHO_LOCKERS[e.locker][2]; this.pitch = 0; this.cur.set(lx, this.cur.y, lz); this.prev.copy(this.cur); }
+    }
+    if (e.type === "unhide") {
+      const [lx, lz] = ECHO_LOCKERS[e.locker];
+      this.hospital?.locker(lx, lz, false);
+      if (e.n === this.opts.me) { this.hiddenIn = null; this.teleport(e.x, e.z); this.yaw = ECHO_LOCKERS[e.locker][2]; }
+    }
+    if (e.type === "yank") {
+      const [lx, lz] = ECHO_LOCKERS[e.locker];
+      this.hospital?.locker(lx, lz, true);
+      const d = Math.hypot(lx - this.cur.x, lz - this.cur.z); if (d < 14) this.shake = Math.max(this.shake, 1 - d / 14);
+    }
+    if (e.type === "gun" && e.n === this.opts.me) this.sounds.click();
+    if (e.type === "shot") {
+      const d = Math.hypot(e.x - this.cur.x, e.z - this.cur.z);
+      if (e.n !== this.opts.me) { this.hospital?.gunshot(e.x, 1.5, e.z, d); if (d < 10) this.shake = Math.max(this.shake, 0.3 * (1 - d / 10)); }
+      this.markHit(e.hx, e.hy, e.hz, !!e.hit);
+      if (e.hit) this.hospital?.impact(e.hx, e.hy, e.hz);
+      if (e.hit && "n" in e.hit && e.hit.n === this.opts.me) { this.hurtAt = performance.now(); this.shake = 1; this.sounds.sting(); if (e.hit.gone) { this.gone = true; this.takenUntil = Infinity; } }
+      if (e.hit && "copy" in e.hit) this.mimics.get(e.hit.copy)?.snd.shriek();
+    }
     if (e.type === "restart") {
+      this.hiddenIn = null;
+      for (const m of this.hits) { this.scene.remove(m); m.geometry.dispose(); }
+      this.hits = [];
       const mine = e.spawns.find((s) => s[0] === this.opts.me);
       if (mine) this.teleport(mine[1], mine[2]);
       this.takenUntil = 0;
@@ -410,6 +457,7 @@ export class EchoEngine {
       this.mimics.get(e.mimic)?.snd.shriek();
     } else if (e.type === "taken") {
       if (e.n === this.opts.me) {
+        this.hiddenIn = null;
         this.takenUntil = e.gone ? Infinity : performance.now() + COPY.BACK_SEC * 1000;
         this.gone = !!e.gone;
         this.startScare(e.mimic);
@@ -447,6 +495,25 @@ export class EchoEngine {
     if (this.isTaken) return;
     this.yaw -= dx * this.sensitivity;
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - dy * this.sensitivity));
+    // through the slits of a locker door: only a little way left and right
+    if (this.hiddenIn !== null) {
+      const base = ECHO_LOCKERS[this.hiddenIn][2], d = Math.atan2(Math.sin(this.yaw - base), Math.cos(this.yaw - base));
+      this.yaw = base + Math.max(-0.55, Math.min(0.55, d));
+      this.pitch = Math.max(-0.35, Math.min(0.3, this.pitch));
+    }
+  }
+
+  /** Fire the pistol (if I have it): local flash and kick now; the server decides what it hit. */
+  shoot(): { yaw: number; pitch: number } | null {
+    const g = this.goal?.gun;
+    if (!g || g.by !== this.opts.me || this.isTaken || this.hiddenIn !== null || this.goal?.result) return null;
+    if (g.ammo <= 0) { this.sounds.click(); return null; }
+    const aim = { yaw: this.yaw, pitch: this.pitch };
+    this.flashUntil = performance.now() + 70;
+    this.recoil = 1;
+    this.shake = Math.max(this.shake, 0.35);
+    this.hospital?.gunshot(this.cur.x, 1.5, this.cur.z, 0);
+    return aim;
   }
 
   toggleTorch() {
@@ -475,6 +542,7 @@ export class EchoEngine {
   // ───────── one physics step (60 per second) ─────────
   private physics(dt: number) {
     const k = this.keys;
+    if (this.hiddenIn !== null) { this.prev.copy(this.cur); this.vel.set(0, 0, 0); this.realSpeed = 0; return; }
     const frozen = this.isTaken;
     let fx = frozen ? 0 : (k.f ? 1 : 0) - (k.b ? 1 : 0) - this.stick.y;
     let sx = frozen ? 0 : (k.r ? 1 : 0) - (k.l ? 1 : 0) + this.stick.x;
@@ -553,24 +621,37 @@ export class EchoEngine {
     const sh = this.shake * this.shake * 0.06;
     this.camera.position.set(px + cos * bobX + (Math.random() - 0.5) * sh, feet + this.eye + bobY - slump * 1.2 + (Math.random() - 0.5) * sh, pz - sin * bobX);
     this.camera.rotation.set((scared ? 0 : this.pitch) + slump * 0.9 + (Math.random() - 0.5) * sh * 0.5, this.yaw, -strafe * 0.008 + slump * 0.6 + (Math.random() - 0.5) * sh * 0.5, "YXZ");
+    if (this.hiddenIn !== null) {
+      const [lx, lz, ly] = ECHO_LOCKERS[this.hiddenIn];
+      this.camera.position.set(lx + Math.sin(ly) * 0.08, 1.58 + Math.sin(now * 0.0021) * 0.004, lz + Math.cos(ly) * 0.08);
+    }
+    // the pistol kicks
+    if (this.recoil > 0) { this.recoil = Math.max(0, this.recoil - dt * 6); this.camera.rotation.x += this.recoil * 0.06; }
     this.camera.updateMatrixWorld();
 
     // ── torch follows the head with a little lag, like a real hand ──
     const off = new THREE.Vector3(0.2, -0.2, -0.15).applyQuaternion(this.camera.quaternion);
     this.torchRig.position.copy(this.camera.position).add(off);
     this.torchRig.quaternion.slerp(this.camera.quaternion, 1 - Math.exp(-dt * 16));
-    this.torch.intensity = this.torchOn ? 75 * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
+    this.torch.intensity = this.torchOn && this.hiddenIn === null ? 75 * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
 
+    if (this.meta?.night?.awake && !this.goal?.result) {
+      if (now > this.blackoutNext) {
+        if (this.blackoutNext) { this.blackout = { x: px, z: pz, until: now + 3500 + Math.random() * 3500 }; this.hospital?.sfx("powerdown"); }
+        this.blackoutNext = now + 40000 + Math.random() * 35000;
+      }
+    } else this.blackoutNext = 0;
     flickerLights(this.lights, now / 1000, px, pz, this.fear());
     this.hospital?.update({ x: px, y: this.camera.position.y, z: pz, yaw: this.yaw }, this.torchOn, this.lights.sources, now / 1000, this.isTaken, this.danger);
     this.updateGoal(dt, now / 1000, px, pz);
+    this.updateGun(now);
 
     // ── friends, shown 0.12 s in the past so their movement is smooth ──
     const rt = this.tOff !== null ? now + this.tOff - INTERP_MS : 0;
     const others = new Map<number, { x: number; y: number; z: number }>();
     for (const [num, a] of this.avatars) {
       const s = sample(this.hist.get(num) ?? [], rt);
-      if (!s || this.takenSet.has(num)) { a.root.visible = false; continue; }
+      if (!s || this.takenSet.has(num) || s.hidden) { a.root.visible = false; if (s?.hidden) others.set(num, { x: s.x, y: s.y, z: s.z }); continue; }
       a.root.visible = true;
       const d = Math.hypot(s.x - px, s.z - pz);
       const seen = d < 12 && echoWallsBetween(px, pz, s.x, s.z) === 0;
@@ -681,7 +762,7 @@ export class EchoEngine {
       if (lvl > 0.15) this.talkUntil = now + 350;
       const onAir = this.keys.radio && !!this.voice.hasMic && !this.voice.muted && !this.isTaken;
       if (onAir !== this.wasOnAir) { this.wasOnAir = onAir; this.voice.radio.squelch(onAir); }
-      this.opts.net.sendState({ x: px, y: feet, z: pz, yaw: this.yaw, pitch: this.pitch, torch: this.torchOn, crouch: crouching, talk: now < this.talkUntil, radio: onAir, seq: ++this.seq });
+      this.opts.net.sendState({ x: px, y: feet, z: pz, yaw: this.yaw, pitch: this.pitch, torch: this.torchOn && this.hiddenIn === null, crouch: crouching, talk: now < this.talkUntil, radio: onAir, seq: ++this.seq });
     }
 
     this.adaptQuality();
@@ -703,9 +784,13 @@ export class EchoEngine {
 
   private cuttersUsed = false;
   private danger = 0;
+  /** Now and then the power dips around you: every light in reach dies for a few seconds. */
+  private blackout: { x: number; z: number; until: number } | null = null;
+  private blackoutNext = 0;
   /** Where the lights go wrong: dead around a revealed creature, stuttering near a disguised one. */
   private fear() {
     const out: { x: number; z: number; r: number; kill: boolean }[] = [];
+    if (this.blackout && performance.now() < this.blackout.until) out.push({ x: this.blackout.x, z: this.blackout.z, r: 24, kill: true });
     for (const v of this.mimics.values()) {
       const h = v.hist[v.hist.length - 1];
       if (!h || h.state === "dormant") continue;
@@ -811,7 +896,7 @@ export class EchoEngine {
       taken: Math.max(0, Math.ceil((this.takenUntil - now) / 1000)),
       pieces: [...this.voice.bank.keys()].filter((k) => k.startsWith(`${this.opts.me}:`)).length,
       room: ECHO_ROOMS[echoTile(echoTileOf(this.cur.x), echoTileOf(this.cur.z))]?.name ?? "",
-      act: this.act ? (this.act.type === "pickup" ? "pry the fuse out" : this.act.type === "call" ? "call the lift" : "put the fuse in") : null,
+      act: this.act ? ({ pickup: "pry the fuse out", call: "call the lift", install: "put the fuse in", hide: "hide in the locker", unhide: "get out", gun: "take the pistol", read: "read" } as const)[this.act.type] + (this.act.type === "read" ? `: ${NOTES[this.act.note]?.title ?? ""}` : "") : null,
       carrying: !!this.goal?.fuses.some((f) => f.by === this.opts.me),
       onAir: [...(this.wasOnAir ? [0] : []), ...this.onAir],
       fakeAir: this.fakeAir && this.fakeAir.until > now ? this.fakeAir.as : null,
@@ -823,6 +908,10 @@ export class EchoEngine {
       pry: this.pryProgress(),
       liftIn: this.liftIn(),
       liftHere: this.liftHere(),
+      hidden: this.hiddenIn !== null,
+      ammo: this.goal?.gun?.by === this.opts.me ? this.goal.gun.ammo : null,
+      note: this.noteNear,
+      hurt: Math.max(0, 1 - (now - this.hurtAt) / 1600),
     });
   }
 
@@ -865,13 +954,73 @@ export class EchoEngine {
     v.liftArrow.color.set(g.calledAt ? (Math.sin(t * (this.liftHere() ? 2 : 6)) > 0 ? 0xffb040 : 0x3a1a10) : g.power ? 0x6a3010 : 0x3a1a10);
     // what can I do right here?
     this.act = null;
-    if (g.result || this.isTaken || !g.startedAt) return;
+    this.noteNear = null;
+    if (g.result || this.isTaken) return;
+    if (this.hiddenIn !== null) { this.act = { type: "unhide" }; return; }
+    // something to read: close, and roughly in front of me
+    let nb = 1.8;
+    for (const n of NOTES) {
+      const d = Math.hypot(n.x - px, n.z - pz);
+      if (d > nb) continue;
+      const away = d < 0.3 ? 0 : Math.acos(Math.max(-1, Math.min(1, ((n.x - px) * -Math.sin(this.yaw) + (n.z - pz) * -Math.cos(this.yaw)) / d)));
+      if (away < 1.2) { nb = d; this.noteNear = n.id; }
+    }
+    if (!g.startedAt) { if (this.noteNear !== null) this.act = { type: "read", note: this.noteNear }; return; }
     if (g.pry.some((p) => p[0] === this.opts.me)) return;
-    if (g.power && !g.calledAt && Math.hypot(GOAL.LIFT.x - px, GOAL.LIFT.z - pz) < GOAL.LIFT_R + 1.3) { this.act = { type: "call" }; return; }
     const mine = g.fuses.find((f) => f.by === this.opts.me);
-    if (mine) { if (Math.hypot(GOAL.BOX.x - px, GOAL.BOX.z - pz) < GOAL.REACH) this.act = { type: "install" }; return; }
-    let best: number = GOAL.REACH;
-    for (const f of g.fuses) { if (f.placed || f.by !== null) continue; const d = Math.hypot(f.x - px, f.z - pz); if (d < best) { best = d; this.act = { type: "pickup", fuse: f.id }; } }
+    if (g.power && !g.calledAt && Math.hypot(GOAL.LIFT.x - px, GOAL.LIFT.z - pz) < GOAL.LIFT_R + 1.3) this.act = { type: "call" };
+    else if (mine && Math.hypot(GOAL.BOX.x - px, GOAL.BOX.z - pz) < GOAL.REACH) this.act = { type: "install" };
+    else if (!mine) { let best: number = GOAL.REACH; for (const f of g.fuses) { if (f.placed || f.by !== null) continue; const d = Math.hypot(f.x - px, f.z - pz); if (d < best) { best = d; this.act = { type: "pickup", fuse: f.id }; } } }
+    if (this.act) return;
+    if (g.gun && g.gun.by === null && Math.hypot(g.gun.x - px, g.gun.z - pz) < GOAL.REACH) { this.act = { type: "gun" }; return; }
+    if (this.noteNear !== null && nb < 1.2) { this.act = { type: "read", note: this.noteNear }; return; }
+    let lb: number = HIDE.REACH;
+    ECHO_LOCKERS.forEach((_, i) => { if (g.hidden?.some((h) => h[1] === i)) return; const f = lockerFront(i); const d = Math.hypot(f.x - px, f.z - pz); if (d < lb) { lb = d; this.act = { type: "hide", locker: i }; } });
+    if (!this.act && this.noteNear !== null) this.act = { type: "read", note: this.noteNear };
+  }
+  private noteNear: number | null = null;
+
+  /** The pistol: lying by a dead officer, in my hand, or in someone else's. */
+  private updateGun(now: number) {
+    const g = this.goal?.gun;
+    if (!g) return;
+    const build = () => {
+      const grp = new THREE.Group();
+      // unlit: right in front of the torch a lit gun would just glare white
+      const dark = new THREE.MeshBasicMaterial({ color: 0x232629 });
+      const grip = new THREE.MeshBasicMaterial({ color: 0x15120f });
+      const slide = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.036, 0.19), dark); slide.position.set(0, 0.03, -0.03); grp.add(slide);
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.02, 0.15), dark); frame.position.set(0, 0.004, -0.02); grp.add(frame);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.11, 0.045), grip); handle.position.set(0, -0.045, 0.045); handle.rotation.x = 0.28; grp.add(handle);
+      const guard = new THREE.Mesh(new THREE.TorusGeometry(0.018, 0.004, 4, 10, Math.PI), dark); guard.position.set(0, -0.01, 0.0); guard.rotation.set(Math.PI, Math.PI / 2, 0); grp.add(guard);
+      return grp;
+    };
+    if (!this.gunWorld) { this.gunWorld = build(); this.gunWorld.scale.setScalar(1.15); this.scene.add(this.gunWorld); }
+    if (!this.gunHeld) {
+      this.gunHeld = build(); this.camera.add(this.gunHeld);
+      this.muzzle = new THREE.PointLight(0xffc27a, 0, 9, 2); this.camera.add(this.muzzle); this.muzzle.position.set(0.14, -0.08, -0.6);
+      this.muzzleSprite = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.16), new THREE.MeshBasicMaterial({ color: 0xffd28a, transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending }));
+      this.muzzleSprite.position.set(0.15, -0.13, -0.52); this.camera.add(this.muzzleSprite);
+    }
+    const mine = g.by === this.opts.me && !this.isTaken && this.hiddenIn === null;
+    this.gunWorld.visible = g.by === null && !this.goal?.result;
+    if (this.gunWorld.visible) { this.gunWorld.position.set(g.x, g.y + 0.02, g.z); this.gunWorld.rotation.set(Math.PI / 2, 0.7, 0); }
+    this.gunHeld.visible = mine;
+    const k = this.recoil;
+    this.gunHeld.position.set(0.17, -0.19 + k * 0.03, -0.42 + k * 0.06); this.gunHeld.rotation.set(k * 0.5, 0.06, 0);
+    const flash = now < this.flashUntil;
+    if (this.muzzle) this.muzzle.intensity = flash ? 60 : 0;
+    if (this.muzzleSprite) { this.muzzleSprite.visible = flash; this.muzzleSprite.rotation.z = Math.random() * 6; }
+  }
+
+  /** Where a bullet stopped: a dark hole, or blood. */
+  private markHit(x: number, y: number, z: number, flesh: boolean) {
+    const mat = new THREE.MeshBasicMaterial({ color: flesh ? 0x4a0404 : 0x0a0a0a, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+    const m = new THREE.Mesh(new THREE.CircleGeometry(flesh ? 0.5 + Math.random() * 0.3 : 0.035, flesh ? 9 : 6), mat);
+    if (flesh) { m.position.set(x + (Math.random() - 0.5) * 0.4, 0.016, z + (Math.random() - 0.5) * 0.4); m.rotation.x = -Math.PI / 2; }
+    else { m.position.set(x, y, z); m.lookAt(this.cur.x, y, this.cur.z); }
+    this.scene.add(m); this.hits.push(m);
+    if (this.hits.length > 30) { const o = this.hits.shift()!; this.scene.remove(o); o.geometry.dispose(); }
   }
 
   /** E / Use: what to send to the server, if anything. */

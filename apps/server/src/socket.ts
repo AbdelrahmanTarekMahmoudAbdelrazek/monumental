@@ -531,6 +531,10 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       if (process.env.ECHO_DEBUG) console.log("[eh_act]", me, JSON.stringify(p));
       if (type === "enter" || type === "install" || type === "restart" || type === "call") return ack(r.act(me, { type }));
       if (type === "pickup" && Number.isInteger(p?.fuse)) return ack(r.act(me, { type, fuse: p!.fuse as number }));
+      if (type === "unhide" || type === "gun") return ack(r.act(me, { type }));
+      const q = raw as { locker?: unknown; yaw?: unknown; pitch?: unknown } | null;
+      if (type === "hide" && Number.isInteger(q?.locker)) return ack(r.act(me, { type, locker: q!.locker as number }));
+      if (type === "shoot" && typeof q?.yaw === "number" && typeof q?.pitch === "number") return ack(r.act(me, { type, yaw: q.yaw, pitch: q.pitch }));
       ack({ ok: false, error: "Invalid action" });
     });
     let iceAt = 0;

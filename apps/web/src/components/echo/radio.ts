@@ -1,4 +1,4 @@
-import { muDecode } from "@monumental/shared";
+import { MIMIC, pcmDecode } from "@monumental/shared";
 import type { BankClip } from "./voice";
 
 /** A walkie-talkie sound: narrow band, a little crunch, static underneath, a squelch at both ends. */
@@ -60,8 +60,8 @@ export class RadioFx {
     let t = c.currentTime + 0.18;
     this.squelch(true);
     for (const clip of clips) {
-      const pcm = muDecode(clip.bytes);
-      const b = c.createBuffer(1, pcm.length, 16000);
+      const pcm = pcmDecode(clip.bytes);
+      const b = c.createBuffer(1, pcm.length, MIMIC.RATE);
       b.getChannelData(0).set(pcm);
       const s = c.createBufferSource(); s.buffer = b;
       const g = c.createGain(); g.gain.value = 1.3;

@@ -1,6 +1,6 @@
 import {
-  COPY, ECHO, ECHO_COLORS, ECHO_RADIO, ECHO_ROOMS, GOAL, RADIO, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, PERK, TEEN_LOOKS, cleanLook,
-  echoFree, echoPassable, echoPath, echoSpawns, echoTile, echoTileOf, echoWallsBetween, mimicOpen, mimicRevealed,
+  COPY, ECHO, ECHO_ARMED, ECHO_COLORS, ECHO_HIDDEN, ECHO_LOCKERS, ECHO_RADIO, ECHO_ROOMS, GOAL, HIDE, RADIO, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, PERK, TEEN_LOOKS, cleanLook,
+  lockerFront, echoFree, echoPassable, echoPath, echoSpawns, echoTile, echoTileOf, echoWallsBetween, mimicOpen, mimicRevealed,
   type ClipInfo, type ClipTag, type EchoAct, type EchoEvent, type EchoGoal, type EchoLook, type EchoMeta, type EchoSnap2, type EchoState, type EchoSummary, type MimicState,
 } from "@monumental/shared";
 
@@ -39,6 +39,12 @@ interface Member {
   installed: number;
   /** Rode the lift with the Copy and was taken in it. */
   rode: boolean;
+  /** Hiding in this locker (null = not hiding). */
+  hidden: number | null;
+  /** Last time they ran (footsteps carry). */
+  loudAt: number;
+  /** Shot by a friend this match. */
+  shot: number;
 }
 
 interface Clip extends ClipInfo {
@@ -81,6 +87,13 @@ interface Mimic {
   /** Mirrors its target crouching, a beat late. */
   crouchAt: number;
   lastPry: number;
+  /** Moves like a body: a heading that turns at a human rate, a speed that builds and eases. */
+  head: number;
+  speed: number;
+  /** This walk's pace (people don't all walk at exactly the same speed). */
+  gait: number;
+  /** Players it watched climb into a locker. */
+  saw: Set<number>;
 }
 
 export interface EchoEvents {
@@ -119,6 +132,8 @@ export class EchoRoom {
   private faces = new Map<number, number>();
   private voices = new Map<number, number>();
   private stolen = 0;
+  /** Fuses it already moved (it doesn't keep shuffling the same one). */
+  private moved = new Set<number>();
   private rode = false;
   private moments: { at: number; text: string; w: number }[] = [];
   private names = new Map<number, string>();
@@ -143,7 +158,7 @@ export class EchoRoom {
       m = {
         id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, radio: false,
         look: { ...TEEN_LOOKS[teen] }, entered: false, carry: null, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0, freed: false,
-        strikes: 0, gone: false, installed: 0, rode: false,
+        strikes: 0, gone: false, installed: 0, rode: false, hidden: null, loudAt: 0, shot: 0,
       };
       this.members.push(m);
     } else {
@@ -163,6 +178,8 @@ export class EchoRoom {
     if (i < 0) return;
     const gone = this.members[i];
     this.dropFuse(gone);
+    this.dropGun(gone);
+    this.unhide(gone, false);
     this.goal.pry = this.goal.pry.filter((p) => p[0] !== gone.n);
     this.members.splice(i, 1);
     for (const [k, c] of this.clips) if (c.owner === gone.n) this.clips.delete(k); // their voice leaves with them
@@ -213,7 +230,11 @@ export class EchoRoom {
   private newGoal(): EchoGoal {
     const spots = [...GOAL.SPOTS];
     const fuses = Array.from({ length: GOAL.FUSES }, (_, id) => { const [x, y, z] = spots.splice(Math.floor(this.rnd() * spots.length), 1)[0]; return { id, x, y, z, by: null, placed: false }; });
-    return { fuses, placed: 0, power: false, startedAt: 0, endsAt: 0, inLift: [], need: 0, result: null, endedAt: 0, pry: [], calledAt: 0, liftAt: 0, gone: [], summary: null };
+    const [gx, gy, gz] = GOAL.GUN_SPOTS[Math.floor(this.rnd() * GOAL.GUN_SPOTS.length)];
+    return {
+      fuses, placed: 0, power: false, startedAt: 0, endsAt: 0, inLift: [], need: 0, result: null, endedAt: 0, pry: [], calledAt: 0, liftAt: 0, gone: [], summary: null,
+      gun: { x: gx, y: gy, z: gz, by: null, ammo: GOAL.AMMO }, hidden: [],
+    };
   }
   /** Bolder the closer you are to leaving. */
   private fury() { return 1 + this.goal.placed * 0.08 + (this.goal.calledAt ? 0.15 : 0); }
@@ -224,6 +245,25 @@ export class EchoRoom {
     if (!f || f.placed) return;
     Object.assign(f, { by: null, x: m.x, y: 0.05, z: m.z });
     this.ev.event({ type: "drop", n: m.n, fuse: f.id });
+    this.pushMeta();
+  }
+  private dropGun(m: Member) {
+    const g = this.goal.gun;
+    if (g.by !== m.n) return;
+    Object.assign(g, { by: null, x: m.x, y: 0.06, z: m.z });
+    this.pushMeta();
+  }
+  /** Out of the locker (or pulled out). `event`: tell everyone. */
+  private unhide(m: Member, event = true) {
+    if (m.hidden === null) return;
+    const locker = m.hidden;
+    m.hidden = null;
+    this.goal.hidden = this.goal.hidden.filter((h) => h[0] !== m.n);
+    for (const mm of this.mimics) mm.saw.delete(m.n);
+    const f = lockerFront(locker);
+    if (echoFree(f.x, f.z)) { m.x = f.x; m.z = f.z; }
+    m.at = this.now();
+    if (event) this.ev.event({ type: "unhide", n: m.n, locker, x: m.x, z: m.z });
     this.pushMeta();
   }
   private moment(t: number, text: string, w = 1) {
@@ -252,6 +292,48 @@ export class EchoRoom {
     if (g.result) return { ok: false, error: "The match is over" };
     if (m.gone) return { ok: false, error: "You're gone" };
     if (m.taken) return { ok: false, error: "You were taken" };
+    if (a.type === "unhide") {
+      if (m.hidden === null) return { ok: false, error: "You're not hiding" };
+      this.unhide(m);
+      return { ok: true };
+    }
+    if (m.hidden !== null) return { ok: false, error: "Get out of the locker first" };
+    if (a.type === "hide") {
+      const L = ECHO_LOCKERS[a.locker];
+      if (!L) return { ok: false, error: "No locker there" };
+      const f = lockerFront(a.locker);
+      if (Math.hypot(f.x - m.x, f.z - m.z) > HIDE.REACH + 0.4) return { ok: false, error: "Too far from the locker" };
+      if (g.hidden.some((h) => h[1] === a.locker)) return { ok: false, error: "Someone is already in there" };
+      g.pry = g.pry.filter((p) => p[0] !== m.n);
+      m.hidden = a.locker;
+      m.x = L[0]; m.z = L[1]; m.at = t;
+      g.hidden.push([m.n, a.locker]);
+      // a Copy that watched you climb in remembers the locker
+      for (const mm of this.mimics) if (this.los(mm.x, mm.z, f.x, f.z, HIDE.SEEN_RANGE)) mm.saw.add(m.n);
+      this.ev.event({ type: "hide", n: m.n, locker: a.locker });
+      this.pushMeta();
+      return { ok: true };
+    }
+    if (a.type === "gun") {
+      const gun = g.gun;
+      if (gun.by !== null) return { ok: false, error: "Someone has it" };
+      if (Math.hypot(gun.x - m.x, gun.z - m.z) > GOAL.REACH + 0.3) return { ok: false, error: "Too far" };
+      gun.by = m.n;
+      this.ev.event({ type: "gun", n: m.n });
+      this.moment(t, `${m.name} took the pistol off a dead officer in ${the(roomName(gun.x, gun.z))}. ${gun.ammo} bullet${gun.ammo === 1 ? "" : "s"} left.`, 1);
+      this.pushMeta();
+      return { ok: true };
+    }
+    if (a.type === "shoot") {
+      const gun = g.gun;
+      if (gun.by !== m.n) return { ok: false, error: "You have no gun" };
+      if (gun.ammo <= 0) return { ok: false, error: "Click. It's empty." };
+      if (!Number.isFinite(a.yaw) || !Number.isFinite(a.pitch)) return { ok: false, error: "Invalid" };
+      gun.ammo--;
+      this.shoot(m, a.yaw, Math.max(-1.5, Math.min(1.5, a.pitch)), t);
+      this.pushMeta();
+      return { ok: true };
+    }
     if (a.type === "pickup") {
       const f = g.fuses[a.fuse];
       if (!f || f.placed || f.by !== null) return { ok: false, error: "Not there any more" };
@@ -295,6 +377,60 @@ export class EchoRoom {
     return { ok: false, error: "Unknown" };
   }
 
+  /** A shot along (yaw, pitch) from the shooter's eye: the first Copy or player in the line, or the wall. */
+  private shoot(m: Member, yaw: number, pitch: number, t: number) {
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw), eye = m.crouch ? ECHO.CROUCH_EYE : ECHO.EYE, slope = Math.tan(pitch);
+    // where the bullet stops: a wall, the floor or the ceiling
+    let end = GOAL.GUN_RANGE;
+    for (let d = 0.25; d <= GOAL.GUN_RANGE; d += 0.25) {
+      const x = m.x + fx * d, z = m.z + fz * d, y = eye + slope * d;
+      if (y < 0 || y > ECHO.WALL_H + 0.2 || !echoFree(x, z) || echoWallsBetween(m.x, m.z, x, z) > 0) { end = d - 0.25; break; }
+    }
+    type Hit = { d: number; copy?: Mimic; who?: Member };
+    const hits: Hit[] = [];
+    const test = (x: number, z: number, top: number) => {
+      const dx = x - m.x, dz = z - m.z, along = dx * fx + dz * fz;
+      if (along < 0.3 || along > end + 0.4) return null;
+      const side = Math.abs(dx * fz - dz * fx), y = eye + slope * along;
+      return side < 0.42 && y > 0.05 && y < top ? along : null;
+    };
+    for (const mm of this.mimics) { const d = test(mm.x, mm.z, mm.crouch ? 1.3 : 1.95); if (d !== null) hits.push({ d, copy: mm }); }
+    for (const o of this.members) { if (o === m || !o.entered || o.taken || o.gone || o.hidden !== null) continue; const d = test(o.x, o.z, o.crouch ? 1.25 : 1.85); if (d !== null) hits.push({ d, who: o }); }
+    hits.sort((a, b) => a.d - b.d);
+    const h = hits[0];
+    const dist = h ? h.d : end;
+    const base = { type: "shot" as const, n: m.n, x: m.x, z: m.z, hx: m.x + fx * dist, hz: m.z + fz * dist, hy: Math.max(0.05, Math.min(ECHO.WALL_H, eye + slope * dist)), ammo: this.goal.gun.ammo };
+    if (h?.copy) {
+      const mm = h.copy, revealed = mimicRevealed(mm.state);
+      this.ev.event({ ...base, hit: { copy: mm.id } });
+      this.exposed++;
+      if (!revealed) this.ev.event({ type: "reveal", mimic: mm.id, as: mm.as });
+      this.moment(t, revealed ? `${m.name} shot the creature in ${the(roomName(mm.x, mm.z))}. It ran.` : `${m.name} shot "${this.nameOf(mm.as)}" in ${the(roomName(mm.x, mm.z))}. It wasn't ${this.nameOf(mm.as)}. Its face came apart and it ran.`, 3);
+      this.dropCopyFuse(mm);
+      this.flee(mm, t, COPY.FLEE_SEC + 15);
+      mm.nextHunt = mm.until + 10_000;
+    } else if (h?.who) {
+      const o = h.who;
+      o.strikes++;
+      o.shot++;
+      const gone = o.strikes >= COPY.STRIKES;
+      if (gone) {
+        o.gone = true; o.taken = true; o.takenUntil = Infinity;
+        this.goal.gone = [...new Set([...this.goal.gone, o.n])];
+        this.dropFuse(o); this.dropGun(o);
+        this.goal.pry = this.goal.pry.filter((p) => p[0] !== o.n);
+      }
+      this.ev.event({ ...base, hit: { n: o.n, gone } });
+      this.moment(t, `${m.name} shot ${o.name} in ${the(roomName(o.x, o.z))}. It really was ${o.name}.${gone ? ` ${o.name} didn't get up.` : ""}`, 3);
+    } else this.ev.event({ ...base, hit: null });
+    // the bang carries through the whole wing: every Copy that hears it comes to look
+    for (const mm of this.mimics) {
+      if (mimicRevealed(mm.state) || mm.carry !== null || mm === h?.copy) continue;
+      if (Math.hypot(mm.x - m.x, mm.z - m.z) > GOAL.GUN_HEAR) continue;
+      if (mm.as !== m.n && (mm.state === "wander" || mm.state === "search")) this.hunt(mm, m, t);
+    }
+  }
+
   private stepGoal(t: number, dt: number) {
     const g = this.goal;
     if (!g.startedAt || g.result) return;
@@ -305,6 +441,7 @@ export class EchoRoom {
     // carried fuses travel with their carrier
     for (const m of this.members) if (m.carry !== null) { const f = g.fuses[m.carry]; f.x = m.x; f.z = m.z; }
     for (const mm of this.mimics) if (mm.carry !== null) { const f = g.fuses[mm.carry]; f.x = mm.x; f.z = mm.z; }
+    if (g.gun.by !== null) { const c = this.members.find((m) => m.n === g.gun.by); if (c) { g.gun.x = c.x; g.gun.z = c.z; } }
     // prying
     if (g.pry.length) {
       const keep: typeof g.pry = [];
@@ -334,7 +471,8 @@ export class EchoRoom {
       // the doors close. Count heads: a Copy that stood with you takes one of you down with it
       const rider = this.mimics.find((mm) => !mimicRevealed(mm.state) && Math.hypot(mm.x - GOAL.LIFT.x, mm.z - GOAL.LIFT.z) <= GOAL.LIFT_R + 0.3);
       if (rider && inLift.length) {
-        const victim = this.members.find((m) => m.n === inLift[Math.floor(this.rnd() * inLift.length)])!;
+        const pickN = inLift[Math.floor(this.rnd() * inLift.length)];
+        const victim = this.members.find((m) => m.n === pickN)!;
         this.rode = true;
         victim.rode = true;
         this.ev.event({ type: "reveal", mimic: rider.id, as: rider.as });
@@ -381,14 +519,14 @@ export class EchoRoom {
     this.goal = this.newGoal();
     this.liftHold = 0; this.lifted = false;
     this.mimics = []; this.awake = false; this.exposed = 0; this.takenCount = 0; this.nextRadio = 0;
-    this.faces.clear(); this.voices.clear(); this.stolen = 0; this.rode = false; this.moments = [];
+    this.faces.clear(); this.voices.clear(); this.stolen = 0; this.moved.clear(); this.rode = false; this.moments = [];
     this.wakeAt = 0;
     for (const mm of this.clips.values()) mm.used = false;
     const sp = echoSpawns();
     const spawns: [number, number, number][] = [];
     this.members.forEach((m, i) => {
       const s = sp[i % sp.length];
-      Object.assign(m, { x: s.x, z: s.z, y: 0, taken: false, takenUntil: 0, carry: null, freed: false, strikes: 0, gone: false, installed: 0, rode: false, at: t });
+      Object.assign(m, { x: s.x, z: s.z, y: 0, taken: false, takenUntil: 0, carry: null, freed: false, strikes: 0, gone: false, installed: 0, rode: false, at: t, hidden: null, loudAt: 0, shot: 0 });
       spawns.push([m.n, s.x, s.z]);
     });
     if (this.members.some((m) => m.entered)) { this.goal.startedAt = t; this.goal.endsAt = t + this.matchSec * 1000; }
@@ -413,6 +551,9 @@ export class EchoRoom {
     m.crouch = s.crouch;
     m.talk = !!s.talk;
     m.radio = !!s.radio;
+    // inside a locker you can look through the slits, not walk
+    if (m.hidden !== null) { m.torch = false; m.at = t; return false; }
+    if (dist / dt > ECHO.WALK * 1.3 && dist < 3) m.loudAt = t;
     if (dist > ECHO.SPRINT * dt * 1.5 + 1 || !echoFree(s.x, s.z) || !echoPassable(m.x, m.z, s.x, s.z)) return false;
     m.x = s.x;
     m.y = Math.max(-0.5, Math.min(1, s.y));
@@ -492,13 +633,15 @@ export class EchoRoom {
   private wake(t: number) {
     if (this.awake || !this.wakeAt || t < this.wakeAt) return;
     this.awake = true;
+    // the building is big now: two of them once there are three of you
     const count = this.members.length >= 3 ? 2 : 1;
     for (let i = 0; i < count; i++) {
       const [tx, tz] = this.farTile(12);
       const mm: Mimic = {
         id: i + 1, x: center(tx), z: center(tz), yaw: 0, pitch: 0, state: "wander", path: [], target: null, until: 0, nextHunt: t + 8_000 + i * 12_000,
         as: 0, crouch: false, torch: true, speakingUntil: 0, pendingSay: null, lit: new Map(), slipUntil: 0, windUp: 0, followSince: 0,
-        look: { kind: "sweep", base: 0, from: t, to: t }, carry: null, stealTo: null, stealFrom: "", calledAt: 0, crouchAt: 0, lastPry: 0,
+        look: { kind: "sweep", base: 0, from: t, to: t }, carry: null, stealTo: null, stealFrom: "", head: 0, speed: 0, gait: 1, calledAt: 0, crouchAt: 0, lastPry: 0,
+        saw: new Set(),
       };
       this.mimics.push(mm);
       this.disguise(mm, null);
@@ -510,12 +653,16 @@ export class EchoRoom {
   // ───────── who can see what ─────────
   /** Players still in the match (not grabbed right now, not gone). */
   private alive() { return this.members.filter((m) => m.entered && !m.taken && !m.gone); }
+  /** Players out in the open (not shut in a locker): they can watch, and be hunted. */
+  private open() { return this.alive().filter((m) => m.hidden === null); }
+  /** Can this Copy go after `m`? Not if they're hidden, unless it knows where. */
+  private findable(mm: Mimic, m: Member) { return m.hidden === null || mm.saw.has(m.n); }
   private los(ax: number, az: number, bx: number, bz: number, range: number) {
     return Math.hypot(ax - bx, az - bz) < range && echoWallsBetween(ax, az, bx, bz) === 0;
   }
   /** Anyone (but `except`) could see this spot. */
   private watched(x: number, z: number, range = 20, except?: Member) {
-    return this.alive().some((m) => m !== except && this.los(m.x, m.z, x, z, range));
+    return this.open().some((m) => m !== except && this.los(m.x, m.z, x, z, range));
   }
   /** How far `p` is looking away from (x, z): 0 = straight at it, π = back turned. */
   private lookAway(p: Member, x: number, z: number) {
@@ -527,7 +674,7 @@ export class EchoRoom {
   /** How alone a player is: distance to the nearest other living player (walls count as extra distance). */
   private loneliness(m: Member) {
     let best = 99;
-    for (const o of this.alive()) {
+    for (const o of this.open()) {
       if (o === m) continue;
       best = Math.min(best, Math.hypot(o.x - m.x, o.z - m.z) + echoWallsBetween(m.x, m.z, o.x, o.z) * 6);
     }
@@ -611,12 +758,19 @@ export class EchoRoom {
       mm.pendingSay = null;
     }
     if (mm.state !== "flee" && this.torchCheck(mm, dt, t)) return;
+    this.listen(mm, t);
     // a face nobody plays any more: swap it when unseen
     if (!mimicRevealed(mm.state) && (!mm.as || !this.members.some((m) => m.n === mm.as)) && this.canChangeFace(mm)) this.disguise(mm, this.members.find((m) => m.n === mm.target) ?? null);
     // the lift is coming: every Copy goes to stand with the group
     if (this.goal.calledAt && (mm.state === "wander" || mm.state === "search")) { mm.state = "lift"; mm.path = []; mm.target = null; this.dropCopyFuse(mm); }
 
     const target = this.members.find((m) => m.n === mm.target && !m.taken && !m.gone);
+    // they climbed into a locker: if it saw which one, it goes and tears it open; if not, it has lost them
+    if (target && target.hidden !== null && (mm.state === "stalk" || mm.state === "follow" || mm.state === "chase" || mm.state === "lift")) {
+      if (!mm.saw.has(target.n)) { this.lose(mm, t); return; }
+      this.goYank(mm, target, dt, t);
+      return;
+    }
     const crouchTo = (c: boolean) => { if (mm.crouch !== c && t >= mm.crouchAt) { mm.crouch = c; mm.crouchAt = t + 800; } };
 
     switch (mm.state) {
@@ -624,7 +778,7 @@ export class EchoRoom {
         mm.pitch = 0;
         crouchTo(false);
         if (t >= mm.nextHunt && mm.carry === null) {
-          const prey = this.alive().filter((m) => m.n !== mm.as && !this.mimics.some((o) => o !== mm && o.target === m.n) && this.loneliness(m) > 7).sort((a, b) => this.loneliness(b) - this.loneliness(a))[0];
+          const prey = this.alive().filter((m) => m.n !== mm.as && this.findable(mm, m) && !this.mimics.some((o) => o !== mm && o.target === m.n) && this.loneliness(m) > 6).sort((a, b) => this.loneliness(b) - this.loneliness(a))[0];
           if (prey) { this.hunt(mm, prey, t); if ((mm.state as MimicState) === "stalk") break; }
           mm.nextHunt = t + 5000;
         }
@@ -638,6 +792,7 @@ export class EchoRoom {
               Object.assign(f, { by: null, x: spot ? spot[0] : mm.x, y: spot ? spot[1] : 0.05, z: spot ? spot[2] : mm.z });
               mm.carry = null;
               this.stolen++;
+              this.moved.add(f.id);
               this.moment(t, `The Copy, wearing ${this.nameOf(mm.as)}'s face, carried a fuse out of ${the(from)} and hid it in ${the(roomName(f.x, f.z))}.`, 2);
               this.pushMeta();
             } else this.dropCopyFuse(mm);
@@ -652,11 +807,15 @@ export class EchoRoom {
       case "search": {
         // a player looking for fuses: looks around, crouches to check under things, turns in a slow circle
         const k = Math.min(1, (t - mm.look.from) / Math.max(1, mm.look.to - mm.look.from));
-        mm.yaw = mm.look.kind === "circle" ? mm.look.base + k * Math.PI * 2 : mm.look.base + Math.sin(k * Math.PI * 2) * 0.9;
+        // eased, so the turn starts and stops like a person's
+        const e = k * k * (3 - 2 * k);
+        mm.yaw = mm.look.kind === "circle" ? mm.look.base + e * Math.PI * 2 : mm.look.base + Math.sin(e * Math.PI * 2) * 0.9;
+        mm.head = mm.yaw;
+        mm.speed = Math.max(0, mm.speed - 5 * dt);
         mm.pitch = mm.crouch ? -0.35 : -0.15;
         // a loose fuse here and nobody watching: it takes it to hide somewhere else
         if (mm.carry === null && this.stolen < COPY.STEALS && this.goal.startedAt && k > 0.5) {
-          const f = this.goal.fuses.find((x) => !x.placed && x.by === null && !this.goal.pry.some((p) => p[1] === x.id) && Math.hypot(x.x - mm.x, x.z - mm.z) < 2.2);
+          const f = this.goal.fuses.find((x) => !x.placed && x.by === null && !this.moved.has(x.id) && !this.goal.pry.some((p) => p[1] === x.id) && Math.hypot(x.x - mm.x, x.z - mm.z) < 2.2);
           if (f && !this.watched(mm.x, mm.z, 18)) {
             f.by = -mm.id; mm.carry = f.id;
             mm.stealFrom = roomName(f.x, f.z);
@@ -671,7 +830,12 @@ export class EchoRoom {
             break;
           }
         }
-        if (t >= mm.look.to) { mm.state = "wander"; mm.path = []; crouchTo(false); }
+        if (t >= mm.look.to) {
+          // a locker right here: sometimes it opens it
+          const inside = this.alive().find((m) => m.hidden !== null && Math.hypot(ECHO_LOCKERS[m.hidden][0] - mm.x, ECHO_LOCKERS[m.hidden][1] - mm.z) < HIDE.CHECK_RANGE);
+          if (inside && this.rnd() < HIDE.CHECK_CHANCE) { mm.saw.add(inside.n); mm.state = "stalk"; mm.target = inside.n; mm.until = t + 30_000; mm.path = []; break; }
+          mm.state = "wander"; mm.path = []; crouchTo(false);
+        }
         break;
       }
       case "stalk": {
@@ -698,7 +862,7 @@ export class EchoRoom {
         if (t - mm.followSince > COPY.PATIENCE_SEC * 1000) { this.calm(mm, t); mm.path = echoPath(this.tileOf(mm), this.farTile(10)); break; }
         // their back is turned and nobody else is watching: it closes in, quietly
         const away = this.lookAway(target, mm.x, mm.z);
-        const witness = this.alive().some((m) => m !== target && this.los(m.x, m.z, mm.x, mm.z, 14));
+        const witness = this.open().some((m) => m !== target && this.los(m.x, m.z, mm.x, mm.z, 14));
         const ready = t - mm.followSince > COPY.FOLLOW_MIN_SEC * 1000 && !witness;
         if (ready && away > 1.75) {
           if (d < 3.2) { this.reveal(mm, target, t); break; }
@@ -713,13 +877,13 @@ export class EchoRoom {
           if (!mm.path.length) mm.path = echoPath(this.tileOf(mm), goal);
           if (this.los(mm.x, mm.z, target.x, target.z, 9)) { mm.path = []; this.stepTo(mm, target.x, target.z, COPY.WALK, dt); } else this.walk(mm, COPY.WALK, dt);
         } else if (d < COPY.FOLLOW_MIN) {
-          this.stepTo(mm, mm.x - (target.x - mm.x), mm.z - (target.z - mm.z), 0.8, dt);
+          this.nudge(mm, mm.x - (target.x - mm.x), mm.z - (target.z - mm.z), 0.6, dt);
         }
         crouchTo(target.crouch);
         // mostly watches them; now and then looks around the room like anyone would
         const toward = Math.atan2(-(target.x - mm.x), -(target.z - mm.z));
         const glance = Math.sin(t / 1700) > 0.7 ? Math.sin(t / 900) * 1.2 : 0;
-        mm.yaw = toward + glance;
+        this.face(mm, toward + glance, dt, 3);
         mm.pitch = 0;
         // they asked something: a late answer in the friend's voice
         if (target.askedAt > t - 1500 && !mm.pendingSay && t > mm.speakingUntil + 1500) {
@@ -741,17 +905,17 @@ export class EchoRoom {
         else {
           // looks at whoever is nearest, as people waiting for a lift do
           const near = this.alive().sort((a, b) => Math.hypot(a.x - mm.x, a.z - mm.z) - Math.hypot(b.x - mm.x, b.z - mm.z))[0];
-          if (near) mm.yaw = Math.atan2(-(near.x - mm.x), -(near.z - mm.z)) + Math.sin(t / 1300) * 0.5;
+          if (near) this.face(mm, Math.atan2(-(near.x - mm.x), -(near.z - mm.z)) + Math.sin(t / 1300) * 0.5, dt, 2.5);
         }
         // someone wanders off alone while waiting: easy prey
-        const lone = this.alive().find((m) => m.n !== mm.as && this.loneliness(m) > 10 && Math.hypot(m.x - mm.x, m.z - mm.z) < 6 && this.lookAway(m, mm.x, mm.z) > 1.75);
-        if (lone && !this.alive().some((m) => m !== lone && this.los(m.x, m.z, mm.x, mm.z, 14))) this.reveal(mm, lone, t);
+        const lone = this.open().find((m) => m.n !== mm.as && this.loneliness(m) > 10 && Math.hypot(m.x - mm.x, m.z - mm.z) < 6 && this.lookAway(m, mm.x, mm.z) > 1.75);
+        if (lone && !this.open().some((m) => m !== lone && this.los(m.x, m.z, mm.x, mm.z, 14))) this.reveal(mm, lone, t);
         break;
       }
       case "chase": {
         if (!target) { this.flee(mm, t, 8); break; }
         const d = Math.hypot(target.x - mm.x, target.z - mm.z);
-        if (t < mm.windUp) { mm.yaw = Math.atan2(-(target.x - mm.x), -(target.z - mm.z)); break; }
+        if (t < mm.windUp) { this.face(mm, Math.atan2(-(target.x - mm.x), -(target.z - mm.z)), dt, 12); mm.speed = 0; break; }
         if (d < MIMIC.CATCH) { this.take(mm, target, t); break; }
         if (t > mm.until || d > 20) { this.flee(mm, t, 8); break; }
         if (this.los(mm.x, mm.z, target.x, target.z, 6)) { mm.path = []; this.stepTo(mm, target.x, target.z, COPY.LUNGE * this.fury(), dt); }
@@ -775,6 +939,52 @@ export class EchoRoom {
     }
   }
 
+  /** Listening: someone talking inside a locker close by, or running nearby, draws it in. */
+  private listen(mm: Mimic, t: number) {
+    if ((mm.state !== "wander" && mm.state !== "search") || mm.carry !== null) return;
+    for (const m of this.alive()) {
+      if (m.n === mm.as) continue;
+      const d = Math.hypot(m.x - mm.x, m.z - mm.z);
+      if (d > 16) continue;
+      const walls = echoWallsBetween(mm.x, mm.z, m.x, m.z);
+      if (m.hidden !== null) {
+        if (m.talk && d < HIDE.HEAR && walls <= 1) { mm.saw.add(m.n); mm.state = "stalk"; mm.target = m.n; mm.until = t + 30_000; mm.path = []; return; }
+        continue;
+      }
+      if (t - m.loudAt < 400 && walls <= 1 && t >= mm.nextHunt - 20_000) { this.hunt(mm, m, t); if ((mm.state as MimicState) === "stalk") return; }
+    }
+  }
+
+  /** It lost sight of its prey (into a locker it didn't see): looks around where it is, then wanders off. */
+  private lose(mm: Mimic, t: number) {
+    mm.target = null;
+    mm.pendingSay = null;
+    mm.state = "search";
+    mm.look = { kind: this.rnd() < 0.5 ? "circle" : "sweep", base: mm.yaw, from: t, to: t + 3500 + this.rnd() * 2500 };
+    mm.path = [];
+    mm.nextHunt = Math.max(mm.nextHunt, t + 15_000);
+  }
+
+  /** Walk to the locker it saw them get into, and tear it open. */
+  private goYank(mm: Mimic, target: Member, dt: number, t: number) {
+    const locker = target.hidden!;
+    const f = lockerFront(locker, 0.7);
+    const d = Math.hypot(f.x - mm.x, f.z - mm.z);
+    if (d < 1.1) {
+      this.ev.event({ type: "yank", n: target.n, mimic: mm.id, locker });
+      this.moment(t, `${mm.as && !mimicRevealed(mm.state) ? `"${this.nameOf(mm.as)}"` : "The creature"} tore open a locker in ${the(roomName(f.x, f.z))}. ${target.name} was inside.`, 3);
+      this.unhide(target);
+      if (!mimicRevealed(mm.state)) this.ev.event({ type: "reveal", mimic: mm.id, as: mm.as });
+      this.take(mm, target, t);
+      return;
+    }
+    if (this.clearLine(mm.x, mm.z, f.x, f.z) && d < 6) { mm.path = []; this.stepTo(mm, f.x, f.z, COPY.WALK, dt); return; }
+    const goal: [number, number] = [echoTileOf(f.x), echoTileOf(f.z)];
+    const last = mm.path[mm.path.length - 1];
+    if (!last || last[0] !== goal[0] || last[1] !== goal[1]) mm.path = echoPath(this.tileOf(mm), goal);
+    this.walk(mm, this.watched(mm.x, mm.z, 22) ? COPY.WALK : COPY.HURRY * this.fury(), dt);
+  }
+
   private flee(mm: Mimic, t: number, sec: number) {
     mm.state = "flee";
     mm.target = null;
@@ -786,10 +996,14 @@ export class EchoRoom {
   }
 
   private startSearch(mm: Mimic, t: number) {
+    mm.gait = 0.9 + this.rnd() * 0.16;
     // where it goes next: usually a place a fuse could be, sometimes just another room
     const spots = GOAL.SPOTS.filter(([x, , z]) => { const d = Math.hypot(x - mm.x, z - mm.z); return d > 6 && d < 34; });
     let dest: [number, number];
-    if (spots.length && this.rnd() < 0.65) { const [x, , z] = spots[Math.floor(this.rnd() * spots.length)]; dest = [echoTileOf(x), echoTileOf(z)]; }
+    const lockers = ECHO_LOCKERS.map((_, i) => lockerFront(i)).filter((f) => { const d = Math.hypot(f.x - mm.x, f.z - mm.z); return d > 6 && d < 30; });
+    const r = this.rnd();
+    if (spots.length && r < 0.55) { const [x, , z] = spots[Math.floor(this.rnd() * spots.length)]; dest = [echoTileOf(x), echoTileOf(z)]; }
+    else if (lockers.length && r < 0.75) { const f = lockers[Math.floor(this.rnd() * lockers.length)]; dest = [echoTileOf(f.x), echoTileOf(f.z)]; }
     else dest = this.farTile(6);
     const here = GOAL.SPOTS.find(([x, , z]) => Math.hypot(x - mm.x, z - mm.z) < 2.5);
     // first look around where it stands (if it just arrived somewhere)
@@ -797,7 +1011,7 @@ export class EchoRoom {
       const dur = 2500 + this.rnd() * 3000;
       const circle = this.rnd() < 0.3;
       mm.look = { kind: circle ? "circle" : "sweep", base: mm.yaw, from: t, to: t + dur };
-      mm.crouch = !!here && here[1] < 0.6 ? true : this.rnd() < 0.25;
+      mm.crouch = !!here && here[1] < 0.9 ? this.rnd() < 0.8 : this.rnd() < 0.3;
       mm.crouchAt = t + 800;
       mm.state = "search";
       mm.path = echoPath(this.tileOf(mm), dest);
@@ -832,6 +1046,8 @@ export class EchoRoom {
     if (gone) { target.gone = true; this.goal.gone = [...new Set([...this.goal.gone, target.n])]; }
     this.takenCount++;
     this.dropFuse(target);
+    this.dropGun(target);
+    this.unhide(target, false);
     this.goal.pry = this.goal.pry.filter((p) => p[0] !== target.n);
     this.ev.event({ type: "taken", n: target.n, mimic: mm.id, lure: null, gone });
     if (!forGood) {
@@ -843,7 +1059,7 @@ export class EchoRoom {
   /** Torches: a disguised Copy notices the light and walks off (or attacks if it can); held long enough, the disguise fails. */
   private torchCheck(mm: Mimic, dt: number, t: number): boolean {
     const revealed = mimicRevealed(mm.state);
-    for (const m of this.alive()) {
+    for (const m of this.open()) {
       const dx = mm.x - m.x, dz = mm.z - m.z;
       const d = Math.hypot(dx, dz);
       const nora = m.look.teen === "nora";
@@ -868,7 +1084,7 @@ export class EchoRoom {
       }
       // a disguised Copy feels the light on it: alone with you and close, it attacks; otherwise it walks out of the beam
       if (!revealed && v >= COPY.NOTICE_SEC && t > mm.slipUntil) {
-        const witness = this.alive().some((o) => o !== m && this.los(o.x, o.z, mm.x, mm.z, 14));
+        const witness = this.open().some((o) => o !== m && this.los(o.x, o.z, mm.x, mm.z, 14));
         if (d < 5 && !witness && m.n !== mm.as) { this.reveal(mm, m, t); return true; }
         mm.slipUntil = t + 3500;
         if (mm.state !== "lift") {
@@ -922,27 +1138,80 @@ export class EchoRoom {
   // ───────── moving ─────────
   private tileOf(mm: Mimic): [number, number] { return [echoTileOf(mm.x), echoTileOf(mm.z)]; }
 
-  private walk(mm: Mimic, speed: number, dt: number) {
-    let left = (mm.crouch ? Math.min(speed, ECHO.CROUCH) : speed) * dt;
-    while (left > 0 && mm.path.length) {
-      const [tx, tz] = mm.path[0];
-      const gx = center(tx), gz = center(tz);
-      const d = Math.hypot(gx - mm.x, gz - mm.z);
-      if (d <= left) { mm.x = gx; mm.z = gz; left -= d; mm.path.shift(); continue; }
-      this.stepTo(mm, gx, gz, left / dt, dt);
-      left = 0;
-    }
+  /** Where in a tile it aims for: not dead centre (nobody walks the exact middle of every room), but steady per tile. */
+  private pt(mm: Mimic, [tx, tz]: [number, number]): [number, number] {
+    const h = Math.imul(tx * 73856093 ^ tz * 19349663 ^ mm.id * 83492791, 2654435761) >>> 0;
+    const jx = ((h & 0xffff) / 0xffff - 0.5) * 1.3, jz = ((h >>> 16) / 0xffff - 0.5) * 1.3;
+    const x = center(tx) + jx, z = center(tz) + jz;
+    return echoFree(x, z) && echoTileOf(x) === tx && echoTileOf(z) === tz ? [x, z] : [center(tx), center(tz)];
   }
 
-  private stepTo(mm: Mimic, x: number, z: number, speed: number, dt: number) {
+  /** A body (0.35 m each side) could walk this straight line: no wall, and not shaving a door frame. */
+  private clearLine(ax: number, az: number, bx: number, bz: number) {
+    const d = Math.hypot(bx - ax, bz - az);
+    if (d < 0.01) return true;
+    const ox = (-(bz - az) / d) * 0.35, oz = ((bx - ax) / d) * 0.35;
+    return echoWallsBetween(ax, az, bx, bz) === 0 && echoWallsBetween(ax + ox, az + oz, bx + ox, bz + oz) === 0 && echoWallsBetween(ax - ox, az - oz, bx - ox, bz - oz) === 0;
+  }
+
+  /** Follow the path like a person: cut corners when the way is clear, glide through doors, ease into the last step. */
+  private walk(mm: Mimic, speed: number, dt: number) {
+    while (mm.path.length >= 2) {
+      const [nx, nz] = this.pt(mm, mm.path[1]);
+      if (!this.clearLine(mm.x, mm.z, nx, nz)) break;
+      mm.path.shift();
+    }
+    if (!mm.path.length) { mm.speed = Math.max(0, mm.speed - 5 * dt); return; }
+    const last = mm.path.length === 1;
+    const [px, pz] = this.pt(mm, mm.path[0]);
+    if (Math.hypot(px - mm.x, pz - mm.z) < (last ? 0.25 : 0.8)) { mm.path.shift(); if (!mm.path.length) return; }
+    const [qx, qz] = this.pt(mm, mm.path[0]);
+    this.steer(mm, qx, qz, speed * mm.gait, dt, mm.path.length === 1 ? 1.4 : 0);
+  }
+
+  /** Head for (x, z) like a body: turns at a human rate (slowing for sharp turns), speeds up and eases off. */
+  private steer(mm: Mimic, x: number, z: number, speed: number, dt: number, arrive = 0) {
     const dx = x - mm.x, dz = z - mm.z, d = Math.hypot(dx, dz);
-    if (d < 1e-4) return;
-    const s = Math.min(d, speed * dt);
-    const nx = mm.x + (dx / d) * s, nz = mm.z + (dz / d) * s;
-    if (!echoPassable(mm.x, mm.z, nx, nz)) return;
+    if (d < 0.02) { mm.speed = Math.max(0, mm.speed - 5 * dt); return; }
+    const want = Math.atan2(-dx, -dz);
+    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+    const rate = speed > 4 ? 7.5 : 4.5;
+    mm.head += Math.max(-rate * dt, Math.min(rate * dt, wrap(want - mm.head)));
+    mm.head = wrap(mm.head);
+    const align = Math.cos(wrap(want - mm.head));
+    let target = (mm.crouch ? Math.min(speed, ECHO.CROUCH) : speed) * Math.max(0.12, align);
+    if (arrive > 0 && d < arrive) target = Math.min(target, speed * (d / arrive) + 0.25);
+    const acc = target > mm.speed ? (speed > 4 ? 7 : 3) : 6;
+    mm.speed += Math.max(-acc * dt, Math.min(acc * dt, target - mm.speed));
+    const s = Math.min(d, mm.speed * dt);
+    let nx = mm.x - Math.sin(mm.head) * s, nz = mm.z - Math.cos(mm.head) * s;
+    if (!echoPassable(mm.x, mm.z, nx, nz) || !echoFree(nx, nz)) {
+      // the curve would clip a wall: straight at the target instead
+      nx = mm.x + (dx / d) * s; nz = mm.z + (dz / d) * s;
+      if (!echoPassable(mm.x, mm.z, nx, nz) || !echoFree(nx, nz)) { mm.speed *= 0.5; return; }
+      mm.head = want;
+    }
     mm.x = nx;
     mm.z = nz;
-    mm.yaw = Math.atan2(-dx, -dz);
+    mm.yaw = mm.head;
+  }
+
+  /** Turn the body toward an angle at `rate` rad/s. */
+  private face(mm: Mimic, yaw: number, dt: number, rate: number) {
+    const d = Math.atan2(Math.sin(yaw - mm.yaw), Math.cos(yaw - mm.yaw));
+    mm.yaw += Math.max(-rate * dt, Math.min(rate * dt, d));
+    mm.head = mm.yaw;
+  }
+
+  /** Straight at a point (chasing, closing the gap). */
+  private stepTo(mm: Mimic, x: number, z: number, speed: number, dt: number) { this.steer(mm, x, z, speed, dt, 0.8); }
+
+  /** A small step without turning (backing off a little). */
+  private nudge(mm: Mimic, x: number, z: number, speed: number, dt: number) {
+    const dx = x - mm.x, dz = z - mm.z, d = Math.hypot(dx, dz);
+    if (d < 1e-3) return;
+    const s = Math.min(d, speed * dt), nx = mm.x + (dx / d) * s, nz = mm.z + (dz / d) * s;
+    if (echoPassable(mm.x, mm.z, nx, nz) && echoFree(nx, nz)) { mm.x = nx; mm.z = nz; }
   }
 
   /** An open tile far from everyone (at least `min` m if possible). */
@@ -973,7 +1242,7 @@ export class EchoRoom {
     const t = this.now();
     return {
       t,
-      p: this.members.map((m) => [m.n, Math.round(m.x * 100), Math.round(m.y * 100), Math.round(m.z * 100), Math.round(m.yaw * 1000), Math.round(m.pitch * 1000), (m.torch ? 1 : 0) | (m.crouch ? 2 : 0) | (m.taken ? ECHO_TAKEN : 0) | (m.talk && !m.taken ? ECHO_TALK : 0) | (m.radio && !m.taken ? ECHO_RADIO : 0)]),
+      p: this.members.map((m) => [m.n, Math.round(m.x * 100), Math.round(m.y * 100), Math.round(m.z * 100), Math.round(m.yaw * 1000), Math.round(m.pitch * 1000), (m.torch ? 1 : 0) | (m.crouch ? 2 : 0) | (m.taken ? ECHO_TAKEN : 0) | (m.talk && !m.taken ? ECHO_TALK : 0) | (m.radio && !m.taken ? ECHO_RADIO : 0) | (m.hidden !== null ? ECHO_HIDDEN : 0) | (this.goal.gun.by === m.n ? ECHO_ARMED : 0)]),
       m: this.mimics.map((mm) => [mm.id, Math.round(mm.x * 100), Math.round(mm.z * 100), Math.round(mm.yaw * 1000), MIMIC_STATES.indexOf(mm.state), t < mm.speakingUntil ? 1 : 0, mm.as, (mm.torch ? 1 : 0) | (mm.crouch ? 2 : 0), Math.round(mm.pitch * 1000)]),
     };
   }

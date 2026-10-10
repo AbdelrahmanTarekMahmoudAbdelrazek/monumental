@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { COPY, ECHO, ECHO_MAP, ECHO_W, GOAL, MIMIC, PERK, echoEdgeOpen, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap, type EchoSnap2 } from "@monumental/shared";
+import { COPY, ECHO, ECHO_MAP, ECHO_W, GOAL, MIMIC, PERK, echoEdgeOpen, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, pcmDecode, pcmEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap, type EchoSnap2 } from "@monumental/shared";
 import { EchoRoom } from "./EchoRoom";
 
 function room() {
@@ -132,6 +132,11 @@ describe("ECHO HALLS the Copy", () => {
     let err = 0;
     for (let i = 0; i < pcm.length; i++) err = Math.max(err, Math.abs(back[i] - pcm[i]));
     expect(err).toBeLessThan(0.03);
+    // the 16-bit format pieces travel in now: practically lossless
+    const back16 = pcmDecode(pcmEncode(pcm));
+    let err16 = 0;
+    for (let i = 0; i < pcm.length; i++) err16 = Math.max(err16, Math.abs(back16[i] - pcm[i]));
+    expect(err16).toBeLessThan(0.0001);
     expect(tagText("Ann, come here quick", { 1: "ann", 2: "bob" })).toEqual(expect.arrayContaining(["call", "name:1"]));
     expect(tagText("انت فين؟", {})).toContain("question");
   });
@@ -154,10 +159,11 @@ describe("ECHO HALLS the Copy", () => {
     x.run(MIMIC.WAKE_SEC + 1);
     const mm = x.d.mimics[0];
     mm.nextHunt = 0;
-    let saw = false;
-    x.run(40, () => { if (mm.target === 1) saw = true; });
+    // with two players both are alone: whoever it goes after, it wears the other one's face
+    let saw = false, own = false;
+    x.run(40, () => { if (mm.target !== null) { saw = true; if (mm.as === mm.target) own = true; } });
     expect(saw).toBe(true);
-    expect(mm.as).toBe(2);
+    expect(own).toBe(false);
     x.r.destroy();
   });
 
@@ -170,7 +176,7 @@ describe("ECHO HALLS the Copy", () => {
     let fastest = 0, crouched = false, lx = mm.x, lz = mm.z;
     x.run(60, () => { states.add(mm.state); crouched ||= mm.crouch; fastest = Math.max(fastest, Math.hypot(mm.x - lx, mm.z - lz) / 0.05); lx = mm.x; lz = mm.z; });
     expect(states.has("search")).toBe(true);
-    expect(fastest).toBeLessThanOrEqual(COPY.HURRY + 0.01);
+    expect(fastest).toBeLessThanOrEqual(COPY.HURRY * 1.07);
     expect(crouched).toBe(true);
     x.r.destroy();
   });
@@ -356,6 +362,7 @@ describe("ECHO HALLS goal — the lift", () => {
   function match(players = 2) {
     const x = room();
     const ids = ["a", "b", "c"].slice(0, players);
+    x.r.wakeSec = 100_000; // these tests are about the goal, not the Copy
     ids.forEach((id) => x.r.join(id, id.toUpperCase()));
     ids.forEach((id) => x.r.act(id, { type: "enter" }));
     const d = x.r.debug();

@@ -16,3 +16,4 @@ export * from "./smuggle";
 export * from "./neon";
 export * from "./squad";
 export * from "./echo";
+export * from "./versions";

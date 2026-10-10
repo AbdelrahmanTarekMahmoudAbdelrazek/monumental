@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSocket } from "@/lib/socket";
 import { getGuestId, getNickname, setNickname } from "@/lib/identity";
+import VersionBanner from "../VersionBanner";
 
 const TITLE = "font-['Special_Elite',ui-monospace,monospace]";
 
@@ -39,6 +40,7 @@ export default function EchoHome() {
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet" />
       <div className="mx-auto max-w-5xl">
+        <div className="mb-6"><VersionBanner dark /></div>
         <h1 className={`${TITLE} text-6xl leading-none text-[#E9E4D6] md:text-7xl`}>ECHO HALLS</h1>
         <p className="mt-3 max-w-2xl text-lg text-[#9FA89F]">Stay together. Find the way out. <span className="text-[#E0675C]">Count your friends.</span></p>
         <p className="mt-2 max-w-2xl text-sm text-[#7E887E]">Marrowfield sank into the earth in 2011. Every police team sent down was lost. Fifteen years later, you and up to 3 friends go down to find out why — and something down there can wear your faces and speak with your voices.</p>

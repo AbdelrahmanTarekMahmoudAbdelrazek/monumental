@@ -6,6 +6,8 @@ import { getSocket, measurePing } from "@/lib/socket";
 import { getGuestId, getNickname } from "@/lib/identity";
 import type { EchoEngine, EchoHud } from "./engine";
 import TeenPicker from "./TeenPicker";
+import { NOTES } from "./story";
+import VersionBanner from "../VersionBanner";
 import { ECHO_TEENS, GOAL, type EchoLook } from "@monumental/shared";
 
 const FONT = "font-['IBM_Plex_Sans_Arabic',system-ui,sans-serif]";
@@ -36,10 +38,24 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   const [, setTick] = useState(0);
   const metaRef = useRef<EchoMeta | null>(null);
   const toastRef = useRef<(text: string, bad?: boolean) => void>(() => {});
+  const [reading, setReading] = useState<number | null>(null);
+  const readingRef = useRef<number | null>(null);
+  useEffect(() => { readingRef.current = reading; }, [reading]);
   const doAct = useRef(() => {
+    if (readingRef.current !== null) { setReading(null); return; }
     const a = engineRef.current?.useAct();
     if (!a) return;
+    if (a.type === "read") {
+      setReading(a.note);
+      if (NOTES[a.note]?.kind === "radio" || NOTES[a.note]?.kind === "phone") engineRef.current?.voice.radio.crackle(0.5);
+      return;
+    }
     getSocket().emit("eh_act", a, (r) => { if (!r.ok && r.error) toastRef.current(r.error, true); });
+  }).current;
+  const doShoot = useRef(() => {
+    const aim = engineRef.current?.shoot();
+    if (!aim) return;
+    getSocket().emit("eh_act", { type: "shoot", ...aim }, (r) => { if (!r.ok && r.error) toastRef.current(r.error, true); });
   }).current;
   const sendLook = useRef((look: EchoLook) => new Promise<string | null>((res) => {
     getSocket().emit("eh_look", { look }, (a) => res(a.ok ? null : a.error ?? "Could not change"));
@@ -117,6 +133,14 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       else if (e.type === "free") toast(e.n === meRef.current ? "You cut yourself free! The cutters are spent." : `${nm(e.n)} cut free with the bolt cutters.`);
       else if (e.type === "exposed") toast(`${e.by === meRef.current ? "You" : nm(e.by)} unmasked the Copy. It ran.`);
       else if (e.type === "taken" && e.n !== meRef.current) toast(e.gone ? `${nm(e.n)} is gone.` : `${nm(e.n)} was grabbed.`, true);
+      else if (e.type === "gun") toast(e.n === meRef.current ? `You took the pistol. ${GOAL.AMMO} bullets. Click to shoot — be sure.` : `${nm(e.n)} took the dead officer's pistol.`);
+      else if (e.type === "yank") toast(e.n === meRef.current ? "It knew where you were." : "Something tore a locker open.", true);
+      else if (e.type === "shot") {
+        const who = e.n === meRef.current ? "You" : nm(e.n);
+        if (!e.hit) toast(`${who} fired. Missed. ${e.ammo} left.`, true);
+        else if ("copy" in e.hit) toast(`${who} shot the Copy! Its face came apart and it ran. ${e.ammo} left.`);
+        else toast(e.hit.n === meRef.current ? (e.hit.gone ? `${who} shot you. It really was you.` : `${who} shot you. You're bleeding — one more hit and you're gone.`) : `${who} shot ${nm(e.hit.n)}. It was really ${nm(e.hit.n)}.${e.hit.gone ? " They're gone." : ""}`, true);
+      }
     };
     const onSignal = (p: { from: number; data: unknown }) => {
       const e = engineRef.current;
@@ -161,7 +185,9 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       if (e.code === "KeyF") eng.toggleTorch();
       if (e.code === "KeyM") eng.toggleMute();
       if (e.code === "KeyE") doAct();
+      if (e.code === "Escape" && readingRef.current !== null) setReading(null);
     };
+    const press = (e: MouseEvent) => { if (e.button === 0 && document.pointerLockElement === canvasRef.current) doShoot(); };
     const up = (e: KeyboardEvent) => { const k = map[e.code]; if (k && engineRef.current) engineRef.current.keys[k] = false; };
     const move = (e: MouseEvent) => { if (document.pointerLockElement === canvasRef.current) engineRef.current?.look(e.movementX, e.movementY); };
     const lockChange = () => {
@@ -175,6 +201,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     document.addEventListener("mousemove", move);
+    document.addEventListener("mousedown", press);
     document.addEventListener("pointerlockchange", lockChange);
     window.addEventListener("blur", blur);
     window.addEventListener("resize", resize);
@@ -182,6 +209,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
       document.removeEventListener("mousemove", move);
+      document.removeEventListener("mousedown", press);
       document.removeEventListener("pointerlockchange", lockChange);
       window.removeEventListener("blur", blur);
       window.removeEventListener("resize", resize);
@@ -189,6 +217,8 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   }, [entered]);
 
   useEffect(() => { if (engineRef.current) engineRef.current.sensitivity = 0.0022 * sens; }, [sens, ready]);
+  // walk or look away and the note closes
+  useEffect(() => { if (reading !== null && hud && hud.note !== reading) setReading(null); }, [hud, reading]);
 
   const enter = async () => {
     const eng = engineRef.current;
@@ -232,7 +262,8 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         <div className="absolute inset-0 overflow-y-auto bg-[radial-gradient(ellipse_70%_60%_at_30%_40%,#141A17,#050606_75%)] px-4 py-8 md:px-10">
           <div className="mx-auto grid max-w-5xl gap-8 md:grid-cols-[1fr_1.1fr]">
             <div>
-              <h1 className={`${TITLE} text-6xl leading-[0.95] text-[#E9E4D6] md:text-7xl`}>ECHO<br />HALLS</h1>
+              <VersionBanner dark />
+              <h1 className={`${TITLE} mt-4 text-6xl leading-[0.95] text-[#E9E4D6] md:text-7xl`}>ECHO<br />HALLS</h1>
               <p className="mt-4 text-lg text-[#9FA89F]">Marrowfield, fifteen years later. Go down together, stay close, and talk. Something down there is listening.</p>
               {onStory && <button className="mt-2 text-sm text-[#6EE6C8] underline underline-offset-4" onClick={onStory} data-testid="eh-story">▶ Watch the story again</button>}
               <div className="mt-5"><TeenPicker meta={meta} me={me} send={sendLook} /></div>
@@ -240,10 +271,12 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
                 <li>Voices are 3D: you hear friends from where they stand.</li>
                 <li>Far away they fade out; through a wall they sound muffled.</li>
                 <li><b className="text-[#E9E4D6]">Use headphones</b>, or your speakers leak into your mic.</li>
+                <li>Hide in a locker (E). Don't talk in there. Don't hide where it watched you hide.</li>
+                <li>One dead officer still has his pistol: 3 bullets. A friend you shoot really bleeds.</li>
               </ul>
               <div className="mt-6 rounded-xl border border-[#222924] bg-[#0E1210] p-4 text-sm text-[#A6AFA6]">
                 {mobile ? <p>Left thumb: move. Right thumb: look. Buttons: torch, crouch, mic, and hold Radio to talk to everyone on Channel 4.</p>
-                  : <p><b className="text-[#E9E4D6]">WASD</b> move · <b className="text-[#E9E4D6]">Mouse</b> look · <b className="text-[#E9E4D6]">Shift</b> run · <b className="text-[#E9E4D6]">C / Ctrl</b> crouch · <b className="text-[#E9E4D6]">F</b> torch · <b className="text-[#E9E4D6]">M</b> mute · <b className="text-[#E9E4D6]">V</b> hold to talk on the radio · <b className="text-[#E9E4D6]">E</b> pick up / use · <b className="text-[#E9E4D6]">Esc</b> pause</p>}
+                  : <p><b className="text-[#E9E4D6]">WASD</b> move · <b className="text-[#E9E4D6]">Mouse</b> look · <b className="text-[#E9E4D6]">Shift</b> run · <b className="text-[#E9E4D6]">C / Ctrl</b> crouch · <b className="text-[#E9E4D6]">F</b> torch · <b className="text-[#E9E4D6]">M</b> mute · <b className="text-[#E9E4D6]">V</b> hold to talk on the radio · <b className="text-[#E9E4D6]">E</b> pick up / use / hide / read · <b className="text-[#E9E4D6]">Click</b> shoot (if you found the pistol) · <b className="text-[#E9E4D6]">Esc</b> pause</p>}
               </div>
             </div>
             <div className="flex flex-col gap-4">
@@ -343,6 +376,23 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         </>
       )}
 
+      {entered && hud?.hidden && (
+        <div className="pointer-events-none absolute inset-0" data-testid="eh-hidden" aria-hidden="true">
+          <div className="absolute inset-0" style={{ background: "repeating-linear-gradient(180deg, rgba(0,0,0,.97) 0 26px, transparent 26px 36px)", maskImage: "radial-gradient(ellipse 34% 26% at 50% 46%, transparent 40%, black 75%)", WebkitMaskImage: "radial-gradient(ellipse 34% 26% at 50% 46%, transparent 40%, black 75%)" }} />
+          <div className="absolute inset-0" style={{ background: "repeating-linear-gradient(180deg, rgba(0,0,0,.9) 0 18px, transparent 18px 30px)", clipPath: "inset(30% 22% 30% 22%)" }} />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_30%,black_80%)]" />
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-4 py-2 text-center text-sm text-[#C9C4B4]">In the locker. <b className="text-[#E0675C]">Don't talk</b> — it listens. {mobile ? "Tap Get out" : "E to get out"}.</div>
+        </div>
+      )}
+      {entered && hud && hud.ammo !== null && (
+        <div className="pointer-events-none absolute bottom-16 right-4 flex items-center gap-2 rounded-full border border-[#3A433D] bg-black/60 px-3 py-1.5 text-sm text-[#E9E4D6] md:bottom-4" data-testid="eh-ammo">
+          <span className="text-xs uppercase tracking-wider text-[#9FA89F]">Pistol</span>
+          {Array.from({ length: GOAL.AMMO }).map((_, i) => <span key={i} className={`h-3.5 w-1.5 rounded-sm ${i < hud.ammo! ? "bg-[#D9B86A]" : "bg-[#2A2F2B]"}`} />)}
+          {!mobile && <span className="text-xs text-[#7E887E]">click</span>}
+        </div>
+      )}
+      {entered && hud && hud.hurt > 0 && <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse at center, transparent 35%, rgba(120,0,0,${0.75 * hud.hurt}) 100%)` }} aria-hidden="true" />}
+      {entered && reading !== null && NOTES[reading] && <NoteView note={NOTES[reading]} mobile={mobile} onClose={() => setReading(null)} />}
       {entered && hud?.scare && <div className="eh-scare pointer-events-none absolute inset-0" aria-hidden="true" />}
       {entered && hud && hud.taken > 0 && !hud.scare && !meta?.goal?.result && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/90" data-testid="eh-taken">
@@ -385,7 +435,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         </div>
       )}
 
-      {entered && mobile && hud && <TouchControls engine={engineRef} hud={hud} onUse={doAct} />}
+      {entered && mobile && hud && <TouchControls engine={engineRef} hud={hud} onUse={doAct} onShoot={doShoot} />}
 
       {/* ── the end of a match ── */}
       {entered && meta?.goal?.result && (
@@ -434,7 +484,7 @@ function Meter({ level }: { level: number }) {
 }
 
 /** Phones: left thumb moves, right thumb looks, buttons for torch / crouch / run / mic. */
-function TouchControls({ engine, hud, onUse }: { engine: React.MutableRefObject<EchoEngine | null>; hud: EchoHud; onUse: () => void }) {
+function TouchControls({ engine, hud, onUse, onShoot }: { engine: React.MutableRefObject<EchoEngine | null>; hud: EchoHud; onUse: () => void; onShoot: () => void }) {
   const stickId = useRef<number | null>(null);
   const lookId = useRef<number | null>(null);
   const origin = useRef({ x: 0, y: 0 });
@@ -489,6 +539,7 @@ function TouchControls({ engine, hud, onUse }: { engine: React.MutableRefObject<
         </div>
       )}
       {!knob && <div className="pointer-events-none absolute bottom-8 left-8 text-xs text-[#6E786E]">Drag here to move</div>}
+      {hud.ammo !== null && !hud.hidden && <button className="pointer-events-auto absolute bottom-48 left-5 h-16 w-16 rounded-full border-2 border-[#D9B86A] bg-[#2A1512]/85 text-xs font-bold text-[#F3E3B5]" onTouchStart={(e) => { e.stopPropagation(); onShoot(); }} data-testid="eh-shoot">Shoot</button>}
       {hud.act && <button className="pointer-events-auto absolute bottom-48 right-5 rounded-2xl border border-[#E9C46A] bg-[#2A2414]/90 px-5 py-4 text-sm font-semibold text-[#F3E3B5]" onTouchStart={(e) => { e.stopPropagation(); onUse(); }} data-testid="eh-use">{hud.act}</button>}
       <div className="pointer-events-none absolute bottom-5 right-5 grid grid-cols-2 gap-3">
         <button className={btn} aria-label="Torch" onTouchStart={(e) => { e.stopPropagation(); engine.current?.toggleTorch(); }}>{hud.torch ? "Torch" : "Off"}</button>
@@ -502,5 +553,43 @@ function TouchControls({ engine, hud, onUse }: { engine: React.MutableRefObject<
         </button>
       </div>
     </>
+  );
+}
+
+/** A note, a radio log or a dead officer's phone, held up to the torch. */
+function NoteView({ note, mobile, onClose }: { note: (typeof NOTES)[number]; mobile: boolean; onClose: () => void }) {
+  if (note.kind === "phone") {
+    return (
+      <div className="pointer-events-auto absolute inset-0 grid place-items-center bg-black/55 p-4" onClick={onClose} data-testid="eh-note">
+        <div className="w-[min(92vw,340px)] rounded-[2.2rem] border-[6px] border-[#151719] bg-[#0B0D12] p-3 shadow-[0_0_60px_rgba(80,120,255,.25)]" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-2 text-[11px] text-[#8C96A8]"><span>{note.msgs?.[note.msgs.length - 1]?.time}</span><span>{note.from}</span></div>
+          <div className="mt-1 border-b border-[#1E2330] px-2 pb-2 text-center text-sm font-semibold text-[#DCE3F2]">{note.title}</div>
+          <div className="mt-2 max-h-[55vh] space-y-2 overflow-y-auto px-1 py-1 text-[13px] leading-snug">
+            {note.msgs?.map((m, i) => (
+              <div key={i} className={`flex ${m.me ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[80%] rounded-2xl px-3 py-1.5 ${m.me ? "bg-[#2D5BD6] text-white" : "bg-[#23272F] text-[#DCE3F2]"} ${m.text.startsWith("[not sent]") ? "opacity-60 ring-1 ring-[#E0675C]" : ""}`}>
+                  {!m.me && m.who && <div className="text-[10px] text-[#8C96A8]">{m.who}</div>}
+                  {m.text.replace("[not sent] ", "")}
+                  <div className="mt-0.5 text-right text-[9px] opacity-60">{m.text.startsWith("[not sent]") ? "Not delivered" : m.time}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-center text-[11px] text-[#5E6676]">{mobile ? "Tap outside to close" : "E to put it down"}</div>
+        </div>
+      </div>
+    );
+  }
+  const radio = note.kind === "radio";
+  const kid = note.kind === "drawing";
+  return (
+    <div className="pointer-events-auto absolute inset-0 grid place-items-center bg-black/55 p-4" onClick={onClose} data-testid="eh-note">
+      <div className={`w-[min(92vw,520px)] rotate-[-0.6deg] rounded-sm p-6 shadow-2xl ${radio ? "bg-[#101612] font-mono text-[#9FE0B4]" : kid ? "bg-[#E8E1CC] text-[#2C3E7A]" : "bg-[#D8D0B8] text-[#2A2620]"}`} onClick={(e) => e.stopPropagation()}>
+        <div className={`text-xs uppercase tracking-widest ${radio ? "text-[#5E8A6C]" : "text-[#7A705C]"}`}>{note.from}</div>
+        <div className="mt-1 font-['Special_Elite',ui-monospace,monospace] text-2xl">{note.title}</div>
+        <div className={`mt-3 max-h-[55vh] overflow-y-auto whitespace-pre-line text-[15px] leading-relaxed ${kid ? "font-['Comic_Sans_MS','Chalkboard_SE',sans-serif] text-lg" : ""}`}>{note.body}</div>
+        <div className="mt-4 text-right text-xs opacity-60">{mobile ? "Tap outside to close" : "E to put it down"}</div>
+      </div>
+    </div>
   );
 }
