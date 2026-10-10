@@ -75,7 +75,7 @@ export class HospitalAudio {
   }
 
   /** Every frame. `sources` are the level's light sources (for the tube buzz); `torch` is my torch. */
-  update(ears: Ears, torch: boolean, sources: LightSource[], t: number, quiet: boolean) {
+  update(ears: Ears, torch: boolean, sources: LightSource[], t: number, quiet: boolean, danger = 0) {
     if (!this.started) return;
     const ac = this.ctx, now = ac.currentTime;
     this.bus.gain.setTargetAtTime(quiet ? 0.15 : 1, now, 0.3);
@@ -88,8 +88,9 @@ export class HospitalAudio {
       if (best.toggled && t - best.toggled < 0.05 && best.cur > 0) this.thud(this.buzzPan, now, 900, 0.05);
     }
     // heartbeat in the dark
-    this.heart += ((torch ? 0 : 1) - this.heart) * 0.02;
-    const bpm = 62 + this.heart * 40;
+    // heartbeat in the dark, and racing while something runs at you
+    this.heart += (Math.max(torch ? 0 : 0.7, danger) - this.heart) * (danger > this.heart ? 0.12 : 0.02);
+    const bpm = 62 + this.heart * 70;
     if (this.heart > 0.05 && now - this.lastBeat > 60 / bpm) {
       this.lastBeat = now;
       this.tone("triangle", 88, this.beat, now, 0.55 * this.heart, 0.16);
@@ -117,7 +118,7 @@ export class HospitalAudio {
   }
 
   /** Goal sounds: a fuse picked up / dropped / installed, the power coming back, the end. */
-  sfx(kind: "pickup" | "drop" | "install" | "power" | "win" | "lose") {
+  sfx(kind: "pickup" | "drop" | "install" | "power" | "win" | "lose" | "call" | "lift" | "reveal") {
     if (!this.started) return;
     const ac = this.ctx, t0 = ac.currentTime, out = this.bus;
     if (kind === "pickup") { this.tone("triangle", 880, out, t0, 0.12, 0.12); this.tone("triangle", 1320, out, t0 + 0.08, 0.1, 0.2); }
@@ -128,8 +129,31 @@ export class HospitalAudio {
       const f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 700; const g = ac.createGain(); this.env(g, t0, 1.5, 0.25, 2.5); o.connect(f).connect(g).connect(out); o.connect(f); g.connect(this.send); o.start(t0); o.stop(t0 + 4.2);
       for (let i = 0; i < 2; i++) this.tone("sine", 1318.5, out, t0 + 3 + i * 0.35, 0.12, 1.4); // the lift bell
     }
+    if (kind === "call") { this.tone("square", 660, out, t0, 0.05, 0.12); this.thud(out, t0 + 0.4, 50, 0.6); this.tone("sawtooth", 48, out, t0 + 0.4, 0.07, 6); } // the button, then the motor far above
+    if (kind === "lift") { this.thud(out, t0, 60, 0.9); for (let i = 0; i < 2; i++) this.tone("sine", 1318.5, out, t0 + 0.3 + i * 0.35, 0.14, 1.4); }
+    if (kind === "reveal") {
+      // a wet tearing and a scream, the lights blowing
+      this.burst(out, t0, 0.5, "lowpass", 600, 1, 0.5, 0.01);
+      this.burst(out, t0 + 0.05, 0.25, "bandpass", 3200, 3, 0.35);
+      this.thud(out, t0 + 0.02, 38, 1);
+      const o = this.ctx.createOscillator(); o.type = "sawtooth"; o.frequency.setValueAtTime(900, t0); o.frequency.exponentialRampToValueAtTime(260, t0 + 0.9);
+      const g = this.ctx.createGain(); this.env(g, t0, 0.02, 0.18, 0.9); o.connect(g).connect(out); o.start(t0); o.stop(t0 + 1.1);
+    }
     if (kind === "win") { [523.3, 659.3, 784, 1046.5].forEach((f, i) => this.tone("triangle", f, out, t0 + i * 0.18, 0.12, 1.6)); }
     if (kind === "lose") { this.thud(out, t0, 40, 1); [220, 207.7, 196, 185].forEach((f, i) => this.tone("sawtooth", f, out, t0 + i * 0.5, 0.05, 1.2)); }
+  }
+
+  /** A fuse being prised out of its clips: metal scraping, from where it is. */
+  scrape(x: number, y: number, z: number) {
+    if (!this.started) return;
+    const p = this.panner(x, y, z, 3), t0 = this.ctx.currentTime;
+    for (let i = 0; i < 6; i++) {
+      const at = t0 + i * 0.38 + Math.random() * 0.1;
+      this.burst(p, at, 0.22, "bandpass", 2600 + Math.random() * 1800, 6, 0.22, 0.02);
+      this.tone("square", 180 + Math.random() * 90, p, at, 0.03, 0.18);
+    }
+    this.burst(p, t0 + 2.3, 0.1, "highpass", 4000, 1, 0.3);
+    this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 3500));
   }
 
   // ── building blocks ──

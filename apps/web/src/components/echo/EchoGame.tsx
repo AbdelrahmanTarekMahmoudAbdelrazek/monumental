@@ -1,4 +1,5 @@
 "use client";
+import { EchoResult } from "./EchoResult";
 import { useEffect, useRef, useState } from "react";
 import type { EchoEvent, EchoMeta } from "@monumental/shared";
 import { getSocket, measurePing } from "@/lib/socket";
@@ -81,7 +82,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       await e.init();
       if (cancelled) { e.destroy(); return; }
       e.setMeta(latestMeta.current ?? m);
-      if (window.location.search.includes("ehdebug")) (window as unknown as { __echo: EchoEngine }).__echo = e;
+      if (window.location.search.includes("ehdebug")) Object.assign(window as unknown as Record<string, unknown>, { __echo: e, __ehsock: s });
       setReady(true);
     };
     const join = () =>
@@ -109,15 +110,13 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       if (e.type === "pickup") toast(`${you(e.n, "found", "found")} a fuse.${e.n === meRef.current ? " Take it to the fuse box in the boiler room." : ""}`);
       else if (e.type === "drop") toast(`${you(e.n, "dropped", "dropped")} a fuse.`, true);
       else if (e.type === "install") toast(`${you(e.n, "put", "put")} a fuse in. ${Math.min(GOAL.FUSES, (metaRef.current?.goal?.placed ?? 0) + 1)}/${GOAL.FUSES}`);
-      else if (e.type === "power") toast("The power is back. Everyone to the lift — all of you, together.");
+      else if (e.type === "power") toast("The power is back. Go to the lift and call it.");
+      else if (e.type === "call") toast(`${you(e.n, "called", "called")} the lift. It takes ${GOAL.LIFT_CALL_SEC} seconds. Stay together.`);
+      else if (e.type === "lift") toast("The lift is here. Everyone in. Count heads.", true);
       if (e.type === "wake") toast("Something in the building is awake.", true);
       else if (e.type === "free") toast(e.n === meRef.current ? "You cut yourself free! The cutters are spent." : `${nm(e.n)} cut free with the bolt cutters.`);
-      else if (e.type === "exposed") toast(`${e.by === meRef.current ? "You" : nm(e.by)} caught a mimic in the light. It ran.`);
-      else if (e.type === "taken") {
-        const owner = e.lure ? Number(e.lure.split(":")[0]) : null;
-        const who = e.n === meRef.current ? "You were" : `${nm(e.n)} was`;
-        toast(owner !== null ? `${who} taken — lured with ${owner === meRef.current ? "your" : `${nm(owner)}'s`} voice.` : `${who} taken.`, true);
-      }
+      else if (e.type === "exposed") toast(`${e.by === meRef.current ? "You" : nm(e.by)} unmasked the Copy. It ran.`);
+      else if (e.type === "taken" && e.n !== meRef.current) toast(e.gone ? `${nm(e.n)} is gone.` : `${nm(e.n)} was grabbed.`, true);
     };
     const onSignal = (p: { from: number; data: unknown }) => {
       const e = engineRef.current;
@@ -269,18 +268,18 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
               </div>
               <div className="rounded-xl border border-[#5A2621] bg-[#160E0D] p-4">
                 <div className="font-semibold text-[#F1C9C4]">This game uses your voice against you</div>
-                <p className="mt-1 text-sm leading-relaxed text-[#C7A7A2]">While you play, short pieces of what you say are cut on your device and sent straight to the other players. The monsters replay them in your voice to trick your friends. Pieces live only in this match and are deleted when you leave. On networks that block direct links they pass through an encrypted relay that cannot listen in or keep them. They never go to our server and are never used to train anything.</p>
+                <p className="mt-1 text-sm leading-relaxed text-[#C7A7A2]">While you play, short pieces of what you say are cut on your device and sent straight to the other players. The Copy wears your face and replays them in your voice to trick your friends. Pieces live only in this match and are deleted when you leave. On networks that block direct links they pass through an encrypted relay that cannot listen in or keep them. They never go to our server and are never used to train anything.</p>
                 <label className="mt-3 flex items-center gap-3 text-sm text-[#F1C9C4]"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="h-5 w-5 accent-[#D9463B]" data-testid="eh-consent" /> I understand and agree</label>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-sm">
-                <label htmlFor="eh-smart" className="text-[#9FA89F]">Smart mimic (understands words)</label>
+                <label htmlFor="eh-smart" className="text-[#9FA89F]">Smart Copy (understands words)</label>
                 <select id="eh-smart" value={smart} onChange={(e) => setSmart(e.target.value)} className="rounded-lg border border-[#2A312C] bg-black/40 px-2 py-1.5">
                   <option value="off">Off</option>
                   <option value="en-US">On · English</option>
                   <option value="ar-EG">On · العربية (مصر)</option>
                   <option value="ar-SA">On · العربية (السعودية)</option>
                 </select>
-                <span className="w-full text-xs text-[#6E786E]">Uses your browser's speech-to-text (in Chrome this sends your audio to Google). Off: the mimic still works, just less clever.</span>
+                <span className="w-full text-xs text-[#6E786E]">Uses your browser's speech-to-text (in Chrome this sends your audio to Google). Off: the Copy still works, just less clever.</span>
               </div>
               <p className="text-sm text-[#7E887E]">Your browser will ask for the microphone. Without one you can still listen.</p>
               <button disabled={!ready || !consent} onClick={() => void enter()} data-testid="eh-enter" className={`${TITLE} h-16 rounded-2xl bg-[#E9E4D6] text-2xl text-black disabled:opacity-50`}>{!ready ? "Building the hospital…" : consent ? "Enter the halls" : "Agree above to enter"}</button>
@@ -294,12 +293,12 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         <>
           <div className="pointer-events-none absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#E9E4D6]/70" />
           <div className="pointer-events-none absolute left-4 top-3">
-            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.goal?.power ? "Everyone to the lift" : meta?.night?.awake ? "Trust no voice" : "Find the three fuses"}</div>
+            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.goal?.power ? "Everyone to the lift" : meta?.night?.awake ? "Trust no one" : "Find the three fuses"}</div>
             <div className="text-sm text-[#E0D7BE]" data-testid="eh-goal">{goalText(meta, hud.carrying, clockOff)}</div>
             <div className="text-xs text-[#9FA89F] md:text-sm" data-testid="eh-night">{nightText(meta, clockOff)}</div>
             {hud.room && <div className={`${TITLE} mt-1 text-sm text-[#C9C4B4]`} data-testid="eh-room">{hud.room}</div>}
             {hud.peers.filter((p) => p.status !== "connected").map((p) => (
-              <div key={p.n} className="mt-1 text-xs text-[#C9A66B]">No voice link with {nameOf(p.n)?.name ?? "a player"} yet — you can't hear each other and the mimic can't copy them.</div>
+              <div key={p.n} className="mt-1 text-xs text-[#C9A66B]">No voice link with {nameOf(p.n)?.name ?? "a player"} yet — you can't hear each other and the Copy can't steal their voice.</div>
             ))}
           </div>
           <div className="pointer-events-none absolute right-4 top-3 flex gap-2 text-xs">
@@ -312,9 +311,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
               <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-[#E0675C]" />
               <span className="truncate whitespace-nowrap">CH 4 · {[...new Set([...hud.onAir, ...(hud.fakeAir !== null ? [hud.fakeAir] : [])])].map((n, i) => {
                 const who = n === 0 || n === me ? "you" : nameOf(n)?.name ?? "someone";
-                // Theo's walkie knows his friends' radios: a voice with no radio behind it is flagged
-                const fake = hud.teen === "theo" && n === hud.fakeAir && !hud.onAir.includes(n);
-                return <span key={n}>{i > 0 && ", "}{fake ? <span data-testid="eh-radio-fake"><s className="opacity-70">{who}</s> <b className="text-[#FF8A7A]">· no radio signal</b></span> : who}</span>;
+                return <span key={n}>{i > 0 && ", "}{who}</span>;
               })}</span>
             </div>
           )}
@@ -346,12 +343,19 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         </>
       )}
 
-      {entered && hud && hud.taken > 0 && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/85" data-testid="eh-taken">
-          <div className="text-center">
-            <div className={`${TITLE} text-6xl text-[#D9463B]`}>Taken</div>
-            <p className="mt-2 text-[#A6AFA6]">Back in the safe room in {hud.taken}…</p>
+      {entered && hud?.scare && <div className="eh-scare pointer-events-none absolute inset-0" aria-hidden="true" />}
+      {entered && hud && hud.taken > 0 && !hud.scare && !meta?.goal?.result && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/90" data-testid="eh-taken">
+          <div className="px-6 text-center">
+            <div className={`${TITLE} text-6xl text-[#D9463B]`}>{hud.gone ? "Gone" : "Grabbed"}</div>
+            <p className="mt-2 text-[#A6AFA6]">{hud.gone ? "It got you twice. Your friends are on their own now." : `It wasn't who you thought. Back in reception in ${hud.taken}… Next time, it keeps you.`}</p>
           </div>
+        </div>
+      )}
+      {entered && hud?.pry !== null && hud?.pry !== undefined && (
+        <div className="pointer-events-none absolute left-1/2 top-[64%] w-56 -translate-x-1/2 text-center" data-testid="eh-pry">
+          <div className="text-sm text-[#E9E4D6]">Prying the fuse out… stay close</div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full bg-[#FFB040]" style={{ width: `${hud.pry * 100}%` }} /></div>
         </div>
       )}
       <div className="pointer-events-none absolute left-1/2 top-16 flex w-[min(92vw,520px)] -translate-x-1/2 flex-col gap-2" aria-live="polite">
@@ -385,19 +389,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
 
       {/* ── the end of a match ── */}
       {entered && meta?.goal?.result && (
-        <div className="absolute inset-0 z-20 grid place-items-center bg-black/85 p-6" data-testid="eh-result">
-          <div className="w-full max-w-md text-center">
-            <div className={`${TITLE} text-5xl ${meta.goal.result === "win" ? "text-[#E9E4D6]" : "text-[#D9463B]"}`}>{meta.goal.result === "win" ? "You got out" : "The lights went out"}</div>
-            <p className="mt-3 text-[#A6AFA6]">{meta.goal.result === "win" ? "The lift doors closed on the dark. Everyone who was still with you made it." : "Twenty minutes, and the hospital kept you."}</p>
-            <div className="mt-6 grid grid-cols-3 gap-2 text-sm">
-              <div className="rounded-xl border border-[#222924] p-3"><div className={`${TITLE} text-2xl text-[#E9E4D6]`}>{fmtTime(((meta.goal.endedAt || meta.serverNow) - meta.goal.startedAt) / 1000)}</div><div className="text-xs text-[#7E887E]">time</div></div>
-              <div className="rounded-xl border border-[#222924] p-3"><div className={`${TITLE} text-2xl text-[#E9E4D6]`}>{meta.night?.taken ?? 0}</div><div className="text-xs text-[#7E887E]">times taken</div></div>
-              <div className="rounded-xl border border-[#222924] p-3"><div className={`${TITLE} text-2xl text-[#E9E4D6]`}>{meta.night?.exposed ?? 0}</div><div className="text-xs text-[#7E887E]">mimics exposed</div></div>
-            </div>
-            <button className={`${TITLE} mt-6 h-14 w-full rounded-2xl bg-[#E9E4D6] text-xl text-black`} data-testid="eh-again" onClick={() => getSocket().emit("eh_act", { type: "restart" }, (r) => { if (!r.ok) toastRef.current(r.error ?? "Could not restart", true); })}>Play again</button>
-            <a href="/echo" className="mt-3 inline-block text-sm text-[#7E887E] underline">Leave</a>
-          </div>
-        </div>
+        <EchoResult meta={meta} me={me} onAgain={() => getSocket().emit("eh_act", { type: "restart" }, (r) => { if (!r.ok) toastRef.current(r.error ?? "Could not restart", true); })} />
       )}
     </div>
   );
@@ -408,15 +400,18 @@ function fmtTime(sec: number) { const s = Math.max(0, Math.round(sec)); return `
 function goalText(meta: EchoMeta | null, carrying: boolean, clockOff: number) {
   const g = meta?.goal;
   if (!g || !g.startedAt) return "";
-  const left = fmtTime((g.endsAt - (Date.now() + clockOff)) / 1000);
-  if (g.power) return `Power on · at the lift ${g.inLift.length}/${g.need} · ${left} left`;
+  const now = Date.now() + clockOff;
+  const left = fmtTime((g.endsAt - now) / 1000);
+  if (g.power && !g.calledAt) return `Power on · call the lift (stairs & lift) · ${left} left`;
+  if (g.power && now < g.liftAt) return `The lift is coming… ${Math.ceil((g.liftAt - now) / 1000)} s · stay together`;
+  if (g.power) return `The lift is here · inside ${g.inLift.length}/${g.need} · count heads`;
   return `${carrying ? "Carrying a fuse → boiler room · " : ""}Fuses ${g.placed}/${GOAL.FUSES} · ${left} left`;
 }
 
 function nightText(meta: EchoMeta | null, clockOff: number) {
   const n = meta?.night;
   if (!n) return "";
-  if (n.awake) return `Mimics exposed: ${n.exposed} · taken: ${n.taken}`;
+  if (n.awake) return n.taken || n.exposed ? `Unmasked: ${n.exposed} · grabbed: ${n.taken}` : "One of you isn't one of you.";
   if (!n.wakeAt) return "Waiting for a second player…";
   const left = Math.max(0, Math.ceil((n.wakeAt - (Date.now() + clockOff)) / 1000));
   return left > 0 ? `The night is calm… for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Something is stirring…";

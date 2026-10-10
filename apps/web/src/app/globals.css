@@ -27,3 +27,7 @@ html.dark body { background-image: radial-gradient(60% 50% at 50% -10%, rgba(249
 @keyframes riverFlow { from { transform: translateX(0) } to { transform: translateX(-160px) } }
 @keyframes sway { 0%, 100% { transform: rotate(-4deg) } 50% { transform: rotate(4deg) } }
 @keyframes tileFlip { 0% { transform: rotateY(90deg) scale(.9); opacity: .4 } 60% { transform: rotateY(-12deg) scale(1.05); opacity: 1 } 100% { transform: none; opacity: 1 } }
+/* Echo Halls: the grab — a red, stuttering vignette over the creature's face */
+@keyframes ehScare { 0% { opacity: 0 } 6% { opacity: 1 } 12% { opacity: .35 } 20% { opacity: .95 } 32% { opacity: .5 } 60% { opacity: .85 } 100% { opacity: 1; background-color: #000 } }
+.eh-scare { background: radial-gradient(ellipse at center, transparent 30%, rgba(120, 6, 0, .55) 70%, rgba(20, 0, 0, .95) 100%); animation: ehScare 1.4s linear forwards; mix-blend-mode: normal; }
+@media (prefers-reduced-motion: reduce) { .eh-scare { animation: none; opacity: .8 } }

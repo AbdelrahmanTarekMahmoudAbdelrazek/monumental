@@ -313,9 +313,20 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
 }
 
 /** Dying tubes, the alarm, the crack's slow pulse; then the nearest sources get the real lights. */
-export function flickerLights(lights: HospitalLights, t: number, px: number, pz: number) {
+export function flickerLights(lights: HospitalLights, t: number, px: number, pz: number, fear: { x: number; z: number; r: number; kill: boolean }[] = []) {
   for (const L of lights.sources) {
     const was = L.cur > 0;
+    // something wrong is standing near: the tubes stutter; when it shows itself they die
+    const f = fear.find((q) => Math.hypot(L.pos.x - q.x, L.pos.z - q.z) < q.r);
+    if (f && L.kind !== "exit") {
+      const dead = f.kill || Math.sin(t * 23 + L.phase * 11) > 0.35;
+      if (dead) {
+        L.cur = f.kill ? 0 : L.base * 0.15;
+        L.tube?.material.color.set("#1a1b19");
+        if (L.kind === "fluoro" && was !== L.cur > 0) L.toggled = t;
+        continue;
+      }
+    }
     if (L.kind === "alarm") { const on = Math.sin(t * 3.2) > 0; L.cur = on ? L.base : 0.2; L.tube?.material.color.set(on ? "#ff3a2a" : "#3a0c08"); }
     else if (L.kind === "alien") L.cur = L.base * (0.7 + 0.3 * Math.sin(t * 0.9 + L.phase));
     else if (L.kind === "exit" || L.kind === "lift") L.cur = L.base;

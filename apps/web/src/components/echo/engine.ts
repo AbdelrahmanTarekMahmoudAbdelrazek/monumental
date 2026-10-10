@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
-import { ECHO, ECHO_ROOMS, GOAL, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoPath, type EchoTeenId, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
+import { COPY, ECHO, ECHO_ROOMS, GOAL, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoPath, type EchoTeenId, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
 import { buildLevel, flickerLights, type HospitalLights } from "./hospital";
 import { HospitalAudio } from "./hospitalAudio";
@@ -10,7 +10,16 @@ import { Avatar } from "./avatars";
 import { VoiceCapture, Transcriber } from "./capture";
 import { MimicFigure, MimicSound } from "./mimic";
 
-interface MimicView { fig: MimicFigure; snd: MimicSound; hist: { t: number; x: number; z: number; yaw: number; state: string; speaking: boolean }[] }
+interface MimicView {
+  fig: MimicFigure;
+  snd: MimicSound;
+  hist: { t: number; x: number; z: number; yaw: number; state: string; speaking: boolean; as: number; torch: boolean; crouch: boolean; pitch: number }[];
+  /** The friend it is dressed as (rebuilt when it changes face). */
+  av: Avatar | null;
+  avAs: number;
+  /** Its footsteps, exactly like a friend's. */
+  steps: { panner: PannerNode; gain: GainNode; phase: number; lx: number; lz: number };
+}
 
 type Rapier = typeof RAPIER_NS;
 
@@ -41,6 +50,15 @@ export interface EchoHud {
   finder: { what: string; m: number; deg: number } | null;
   /** Sam has used his cutters this match. */
   cuttersUsed: boolean;
+  /** Grabbed twice: out for the rest of the match. */
+  gone: boolean;
+  /** The creature is in my face (the grab). */
+  scare: boolean;
+  /** Prying a fuse out: 0..1, or null. */
+  pry: number | null;
+  /** Seconds until the lift arrives (null = not called / already here). */
+  liftIn: number | null;
+  liftHere: boolean;
 }
 
 export interface EchoNet {
@@ -111,7 +129,7 @@ export class EchoEngine {
   private fuses = new Map<number, { g: THREE.Group; glow: THREE.MeshStandardMaterial }>();
   private doorOpen = 0;
   /** What E / Use would do right now. */
-  private act: { type: "pickup"; fuse: number } | { type: "install" } | null = null;
+  private act: { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | null = null;
   private avatars = new Map<number, Avatar>();
   private remoteSteps = new Map<number, { panner: PannerNode; gain: GainNode; phase: number; lx: number; lz: number }>();
   private hist = new Map<number, EchoPeerState[]>();
@@ -330,14 +348,19 @@ export class EchoEngine {
     for (const r of s.m ?? []) {
       let v = this.mimics.get(r[0]);
       if (!v) {
-        v = { fig: new MimicFigure(true), snd: new MimicSound(this.sounds), hist: [] };
+        const gain = this.sounds.ctx.createGain();
+        const panner = this.sounds.panner();
+        gain.connect(panner);
+        v = { fig: new MimicFigure(true), snd: new MimicSound(this.sounds), hist: [], av: null, avAs: 0, steps: { panner, gain, phase: 0, lx: 0, lz: 0 } };
         this.mimics.set(r[0], v);
         this.scene.add(v.fig.root);
       }
       if (v.hist.length && v.hist[v.hist.length - 1].t >= s.t) continue;
-      v.hist.push({ t: s.t, x: r[1] / 100, z: r[2] / 100, yaw: r[3] / 1000, state: MIMIC_STATES[r[4]] ?? "wander", speaking: r[5] === 1 });
+      v.hist.push({ t: s.t, x: r[1] / 100, z: r[2] / 100, yaw: r[3] / 1000, state: MIMIC_STATES[r[4]] ?? "wander", speaking: r[5] === 1, as: r[6] ?? 0, torch: ((r[7] ?? 1) & 1) === 1, crouch: ((r[7] ?? 0) & 2) === 2, pitch: (r[8] ?? 0) / 1000 });
       while (v.hist.length > 2 && v.hist[1].t < s.t - 1500) v.hist.shift();
     }
+    const live = new Set((s.m ?? []).map((r) => r[0]));
+    for (const [id, v] of [...this.mimics]) if (!live.has(id)) this.dropMimic(id, v);
     for (const p of decodeEchoSnap(s)) {
       if (p.n === this.opts.me) continue;
       let h = this.hist.get(p.n);
@@ -355,13 +378,22 @@ export class EchoEngine {
   onEvent(e: EchoEvent) {
     this.events.push(e);
     if (this.events.length > 50) this.events.shift();
-    if (e.type === "pickup" || e.type === "install" || e.type === "power" || e.type === "end" || e.type === "drop") this.hospital?.sfx(e.type === "end" ? e.result : e.type);
+    if (e.type === "pickup" || e.type === "install" || e.type === "power" || e.type === "end" || e.type === "drop" || e.type === "call" || e.type === "lift") this.hospital?.sfx(e.type === "end" ? e.result : e.type);
+    if (e.type === "pry") { const f = this.goal?.fuses[e.fuse]; if (f) this.hospital?.scrape(f.x, f.y + 0.3, f.z); }
+    if (e.type === "reveal") {
+      // the friend's face slides off: a scream, the lights die around it, the room shakes
+      const v = this.mimics.get(e.mimic);
+      v?.snd.shriek();
+      const h = v?.hist[v.hist.length - 1];
+      if (h) { const d = Math.hypot(h.x - this.cur.x, h.z - this.cur.z); if (d < 16) { this.shake = Math.max(this.shake, 1 - d / 16); this.hospital?.sfx("reveal"); } }
+    }
     if (e.type === "restart") {
       const mine = e.spawns.find((s) => s[0] === this.opts.me);
       if (mine) this.teleport(mine[1], mine[2]);
       this.takenUntil = 0;
       this.doorOpen = 0;
       this.cuttersUsed = false;
+      this.gone = false;
     }
     if (e.type === "radio") {
       const clips = e.clips.map((k) => this.voice.bank.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
@@ -378,8 +410,9 @@ export class EchoEngine {
       this.mimics.get(e.mimic)?.snd.shriek();
     } else if (e.type === "taken") {
       if (e.n === this.opts.me) {
-        this.takenUntil = performance.now() + 8000;
-        this.sounds.sting();
+        this.takenUntil = e.gone ? Infinity : performance.now() + COPY.BACK_SEC * 1000;
+        this.gone = !!e.gone;
+        this.startScare(e.mimic);
         if (this.capture) this.capture.enabled = false;
       } else {
         const a = this.avatars.get(e.n);
@@ -514,9 +547,12 @@ export class EchoEngine {
     }
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     const strafe = this.vel.x * cos - this.vel.z * sin;
-    const slump = this.isTaken ? 1 : 0;
-    this.camera.position.set(px + cos * bobX, feet + this.eye + bobY - slump * 1.2, pz - sin * bobX);
-    this.camera.rotation.set(this.pitch + slump * 0.9, this.yaw, -strafe * 0.008 + slump * 0.6, "YXZ");
+    const scared = now < this.scareUntil;
+    const slump = this.isTaken && !scared ? 1 : 0;
+    this.shake = Math.max(0, this.shake - dt * 1.6);
+    const sh = this.shake * this.shake * 0.06;
+    this.camera.position.set(px + cos * bobX + (Math.random() - 0.5) * sh, feet + this.eye + bobY - slump * 1.2 + (Math.random() - 0.5) * sh, pz - sin * bobX);
+    this.camera.rotation.set((scared ? 0 : this.pitch) + slump * 0.9 + (Math.random() - 0.5) * sh * 0.5, this.yaw, -strafe * 0.008 + slump * 0.6 + (Math.random() - 0.5) * sh * 0.5, "YXZ");
     this.camera.updateMatrixWorld();
 
     // ── torch follows the head with a little lag, like a real hand ──
@@ -525,8 +561,8 @@ export class EchoEngine {
     this.torchRig.quaternion.slerp(this.camera.quaternion, 1 - Math.exp(-dt * 16));
     this.torch.intensity = this.torchOn ? 75 * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
 
-    flickerLights(this.lights, now / 1000, px, pz);
-    this.hospital?.update({ x: px, y: this.camera.position.y, z: pz, yaw: this.yaw }, this.torchOn, this.lights.sources, now / 1000, this.isTaken);
+    flickerLights(this.lights, now / 1000, px, pz, this.fear());
+    this.hospital?.update({ x: px, y: this.camera.position.y, z: pz, yaw: this.yaw }, this.torchOn, this.lights.sources, now / 1000, this.isTaken, this.danger);
     this.updateGoal(dt, now / 1000, px, pz);
 
     // ── friends, shown 0.12 s in the past so their movement is smooth ──
@@ -559,15 +595,67 @@ export class EchoEngine {
         }
       }
     }
-    // ── mimics, drawn in the past like friends ──
+    // ── the Copies, drawn in the past like friends: a friend's face until it shows what it is ──
+    let danger = 0, behind = 0;
     for (const v of this.mimics.values()) {
       const m = sampleMimic(v.hist, rt);
-      if (!m) { v.fig.root.visible = false; continue; }
-      v.fig.root.visible = m.state !== "dormant";
+      if (!m) { v.fig.root.visible = false; if (v.av) v.av.root.visible = false; continue; }
+      const revealed = m.state === "chase" || m.state === "flee";
+      const d = Math.hypot(m.x - px, m.z - pz);
+      const walls = d < 20 ? echoWallsBetween(px, pz, m.x, m.z) : 3;
+      const seen = d < 12 && walls === 0;
+      const face = this.meta?.players.find((p) => p.n === m.as);
+      if (face && (!v.av || v.avAs !== m.as)) {
+        if (v.av) { this.scene.remove(v.av.root); v.av.dispose(); }
+        v.av = new Avatar(face.name, face.color, face.look ?? TEEN_LOOKS[ECHO_TEENS[(face.n - 1) % 4].id], !this.opts.mobile);
+        v.avAs = m.as;
+        this.scene.add(v.av.root);
+      }
+      if (v.av && face?.look) v.av.setLook(face.look);
+      const disguised = !revealed && m.state !== "dormant" && !!v.av;
+      if (v.av) {
+        v.av.root.visible = disguised;
+        if (disguised) v.av.update(m.x, 0, m.z, m.yaw, m.pitch, m.torch, m.crouch, m.speaking, dt, seen, d);
+      }
+      v.fig.root.visible = revealed;
       v.fig.update(m.x, m.z, m.yaw, m.state, m.speaking, dt, now / 1000);
       const mix = voiceMix({ x: px, z: pz }, m);
-      const d = Math.hypot(m.x - px, m.z - pz);
-      v.snd.update(m.x, m.z, this.isTaken ? 0 : mix.gain, mix.cutoff, d, d < 20 ? echoWallsBetween(px, pz, m.x, m.z) : 3, m.state === "chase");
+      v.snd.update(m.x, m.z, this.isTaken ? 0 : mix.gain, mix.cutoff, d, walls, m.state === "chase", revealed);
+      // footsteps like anyone's (a friend who makes no sound would give it away)
+      if (disguised && v.av) {
+        const st = v.steps;
+        const moved = Math.hypot(m.x - st.lx, m.z - st.lz);
+        st.lx = m.x; st.lz = m.z;
+        if (moved < 2) st.phase += moved * 2.15 * 2;
+        if (st.phase > Math.PI * 2 && v.av.speed > 0.6) {
+          st.phase = 0;
+          const vol = Math.max(0, 1 - d / 20) * (walls === 0 ? 1 : walls === 1 ? 0.4 : 0.15);
+          if (vol > 0.01) { this.sounds.place(st.panner, m.x, 0.1, m.z); this.sounds.step(vol * (m.crouch ? 0.1 : 0.22), st.gain); }
+        }
+      }
+      if (m.state === "chase" && d < 18) danger = Math.max(danger, 1 - d / 18);
+      // Theo's walkie: something close that he can't see
+      const away = d > 0.01 ? Math.acos(Math.max(-1, Math.min(1, ((m.x - px) * -Math.sin(this.yaw) + (m.z - pz) * -Math.cos(this.yaw)) / d))) : 0;
+      if (d < 10 && m.state !== "dormant" && (walls > 0 || away > 1.75)) behind = Math.max(behind, 1 - d / 10);
+    }
+    if (behind > 0 && this.myTeen() === "theo" && !this.isTaken && now > this.crackleAt) {
+      this.crackleAt = now + 1400 + Math.random() * 2200 - behind * 900;
+      this.voice.radio.crackle(0.35 + behind * 0.65);
+    }
+    this.danger = danger;
+    // the grab, up close
+    if (this.scareFig) {
+      const on = now < this.scareUntil;
+      this.scareFig.root.visible = on;
+      if (on) {
+        this.scareFig.update(0, 0, 0, "stalk", true, dt, now / 1000);
+        // right in front of my eyes, facing me, lunging closer
+        const k = Math.max(0, Math.min(1, 1 - (this.scareUntil - now) / 1400));
+        const dist = 0.95 - k * 0.35;
+        const c = this.camera.position;
+        this.scareFig.root.position.set(c.x - Math.sin(this.yaw) * dist + (Math.random() - 0.5) * 0.03, c.y - 2.38 + Math.random() * 0.02, c.z - Math.cos(this.yaw) * dist);
+        this.scareFig.root.rotation.set(0, this.yaw + Math.PI, 0);
+      }
     }
 
     this.sounds.listener(this.camera.position.x, this.camera.position.y, this.camera.position.z, this.yaw);
@@ -614,6 +702,18 @@ export class EchoEngine {
   }
 
   private cuttersUsed = false;
+  private danger = 0;
+  /** Where the lights go wrong: dead around a revealed creature, stuttering near a disguised one. */
+  private fear() {
+    const out: { x: number; z: number; r: number; kill: boolean }[] = [];
+    for (const v of this.mimics.values()) {
+      const h = v.hist[v.hist.length - 1];
+      if (!h || h.state === "dormant") continue;
+      const revealed = h.state === "chase" || h.state === "flee";
+      out.push({ x: h.x, z: h.z, r: revealed ? 12 : 5, kill: revealed });
+    }
+    return out;
+  }
   private myTeen(): EchoTeenId | null { return this.meta?.players.find((p) => p.n === this.opts.me)?.look?.teen ?? null; }
 
   /** Nora's headlamp throws further and brighter. */
@@ -652,6 +752,49 @@ export class EchoEngine {
     return { what, m: Math.round(m), deg: Math.round((Math.atan2(right, ahead) * 180) / Math.PI) };
   }
 
+  private gone = false;
+  private shake = 0;
+  private scareUntil = 0;
+  private scareFig: MimicFigure | null = null;
+  private crackleAt = 0;
+
+  /** Server time now (ms), from the snapshot clock. */
+  private serverNow() { return performance.now() + (this.tOff ?? 0); }
+  private pryProgress(): number | null {
+    const p = this.goal?.pry.find((q) => q[0] === this.opts.me);
+    if (!p) return null;
+    return Math.max(0, Math.min(1, 1 - (p[2] - this.serverNow()) / (GOAL.PRY_SEC * 1000)));
+  }
+  private liftIn(): number | null {
+    const g = this.goal;
+    if (!g?.liftAt || g.result) return null;
+    const s = Math.ceil((g.liftAt - this.serverNow()) / 1000);
+    return s > 0 ? s : null;
+  }
+  private liftHere() { const g = this.goal; return !!g?.liftAt && !g.result && this.serverNow() >= g.liftAt; }
+
+  /** The grab: the creature fills the screen for a moment. */
+  private startScare(mimic: number) {
+    this.sounds.sting();
+    this.mimics.get(mimic)?.snd.shriek();
+    this.hospital?.sfx("reveal");
+    this.scareUntil = performance.now() + 1400;
+    this.shake = 1;
+    if (!this.scareFig) {
+      this.scareFig = new MimicFigure(false);
+      this.scareFig.scream = 1;
+      this.scene.add(this.scareFig.root);
+    }
+    this.scareFig.root.visible = true;
+  }
+
+  private dropMimic(id: number, v: MimicView) {
+    v.snd.dispose(); this.scene.remove(v.fig.root); v.fig.dispose();
+    if (v.av) { this.scene.remove(v.av.root); v.av.dispose(); }
+    v.steps.panner.disconnect();
+    this.mimics.delete(id);
+  }
+
   private pushHud(force: boolean) {
     const now = performance.now();
     if (!force && now - this.hudAt < 100) return;
@@ -668,13 +811,18 @@ export class EchoEngine {
       taken: Math.max(0, Math.ceil((this.takenUntil - now) / 1000)),
       pieces: [...this.voice.bank.keys()].filter((k) => k.startsWith(`${this.opts.me}:`)).length,
       room: ECHO_ROOMS[echoTile(echoTileOf(this.cur.x), echoTileOf(this.cur.z))]?.name ?? "",
-      act: this.act ? (this.act.type === "pickup" ? "pick up the fuse" : "put the fuse in") : null,
+      act: this.act ? (this.act.type === "pickup" ? "pry the fuse out" : this.act.type === "call" ? "call the lift" : "put the fuse in") : null,
       carrying: !!this.goal?.fuses.some((f) => f.by === this.opts.me),
       onAir: [...(this.wasOnAir ? [0] : []), ...this.onAir],
       fakeAir: this.fakeAir && this.fakeAir.until > now ? this.fakeAir.as : null,
       teen: this.myTeen(),
       finder: this.myTeen() === "maya" && !this.isTaken ? this.finder() : null,
       cuttersUsed: this.cuttersUsed,
+      gone: this.gone,
+      scare: now < this.scareUntil,
+      pry: this.pryProgress(),
+      liftIn: this.liftIn(),
+      liftHere: this.liftHere(),
     });
   }
 
@@ -703,21 +851,23 @@ export class EchoEngine {
         grp.position.set(-0.2, -0.2, -0.55); grp.rotation.set(0.3, 0.6, 0.2); grp.scale.setScalar(0.55);
       } else {
         if (grp.parent !== this.scene) { this.scene.add(grp); grp.scale.setScalar(1); }
-        const a = f.by !== null ? this.avatars.get(f.by) : null;
+        const a = f.by === null ? null : f.by < 0 ? this.mimics.get(-f.by)?.av ?? null : this.avatars.get(f.by);
         if (a) { const yaw = a.root.rotation.y; grp.position.set(a.root.position.x - Math.cos(yaw) * 0.3 - Math.sin(yaw) * 0.25, 0.95, a.root.position.z + Math.sin(yaw) * 0.3 - Math.cos(yaw) * 0.25); grp.rotation.set(0, yaw, 0); }
         else { grp.position.set(f.x, f.y + 0.05 + Math.sin(t * 2 + f.id) * 0.01, f.z); grp.rotation.set(0, t * 0.4 + f.id, 0); }
       }
     }
     v.fuseSlots.forEach((m, i) => m.material.color.set(i < g.placed ? (g.power ? 0x3cff8a : 0x2fd27a) : 0x3a0c08));
     // the lift wakes up when the power is back
-    this.doorOpen = Math.min(1, Math.max(0, this.doorOpen + (g.power && !g.result ? dt / 2 : g.result === "win" ? -dt / 1.5 : 0)));
+    this.doorOpen = Math.min(1, Math.max(0, this.doorOpen + (this.liftHere() ? dt / 2 : g.result === "win" ? -dt / 1.5 : 0)));
     v.liftDoors.forEach((d, i) => { d.position.z = 9 * ECHO.TILE + 0.75 + (i ? 1 : -1) * (0.28 + 0.5 * this.doorOpen); });
     v.cab.color.setRGB(0.04 + 0.85 * this.doorOpen, 0.035 + 0.72 * this.doorOpen, 0.03 + 0.5 * this.doorOpen);
     v.liftLight.base = 6 * this.doorOpen;
-    v.liftArrow.color.set(g.power ? (Math.sin(t * 4) > 0 ? 0xffb040 : 0x3a1a10) : 0x3a1a10);
+    v.liftArrow.color.set(g.calledAt ? (Math.sin(t * (this.liftHere() ? 2 : 6)) > 0 ? 0xffb040 : 0x3a1a10) : g.power ? 0x6a3010 : 0x3a1a10);
     // what can I do right here?
     this.act = null;
     if (g.result || this.isTaken || !g.startedAt) return;
+    if (g.pry.some((p) => p[0] === this.opts.me)) return;
+    if (g.power && !g.calledAt && Math.hypot(GOAL.LIFT.x - px, GOAL.LIFT.z - pz) < GOAL.LIFT_R + 1.3) { this.act = { type: "call" }; return; }
     const mine = g.fuses.find((f) => f.by === this.opts.me);
     if (mine) { if (Math.hypot(GOAL.BOX.x - px, GOAL.BOX.z - pz) < GOAL.REACH) this.act = { type: "install" }; return; }
     let best: number = GOAL.REACH;
@@ -736,7 +886,8 @@ export class EchoEngine {
     this.ro?.disconnect();
     this.capture?.stop();
     this.transcriber?.stop();
-    for (const v of this.mimics.values()) { v.snd.dispose(); v.fig.dispose(); }
+    for (const [id, v] of [...this.mimics]) this.dropMimic(id, v);
+    this.scareFig?.dispose();
     this.voice.destroy();
     this.hospital?.stop();
     this.sounds.close();

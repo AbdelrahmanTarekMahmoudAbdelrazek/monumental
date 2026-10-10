@@ -40,6 +40,20 @@ export class RadioFx {
     this.staticGain.gain.setTargetAtTime(this.open > 0 ? 0.018 : 0, t, 0.05);
   }
 
+  /** A burst of static with nobody on the channel (Theo's walkie, when something is close). */
+  crackle(strength: number) {
+    const c = this.ctx, t = c.currentTime;
+    const n = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < n; i++) {
+      const at = t + i * (0.06 + Math.random() * 0.09);
+      const s = c.createBufferSource(); s.buffer = this.noise;
+      const bp = c.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1400 + Math.random() * 2200; bp.Q.value = 1.2;
+      const g = c.createGain(); const len = 0.03 + Math.random() * 0.08;
+      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.12 * strength, at + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+      s.connect(bp).connect(g).connect(this.input); s.start(at, Math.random()); s.stop(at + len + 0.02);
+    }
+  }
+
   /** Play voice pieces as if someone were talking on Channel 4. Returns how long it lasts (s). */
   play(clips: BankClip[]) {
     const c = this.ctx;

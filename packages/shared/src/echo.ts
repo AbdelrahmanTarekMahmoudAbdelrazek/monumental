@@ -145,7 +145,7 @@ export const ECHO_COLORS = ["#E9C46A", "#7FB89A", "#8AB8FF", "#E0675C"] as const
 export type EchoTeenId = "maya" | "theo" | "sam" | "nora";
 export const ECHO_TEENS: readonly { id: EchoTeenId; name: string; role: string; perk: string; item: EchoItem }[] = [
   { id: "maya", name: "Maya", role: "The Navigator", perk: "Her phone points to the nearest fuse, the fuse box, then the lift", item: "phone" },
-  { id: "theo", name: "Theo", role: "The Radio", perk: "His walkie spots fake calls on Channel 4", item: "walkie" },
+  { id: "theo", name: "Theo", role: "The Radio", perk: "His walkie crackles when something is close behind a wall or behind his back", item: "walkie" },
   { id: "sam", name: "Sam", role: "The Breaker", perk: "Cuts himself free once per match when a monster grabs him", item: "cutters" },
   { id: "nora", name: "Nora", role: "The Scout", perk: "Her headlamp reaches further and drives monsters off twice as fast", item: "torch" },
 ];
@@ -239,15 +239,37 @@ export const GOAL = {
   BOX: { x: 56.4, z: 31.5 },
   LIFT: { x: 13.6, z: 27.75 },
   LIFT_R: 2.2,
-  /** Everyone alive must stand at the lift this long once the power is on. */
+  /** Everyone alive must stand in the lift this long once it has arrived. */
   LIFT_HOLD: 4,
+  /** Prying a fuse out takes this long (s); stay close. */
+  PRY_SEC: 2.5,
+  /** Called with the power on, the lift takes this long to come down (s). */
+  LIFT_CALL_SEC: 45,
   /** Where a fuse can be hidden: [x, y, z] — on a morgue drawer, the theatre trolley, a desk, a bed... */
   SPOTS: [
     [43.9, 1.31, 29.7], [23.9, 1.0, 30.9], [7.5, 0.05, 33.0], [54.3, 0.81, 9.0], [38.4, 0.8, 13.6], [48.6, 0.8, 28.5],
     [17.2, 0.94, 30.9], [48.0, 0.05, 36.0], [48.6, 0.81, 7.4], [22.5, 0.05, 6.5], [30.6, 0.05, 37.0], [3.6, 1.07, 29.5],
   ] as [number, number, number][],
 } as const;
+/** `by`: who carries it (player number), or a negative number while the Copy has it (−copy id). */
 export interface EchoFuse { id: number; x: number; y: number; z: number; by: number | null; placed: boolean }
+
+/** How a match ended, for the result screen. */
+export interface EchoSummary {
+  players: { n: number; name: string; teen: EchoTeenId; status: "escaped" | "gone" | "rode" | "lost" | "left"; strikes: number; fuses: number }[];
+  /** Whose face the Copy wore, and for how many seconds. */
+  faces: { n: number; name: string; sec: number }[];
+  /** Whose voice it used, how many times. */
+  voices: { n: number; name: string; times: number }[];
+  stolen: number;
+  exposed: number;
+  /** A copy was in the lift when the doors closed. */
+  rode: boolean;
+  /** Key moments: seconds since the match started, and what happened. */
+  moments: { at: number; text: string }[];
+  /** Match length in seconds. */
+  sec: number;
+}
 export interface EchoGoal {
   fuses: EchoFuse[];
   placed: number;
@@ -260,8 +282,16 @@ export interface EchoGoal {
   need: number;
   result: null | "win" | "lose";
   endedAt: number;
+  /** Players prying a fuse out: [player, fuse, done at]. */
+  pry: [number, number, number][];
+  /** When the lift was called (0 = not yet) and when it arrives. */
+  calledAt: number;
+  liftAt: number;
+  /** Players grabbed twice: gone for the rest of the match. */
+  gone: number[];
+  summary: EchoSummary | null;
 }
-export type EchoAct = { type: "enter" } | { type: "pickup"; fuse: number } | { type: "install" } | { type: "restart" };
+export type EchoAct = { type: "enter" } | { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | { type: "restart" };
 
 export interface EchoMeta {
   code: string;
@@ -353,8 +383,49 @@ export const MIMIC = {
   RATE: 16000,
 } as const;
 
-export type MimicState = "dormant" | "wander" | "stalk" | "lure" | "chase" | "flee";
-export const MIMIC_STATES: MimicState[] = ["dormant", "wander", "stalk", "lure", "chase", "flee"];
+/**
+ * What the Copy is doing. Disguised (looks like a friend): wander, search, stalk, follow, lift.
+ * Revealed (the creature): chase (it lunges), flee (unmasked, running to hide).
+ */
+export type MimicState = "dormant" | "wander" | "stalk" | "lure" | "chase" | "flee" | "search" | "follow" | "lift";
+export const MIMIC_STATES: MimicState[] = ["dormant", "wander", "stalk", "lure", "chase", "flee", "search", "follow", "lift"];
+export const mimicRevealed = (s: MimicState) => s === "chase" || s === "flee";
+
+/** The Copy: a monster that always looks like one of the players. */
+export const COPY = {
+  /** Walks like a player; hurries only where nobody can see it. */
+  WALK: 2.4,
+  HURRY: 3.6,
+  /** Revealed: the lunge. */
+  LUNGE: 4.9,
+  LUNGE_SEC: 5,
+  /** From "friend" to creature: the moment between (a shriek, the lights die). */
+  REVEAL_SEC: 0.55,
+  /** Tags along at this distance (metres). */
+  FOLLOW_MIN: 2.2,
+  FOLLOW_MAX: 6,
+  /** Gives up on a target who never leaves the group after this long (s). */
+  PATIENCE_SEC: 70,
+  /** Following this long before it may strike (s). */
+  FOLLOW_MIN_SEC: 4,
+  /**
+   * Torch on a disguised copy from closer than EXPOSE_RANGE: it reacts after NOTICE (walks off, or attacks if you're alone with it),
+   * and its face slides off after EXPOSE. The revealed creature is driven back by a torch from further (REVEALED_RANGE) and faster.
+   */
+  NOTICE_SEC: 0.5,
+  EXPOSE_SEC: 2.5,
+  EXPOSE_RANGE: 6,
+  EXPOSE_REVEALED: 0.8,
+  REVEALED_RANGE: 12,
+  /** Unmasked: hides this long before it puts a face back on (s). */
+  FLEE_SEC: 40,
+  /** Grabbed this many times and you're gone for good. */
+  STRIKES: 2,
+  /** A grabbed player is back in reception after this long (s). */
+  BACK_SEC: 15,
+  /** Fuses it may move per match. */
+  STEALS: 2,
+} as const;
 
 /** What a voice piece is about. Text tags need the optional speech-to-text; the others come from the sound itself. */
 export type ClipTag = "short" | "long" | "loud" | "call" | "here" | "found" | "panic" | "question" | "laugh" | `name:${number}`;
@@ -368,7 +439,9 @@ export interface ClipInfo {
   tags: ClipTag[];
 }
 
-/** Snapshot mimic rows: [id, x×100, z×100, yaw×1000, state index, speaking (0/1)]. */
+/**
+ * Snapshot mimic rows: [id, x×100, z×100, yaw×1000, state index, speaking (0/1), as (player it looks like, 0 = none), flags (1 torch, 2 crouch), pitch×1000].
+ */
 export interface EchoSnap2 extends EchoSnap {
   m?: number[][];
 }
@@ -376,7 +449,15 @@ export interface EchoSnap2 extends EchoSnap {
 export type EchoEvent =
   | { type: "say"; mimic: number; clips: string[] }
   | { type: "exposed"; mimic: number; by: number }
-  | { type: "taken"; n: number; mimic: number; lure: string | null }
+  | { type: "taken"; n: number; mimic: number; lure: string | null; gone?: boolean }
+  /** The Copy took off its friend's face: `as` = who it looked like. */
+  | { type: "reveal"; mimic: number; as: number }
+  /** The lift was called; it arrives at `at` (server time). */
+  | { type: "call"; n: number; at: number }
+  /** The lift is here. */
+  | { type: "lift" }
+  /** Someone started prying a fuse out. */
+  | { type: "pry"; n: number; fuse: number }
   /** Sam cut himself free (his one escape this match). */
   | { type: "free"; n: number; mimic: number }
   | { type: "back"; n: number; x: number; z: number }

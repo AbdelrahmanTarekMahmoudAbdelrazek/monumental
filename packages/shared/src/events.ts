@@ -174,6 +174,8 @@ export interface ClientToServerEvents {
   eh_state: (p: import("./echo").EchoState) => void;
   /** WebRTC voice set-up for one other player (`to` = their wire number). */
   eh_signal: (p: { to: number; data: unknown }) => void;
+  /** Local play-testing only (server started with ECHO_DEBUG): move the Copy. */
+  eh_debug: (p: { copy?: { x?: number; z?: number; state?: string; as?: number; target?: number | null } }) => void;
   /** A new piece of my own speech (labels only — the audio goes peer to peer). */
   eh_clip: (p: { id: number; ms: number; tags: import("./echo").ClipTag[] }) => void;
   /** Better labels for one of my pieces (speech-to-text). */

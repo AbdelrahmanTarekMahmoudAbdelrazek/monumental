@@ -16,6 +16,10 @@ export class MimicFigure {
   private lastX = 0;
   private lastZ = 0;
   private twitch = 0;
+  private eyes: THREE.Mesh[] = [];
+  private mouth!: THREE.Mesh;
+  /** 0..1: the face opens up (the grab). */
+  scream = 0;
   speed = 0;
 
   constructor(shadows: boolean) {
@@ -38,10 +42,14 @@ export class MimicFigure {
       const e = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 6), eye);
       e.position.set(x, 0.03, -0.13);
       this.head.add(e);
+      this.eyes.push(e);
     }
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.02), eye);
-    mouth.position.set(0, -0.09, -0.14);
+    const hole = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 8), hole);
+    mouth.scale.set(1.2, 0.22, 0.35);
+    mouth.position.set(0, -0.09, -0.13);
     this.head.add(mouth);
+    this.mouth = mouth;
 
     const limb = (len: number, r: number, y: number, x: number) => {
       const g = new THREE.Group();
@@ -89,6 +97,12 @@ export class MimicFigure {
       this.head.rotation.y = (Math.random() - 0.5) * 0.3;
     }
     this.body.position.y = Math.sin(t * 1.3) * 0.02;
+    // the grab: eyes swell to black holes, the jaw drops far too low
+    const k = this.scream;
+    this.mouth.scale.set(1.2 - k * 0.3, 0.22 + k * 2.6, 0.35);
+    this.mouth.position.y = -0.09 - k * 0.06;
+    for (const e of this.eyes) e.scale.setScalar(1 + k * 0.9 + (k > 0 ? Math.random() * 0.15 : 0));
+    if (k > 0) { this.head.rotation.z = Math.sin(t * 37) * 0.18 * k; this.head.rotation.x = -0.25 * k; }
   }
 
   dispose() {
@@ -179,14 +193,15 @@ export class MimicSound {
   }
 
   /** Every frame: where it is, how loud its voice and breath are for me. */
-  update(x: number, z: number, voiceGain: number, cutoff: number, distance: number, walls: number, chasing: boolean) {
+  update(x: number, z: number, voiceGain: number, cutoff: number, distance: number, walls: number, chasing: boolean, revealed = true) {
     const t = this.sounds.ctx.currentTime;
     this.sounds.place(this.panner, x, 2.1, z);
     this.gain.gain.setTargetAtTime(voiceGain, t, 0.08);
     this.filter.frequency.setTargetAtTime(cutoff, t, 0.1);
-    const near = Math.max(0, 1 - distance / (chasing ? 12 : 8)) * (walls === 0 ? 1 : 0.35);
+    // in a friend's skin it breathes like nobody: no sound gives it away
+    const near = revealed ? Math.max(0, 1 - distance / (chasing ? 12 : 8)) * (walls === 0 ? 1 : 0.35) : 0;
     this.breath.gain.setTargetAtTime(near * (chasing ? 0.9 : 0.5), t, 0.2);
-    const close = Math.max(0, 1 - distance / 4) * (walls === 0 ? 1 : 0);
+    const close = revealed ? Math.max(0, 1 - distance / 4) * (walls === 0 ? 1 : 0) : 0;
     this.growl.gain.setTargetAtTime(close * (chasing ? 0.35 : 0.18), t, 0.15);
     this.lfo.frequency.setTargetAtTime(chasing ? 1.4 : 0.32, t, 0.3);
   }
