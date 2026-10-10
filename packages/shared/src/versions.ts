@@ -9,6 +9,19 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 35, name: "Real Halls", date: "2026-10",
+    big: "Echo Halls goes real: photo-scanned hospital, real people, a real pistol and recorded gunshots.",
+    more: [
+      "14 photo-scanned surfaces: peeling paint, cracked tiles, worn lino, rusted steel",
+      "28 scanned props: hospital beds, desks, cabinets, extinguishers, lamps, crates and more",
+      "Your teens are real people now: Maya, Theo, Sam and Nora walk, run and sneak with motion-captured animation",
+      "The Copy is a real creature that screams, runs and attacks",
+      "Dead officers and staff are real bodies lying where they fell",
+      "A scanned service pistol with recoil, flying casings and recorded indoor gunshots and ricochets",
+      "Film grain, bloom and a darker, more real picture on computers",
+    ],
+  },
+  {
     v: 34, name: "Lower Floor", date: "2026-10",
     big: "Echo Halls is 2½× bigger: a whole lower floor, an east wing, lockers to hide in and one pistol with three bullets.",
     more: [

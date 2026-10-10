@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { pcmDecode, MIMIC } from "@monumental/shared";
 import type { SoundBank } from "./sound";
 import type { BankClip } from "./voice";
+import { RealBody, realPeople } from "./realPeople";
 
 /** The thing in the dark: too tall, too thin, arms too long. Almost black, so only a torch shows it. */
 export class MimicFigure {
@@ -21,8 +22,21 @@ export class MimicFigure {
   /** 0..1: the face opens up (the grab). */
   scream = 0;
   speed = 0;
+  /** v35: the Copy's real face, a scanned parasite with motion-captured moves (when the people loaded). */
+  private real: RealBody | null = null;
+  private lastState = "";
 
   constructor(shadows: boolean) {
+    const people = realPeople();
+    if (people?.chars.parasite) {
+      this.real = new RealBody(people, "parasite", shadows);
+      this.real.root.scale.setScalar(1.08);
+      this.root.add(this.real.root);
+      this.real.play("zombie_scream", 0);
+      // keep the old pieces so the fields exist, but never show them
+      this.head = new THREE.Group(); this.armL = this.armR = this.legL = this.legR = new THREE.Group();
+      return;
+    }
     const skin = new THREE.MeshStandardMaterial({ color: 0x17140f, roughness: 0.95 });
     const face = new THREE.MeshStandardMaterial({ color: 0x5b5750, roughness: 0.8 });
     const eye = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, emissive: 0x2c2a24, roughness: 0.3 });
@@ -76,6 +90,20 @@ export class MimicFigure {
   }
 
   update(x: number, z: number, yaw: number, state: string, speaking: boolean, dt: number, t: number) {
+    if (this.real) {
+      const moved = Math.hypot(x - this.lastX, z - this.lastZ);
+      this.speed = this.speed * 0.8 + (dt > 0 ? moved / dt : 0) * 0.2;
+      this.lastX = x; this.lastZ = z;
+      this.root.position.set(x, 0, z);
+      this.root.rotation.y = yaw;
+      // the grab: it lunges with its mouth open; the reveal: it screams; then it runs
+      if (this.scream > 0) this.real.play("zombie_attack", 0.1);
+      else if (state !== this.lastState && state === "chase") this.real.play("zombie_scream", 0.1, 1.4, true);
+      else if (this.real.current !== "zombie_scream" || this.speed > 1.5) this.real.play(this.speed > 0.4 ? "mutant_run" : "zombie_scream", 0.2, this.speed > 0.4 ? Math.max(0.8, Math.min(1.5, this.speed / 4)) : 1);
+      this.lastState = state;
+      this.real.update(dt);
+      return;
+    }
     const moved = Math.hypot(x - this.lastX, z - this.lastZ);
     this.speed = this.speed * 0.8 + (dt > 0 ? moved / dt : 0) * 0.2;
     this.lastX = x; this.lastZ = z;
@@ -106,6 +134,7 @@ export class MimicFigure {
   }
 
   dispose() {
+    if (this.real) { this.real.dispose(); return; } // its meshes are shared with the loaded original
     this.root.traverse((o) => {
       const m = o as THREE.Mesh;
       m.geometry?.dispose?.();

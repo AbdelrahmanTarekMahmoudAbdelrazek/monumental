@@ -34,6 +34,9 @@ export default function TeenPicker({ meta, me, send }: { meta: EchoMeta | null; 
   const [open, setOpen] = useState(false);
   const [move, setMove] = useState<TeenMove>("idle");
   const sentSaved = useRef(false);
+  // v35: real people can't be re-dressed; the outfit editor only exists for the drawn teens
+  const [real, setReal] = useState(false);
+  useEffect(() => { void import("./realPeople").then((m) => m.loadRealPeople()).then((p) => setReal(!!p.chars.megan)).catch(() => {}); }, []);
   const pendingSend = useRef<number | null>(null);
 
   // first time we know who we are: ask for the teen and outfit we used last time
@@ -116,13 +119,13 @@ export default function TeenPicker({ meta, me, send }: { meta: EchoMeta | null; 
             </p>
           )}
           {err && <p className="mt-2 rounded-lg bg-[#2A1512] px-3 py-2 text-sm text-[#F1C9C4]">{err}</p>}
-          <button onClick={() => setOpen((o) => !o)} className="mt-3 rounded-lg border border-[#3A433D] px-3 py-1.5 text-sm font-semibold" aria-expanded={open} data-testid="eh-outfit">
+          {!real && <button onClick={() => setOpen((o) => !o)} className="mt-3 rounded-lg border border-[#3A433D] px-3 py-1.5 text-sm font-semibold" aria-expanded={open} data-testid="eh-outfit">
             {open ? "Done dressing" : "Change outfit"}
-          </button>
+          </button>}
         </div>
       </div>
 
-      {open && cur && (
+      {open && cur && !real && (
         <div className="mt-4 grid gap-4 border-t border-dashed border-[#222924] pt-4">
           <Row title="Coat" opts={LOOK_OPTS.coat} value={cur.coat} onPick={(v) => set("coat", v)}>
             <Swatches colors={COATC} value={cur.coatC} onPick={(v) => set("coatC", v)} label="Coat colour" />
@@ -214,6 +217,12 @@ function Preview({ look, move }: { look: EchoLook | null; move: TeenMove }) {
       const rig = new TeenRig({ intensity: 6, distance: 6, decay: 2, shadows: false, beam: 0.05 }, false);
       rigRef.current = rig;
       scene.add(rig.root);
+      // the real person playing this teen, when they loaded
+      const RP = await import("./realPeople");
+      const people = await RP.loadRealPeople().catch(() => null);
+      let body: import("./realPeople").RealBody | null = null, bodyTeen = "";
+      const realOk = !!people?.chars.megan;
+      if (realOk) rig.root.visible = false;
       const size = () => {
         const c = ref.current; if (!c) return;
         const w = c.clientWidth, h = c.clientHeight;
@@ -224,7 +233,15 @@ function Preview({ look, move }: { look: EchoLook | null; move: TeenMove }) {
       let last = performance.now();
       const loop = (now: number) => {
         const dt = Math.min(0.05, (now - last) / 1000); last = now;
-        if (rig.look) {
+        const lk = lookRef.current;
+        if (realOk && people && lk) {
+          if (bodyTeen !== lk.teen) { body?.dispose(); body = new RP.RealBody(people, RP.TEEN_CHARACTER[lk.teen], false); scene.add(body.root); bodyTeen = lk.teen; }
+          const mv = moveRef.current;
+          body!.play(mv === "walk" ? "walking" : mv === "crouch" ? "crouched_walking" : mv === "radio" || mv === "wave" ? "looking_around" : "idle", 0.3);
+          body!.update(dt);
+          body!.root.rotation.y = Math.sin(now / 2600) * 0.7 + 0.25 + Math.PI;
+          renderer.render(scene, cam);
+        } else if (rig.look) {
           rig.root.rotation.y = Math.sin(now / 2600) * 0.7 + 0.25;
           rig.update(dt, { move: moveRef.current, pitch: -0.1, lightOn: moveRef.current === "walk" || moveRef.current === "crouch" });
           renderer.render(scene, cam);

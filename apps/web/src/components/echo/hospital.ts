@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { ECHO, ECHO_DOOR_W, ECHO_H, ECHO_LOCKERS, ECHO_ROOMS, ECHO_W, echoDoor, echoTile, type EchoDoorKind } from "@monumental/shared";
 import { NOTES, WALL_WORDS } from "./story";
+import type { PropName, RealAssets, SurfaceName } from "./realAssets";
 
 /** A physics box (centre + half sizes). */
 export interface Box { x: number; y: number; z: number; hx: number; hy: number; hz: number }
@@ -29,7 +30,9 @@ function vnoise(x: number, y: number) { const xi = Math.floor(x), yi = Math.floo
 function fbm(x: number, y: number, o = 4) { let s = 0, a = 0.5, f = 1; for (let i = 0; i < o; i++) { s += a * vnoise(x * f, y * f); a *= 0.5; f *= 2; } return s; }
 
 /** Builds the hospital's meshes, its light sources and the boxes physics collides with. */
-export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
+export function buildLevel(_tex: unknown, shadows: boolean, size = 512, real?: RealAssets, realBodies = false) {
+  /** Where the dead lie (drawn as real people by the engine when `realBodies`). */
+  const bodies: { x: number; z: number; ry: number; who: "police" | "patient" | "nurse" }[] = [];
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const group = new THREE.Group();
@@ -101,6 +104,9 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
 
   // ── batching: every static piece is moved into place, given world-scale UVs, and merged per material ──
   const BATCH = new Map<string, THREE.BufferGeometry[]>();
+  /** Real photo-scanned surfaces tile every SCALE metres; DADO puts a tiled band under a painted wall. */
+  const SCALE: Record<string, number> = {};
+  const DADO: Record<string, string> = {};
   const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _s = new THREE.Vector3();
   const M4 = (x: number, y: number, z: number, ry = 0, rx = 0, rz = 0) => { _e.set(rx, ry, rz, "YXZ"); _q.setFromEuler(_e); return new THREE.Matrix4().compose(_v.set(x, y, z), _q, _s.set(1, 1, 1)); };
   function worldUV(g: THREE.BufferGeometry, sx: number, sy = sx) {
@@ -111,7 +117,7 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
   function put(key: string, geo: THREE.BufferGeometry, m?: THREE.Matrix4, uvScale = 3, uvY?: number) {
     const g = geo.index ? geo.toNonIndexed() : geo.clone(); geo.dispose(); if (m) g.applyMatrix4(m);
     if (!g.attributes.uv) g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
-    if (uvScale) worldUV(g, uvScale, uvY ?? uvScale);
+    if (uvScale) { const r = SCALE[key]; worldUV(g, r ?? uvScale, r ?? uvY ?? uvScale); }
     for (const k of Object.keys(g.attributes)) if (!["position", "normal", "uv"].includes(k)) g.deleteAttribute(k);
     if (!BATCH.has(key)) BATCH.set(key, []); BATCH.get(key)!.push(g);
   }
@@ -142,13 +148,47 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
     van: Sm({ color: "#c9c6b8", roughness: 0.5, metalness: 0.2 }), vanStripe: Sm({ color: "#2f5a3a", roughness: 0.5 }), candle: new THREE.MeshBasicMaterial({ color: "#ffcf80" }),
     note: new THREE.MeshBasicMaterial({ color: "#8c8676" }), phoneGlow: new THREE.MeshBasicMaterial({ color: "#7fa6e8" }),
   };
+  // ── v35: the real thing. Photo-scanned surfaces replace the painted canvases when they loaded ──
+  if (real) {
+    const R = (key: string, n: SurfaceName, sz: number, o: THREE.MeshStandardMaterialParameters = {}) => {
+      const t = real.surfaces[n]; if (!t?.map) return;
+      MAT[key] = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1, ...o });
+      SCALE[key] = sz;
+    };
+    R("paintCorr", "painted_plaster_wall", 2.4); R("paintWard", "peeling_painted_wall", 2.4); R("paintKids", "decrepit_wallpaper", 2); R("paintOffice", "decrepit_wallpaper", 2, { color: "#cdbfa8" });
+    R("tile", "long_white_tiles", 1.2); R("tileBlue", "dirty_tiles", 1.6); R("concrete", "damaged_plaster", 2.4); R("concreteF", "concrete_floor_worn_001", 2.5);
+    R("lino", "old_linoleum_flooring_01", 2.2); R("tileF", "floor_tiles_06", 1.5); R("ceiling", "ceiling_interior", 2.4, { normalScale: new THREE.Vector2(0.4, 0.4), color: "#b4b2a8" });
+    R("steel", "metal_plate", 1, { metalness: 0.65, color: "#c4c8cb" }); R("darkSteel", "metal_plate", 1, { metalness: 0.5, color: "#6a7074" }); R("stainless", "metal_plate", 1, { metalness: 0.85, color: "#d4d8da" });
+    R("locker", "painted_metal_shutter", 1.2, { metalness: 0.4 }); R("doorGreen", "green_metal_rust", 1.5, { metalness: 0.35 }); R("rust", "green_metal_rust", 1.5, { color: "#a8714f", metalness: 0.4 });
+    R("pipe", "green_metal_rust", 1.5, { color: "#7c7b72", metalness: 0.5 }); R("rock", "damaged_concrete_floor", 2, { color: "#8c867a" }); R("wallCore", "damaged_plaster", 2.4, { color: "#6d6a63" });
+    if (SCALE.tile) { DADO.paintCorr = "tileBlue"; DADO.paintWard = "tile"; DADO.paintKids = "tile"; }
+  }
+  /** A scanned prop, baked into the merged geometry like everything else (one draw call per material). */
+  const _pm = new THREE.Matrix4();
+  function prop(name: PropName, x: number, y: number, z: number, ry = 0, o: { only?: string[]; skip?: string[]; s?: number | [number, number, number]; rx?: number; rz?: number } = {}) {
+    const src = real?.props[name]; if (!src) return false;
+    src.updateMatrixWorld(true);
+    const sc = typeof o.s === "number" ? [o.s, o.s, o.s] : o.s ?? [1, 1, 1];
+    _e.set(o.rx ?? 0, ry, o.rz ?? 0, "YXZ"); _q.setFromEuler(_e);
+    const root = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), _q, new THREE.Vector3(sc[0], sc[1], sc[2]));
+    src.traverse((n) => {
+      const m = n as THREE.Mesh; if (!m.isMesh) return;
+      if (o.only && !o.only.some((k) => m.name.includes(k))) return;
+      if (o.skip?.some((k) => m.name.includes(k))) return;
+      const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material;
+      const key = "P:" + mat.uuid; if (!MAT[key]) MAT[key] = mat;
+      put(key, m.geometry.clone(), _pm.multiplyMatrices(root, m.matrixWorld), 0);
+    });
+    return true;
+  }
   const solid = (x: number, z: number, w: number, d: number, ry = 0, h = 1.2) => { const c = Math.abs(Math.cos(ry)), s = Math.abs(Math.sin(ry)); boxes.push({ x, y: h / 2, z, hx: (w * c + d * s) / 2, hy: h / 2, hz: (w * s + d * c) / 2 }); };
   const wallRect = (x0: number, z0: number, x1: number, z1: number) => boxes.push({ x: (x0 + x1) / 2, y: HT / 2, z: (z0 + z1) / 2, hx: (x1 - x0) / 2, hy: HT / 2, hz: (z1 - z0) / 2 });
 
   // ── floors, ceilings, tube lights ──
   for (let z = 0; z < ECHO_H; z++) for (let x = 0; x < ECHO_W; x++) {
     const k = echoTile(x, z); if (k === "#") continue;
-    put(FLOOR[k], new THREE.PlaneGeometry(T, T), M4((x + 0.5) * T, 0, (z + 0.5) * T, 0, -Math.PI / 2), FLOOR[k] === "lino" ? 4 : 3);
+    const fk = FLOOR[k] === "concrete" && SCALE.concreteF ? "concreteF" : FLOOR[k];
+    put(fk, new THREE.PlaneGeometry(T, T), M4((x + 0.5) * T, 0, (z + 0.5) * T, 0, -Math.PI / 2), fk === "lino" ? 4 : 3);
     const missing = hash(x * 3, z * 7) > 0.86 && k !== "t";
     if (!missing) put("ceiling", new THREE.PlaneGeometry(T, T), M4((x + 0.5) * T, HT, (z + 0.5) * T, 0, Math.PI / 2), 1.2);
     else {
@@ -175,8 +215,15 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
     const mx = (ax + bx) / 2, mz = (az + bz) / 2, yaw = Math.atan2(bx - ax, bz - az) + Math.PI / 2;
     box("wallCore", len, HT, WT, mx, HT / 2, mz, yaw, 0, 0, 3);
     const nx = Math.sin(yaw), nz = Math.cos(yaw);
-    if (skinA) put(skinA, new THREE.PlaneGeometry(len, HT), M4(mx + nx * (WT / 2 + 0.005), HT / 2, mz + nz * (WT / 2 + 0.005), yaw), 3.2, HT);
-    if (skinB) put(skinB, new THREE.PlaneGeometry(len, HT), M4(mx - nx * (WT / 2 + 0.005), HT / 2, mz - nz * (WT / 2 + 0.005), yaw + Math.PI), 3.2, HT);
+    const face = (skin: string, ox: number, oz: number, fy: number) => {
+      const low = DADO[skin];
+      if (!low) { put(skin, new THREE.PlaneGeometry(len, HT), M4(ox, HT / 2, oz, fy), 3.2, HT); return; }
+      put(low, new THREE.PlaneGeometry(len, 1.3), M4(ox, 0.65, oz, fy), 3.2, HT);
+      put(skin, new THREE.PlaneGeometry(len, HT - 1.3), M4(ox, 1.3 + (HT - 1.3) / 2, oz, fy), 3.2, HT);
+      put("trim", new THREE.BoxGeometry(len, 0.05, 0.025), M4(ox, 1.3, oz, fy), 1);
+    };
+    if (skinA) face(skinA, mx + nx * (WT / 2 + 0.005), mz + nz * (WT / 2 + 0.005), yaw);
+    if (skinB) face(skinB, mx - nx * (WT / 2 + 0.005), mz - nz * (WT / 2 + 0.005), yaw + Math.PI);
     wallRect(Math.min(ax, bx) - WT / 2, Math.min(az, bz) - WT / 2, Math.max(ax, bx) + WT / 2, Math.max(az, bz) + WT / 2);
   }
   function door(cx: number, cz: number, yaw: number, w: number, kind: EchoDoorKind, a: string, b: string) {
@@ -227,6 +274,13 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
   const L = (x: number, z: number, ry: number) => (lx: number, lz: number): [number, number] => [x + lx * Math.cos(ry) + lz * Math.sin(ry), z - lx * Math.sin(ry) + lz * Math.cos(ry)];
   function bed(x: number, z: number, ry: number, messy: boolean) {
     const p = L(x, z, ry);
+    if (prop("old_bed_frame", x, 0, z, ry)) {
+      box("mattress", 0.84, 0.22, 1.86, x, 0.62, z, ry);
+      let q = p(0, messy ? 0.2 : 0.1); box("sheet", 0.88, 0.05, messy ? 1.2 : 1.5, q[0], 0.755, q[1], ry, messy ? 0.08 : 0, messy ? 0.12 : 0);
+      q = p(0, -0.68); box("white", 0.55, 0.12, 0.35, q[0], 0.79, q[1], ry, 0.1);
+      solid(x, z, 1.0, 2.05, ry);
+      return;
+    }
     box("steel", 0.95, 0.06, 2.0, x, 0.55, z, ry); let q = p(0, -0.95); box("steel", 0.95, 0.75, 0.05, q[0], 0.75, q[1], ry);
     q = p(0, 0.98); box("steel", 0.95, 0.45, 0.05, q[0], 0.6, q[1], ry);
     for (const [a, b] of [[-0.44, -0.95], [0.44, -0.95], [-0.44, 0.95], [0.44, 0.95]]) { q = p(a, b); cyl("steel", 0.02, 0.02, 0.55, q[0], 0.28, q[1]); }
@@ -246,12 +300,12 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
     for (const s of [-1, 1]) { q = p(s * 0.28, -0.05); put("steel", new THREE.TorusGeometry(0.29, 0.02, 6, 20), M4(q[0], 0.3, q[1], ry + Math.PI / 2), 0); } solid(x, z, 0.65, 0.75, ry); }
   function gurney(x: number, z: number, ry: number) { const p = L(x, z, ry); box("steel", 0.65, 0.05, 1.9, x, 0.8, z, ry); box("sheet", 0.6, 0.08, 1.7, x, 0.86, z, ry, 0, 0.03);
     for (const [a, b] of [[-0.3, -0.85], [0.3, -0.85], [-0.3, 0.85], [0.3, 0.85]]) { const q = p(a, b); cyl("steel", 0.015, 0.015, 0.78, q[0], 0.4, q[1]); } solid(x, z, 0.7, 1.95, ry); }
-  function chair(x: number, z: number, ry: number, mat = "green") { const p = L(x, z, ry); box(mat, 0.45, 0.06, 0.45, x, 0.46, z, ry); const q = p(0, -0.21); box(mat, 0.45, 0.45, 0.05, q[0], 0.72, q[1], ry, -0.08); for (const [a, b] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) { const r = p(a, b); cyl("darkSteel", 0.015, 0.015, 0.46, r[0], 0.23, r[1]); } }
-  function desk(x: number, z: number, ry: number, w = 1.6) { box("wood", w, 0.05, 0.8, x, 0.76, z, ry); const p = L(x, z, ry); for (const s of [-1, 1]) { const q = p(s * (w / 2 - 0.25), 0); box("wood", 0.45, 0.74, 0.75, q[0], 0.37, q[1], ry); } solid(x, z, w, 0.8, ry); }
+  function chair(x: number, z: number, ry: number, mat = "green") { if (prop(mat === "green" ? "plastic_monobloc_chair_01" : "SchoolChair_01", x, 0, z, ry, { s: mat === "green" ? 0.85 : 1 })) return; const p = L(x, z, ry); box(mat, 0.45, 0.06, 0.45, x, 0.46, z, ry); const q = p(0, -0.21); box(mat, 0.45, 0.45, 0.05, q[0], 0.72, q[1], ry, -0.08); for (const [a, b] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) { const r = p(a, b); cyl("darkSteel", 0.015, 0.015, 0.46, r[0], 0.23, r[1]); } }
+  function desk(x: number, z: number, ry: number, w = 1.6) { if (prop("metal_office_desk", x, 0, z, ry, { s: [w / 2, 1, 0.85] })) { solid(x, z, w, 0.8, ry); return; } box("wood", w, 0.05, 0.8, x, 0.76, z, ry); const p = L(x, z, ry); for (const s of [-1, 1]) { const q = p(s * (w / 2 - 0.25), 0); box("wood", 0.45, 0.74, 0.75, q[0], 0.37, q[1], ry); } solid(x, z, w, 0.8, ry); }
   function shelf(x: number, z: number, ry: number, w = 2.0, stocked = 0.6) { const p = L(x, z, ry); for (const s of [-1, 1]) { const q = p(s * w / 2, 0); box("darkSteel", 0.04, 2.0, 0.45, q[0], 1.0, q[1], ry); }
     for (const y of [0.15, 0.6, 1.05, 1.5, 1.95]) { box("darkSteel", w, 0.03, 0.45, x, y, z, ry); for (let i = 0; i < 6; i++) if (rnd() < stocked && y < 1.9) { const q = p(-w / 2 + 0.2 + rnd() * (w - 0.4), (rnd() - 0.5) * 0.2); const bw = 0.12 + rnd() * 0.18, bh = 0.1 + rnd() * 0.25; box(rnd() < 0.5 ? "box1" : "box2", bw, bh, 0.2, q[0], y + 0.015 + bh / 2, q[1], ry + (rnd() - 0.5) * 0.3); } }
     solid(x, z, w, 0.45, ry, 2); }
-  const filing = (x: number, z: number, ry: number) => { box("darkSteel", 0.5, 1.35, 0.65, x, 0.67, z, ry); solid(x, z, 0.5, 0.65, ry); };
+  const filing = (x: number, z: number, ry: number) => { if (prop("drawer_cabinet", x, 0, z, ry, { s: [0.48, 0.72, 1.3] })) { solid(x, z, 0.55, 0.65, ry); return; } box("darkSteel", 0.5, 1.35, 0.65, x, 0.67, z, ry); solid(x, z, 0.5, 0.65, ry); };
   const papers = (x: number, z: number, n = 6, r = 1) => { for (let i = 0; i < n; i++) put("paper", new THREE.PlaneGeometry(0.21, 0.297), M4(x + (rnd() - 0.5) * 2 * r, 0.01 + i * 0.002, z + (rnd() - 0.5) * 2 * r, rnd() * 6, -Math.PI / 2), 0); };
   const sink = (x: number, z: number) => { box("white", 0.55, 0.18, 0.42, x, 0.82, z); cyl("white", 0.06, 0.08, 0.72, x, 0.36, z); };
   const rocks = (n: number, fx: () => [number, number, number]) => { for (let i = 0; i < n; i++) { const [x, y, z] = fx(); put("rock", new THREE.DodecahedronGeometry(0.3 + rnd() * 0.6, 0), M4(x, y, z, rnd() * 6), 2); } };
@@ -352,6 +406,7 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
 
   /** Someone who didn't get out, lying on their back (head toward −z in its own frame). */
   function corpse(x: number, z: number, ry: number, who: "police" | "patient" | "nurse", bleed = true) {
+    if (realBodies) { bodies.push({ x, z, ry, who }); if (bleed) { puddle(x + (rnd() - 0.5) * 0.4, z + (rnd() - 0.5) * 0.4, 2.8 + rnd() * 0.8); blood(12 + Math.floor(rnd() * 2), 1.4, 1.4, x, 0, z, rnd() * 6); } return; }
     const p = L(x, z, ry), top = who === "police" ? "hivis" : who === "nurse" ? "scrubs" : "gown", legs = who === "police" ? "navy" : who === "nurse" ? "scrubs" : "gown";
     const lim = (mat: string, w: number, len: number, px: number, pz: number, ang: number, y = 0.07) => { const q = p(px + Math.sin(ang) * len / 2, pz + Math.cos(ang) * len / 2); box(mat, w, w * 0.9, len, q[0], y, q[1], ry + ang); return p(px + Math.sin(ang) * len, pz + Math.cos(ang) * len); };
     let q = p(0, 0); box(top, 0.42, 0.2, 0.6, q[0], 0.11, q[1], ry, 0, (rnd() - 0.5) * 0.2);
@@ -506,6 +561,35 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
   for (const [x, z, ry] of [[55.5, 18 + WT / 2 + 0.012, 0], [70.5, 24 - WT / 2 - 0.012, Math.PI], [4.5, 39 + WT / 2 + 0.012, 0], [58.5, 45 - WT / 2 - 0.012, Math.PI], [20.5, 45 - WT / 2 - 0.012, Math.PI]] as [number, number, number][]) wallBlood(6 + Math.floor(rnd() * 2), x, 0.9 + rnd() * 0.6, z, ry, 1.0);
   trail(58, 21, 66, 22.5); trail(45, 42, 56, 43.5); puddle(66.2, 22.6, 1.4); puddle(21.5, 42.8, 1.8);
 
+  // ── v35: real scanned clutter ──
+  if (real) {
+    const W = WT / 2 + 0.02;
+    // corridor safety kit: extinguishers on the floor, alarms on the wall
+    for (const x of [14.2, 31.0, 58.4, 86.6]) { prop("korean_fire_extinguisher_01", x, 0, 18 + W + 0.14, Math.PI); prop("fire_alarm", x + 0.55, 1.5, 18 + W, 0); }
+    for (const x of [8.4, 34.6, 61.8, 83.4]) { prop("korean_fire_extinguisher_01", x, 0, 45 - W - 0.14, 0); prop("fire_alarm", x + 0.55, 1.5, 45 - W, Math.PI); }
+    for (const x of [11.5, 47.5, 67.5]) prop("power_box_01", x, 1.65, 39 + W, 0);
+    for (const x of [6, 26, 44, 63, 80]) prop("industrial_wall_lamp", x, 2.35, 45 - W, Math.PI);
+    for (const [x, z] of [[22.5, 43.5], [52.5, 41.2], [88.5, 40.5]]) prop("caged_hanging_light", x, HT, z, rnd() * 3);
+    for (const [x, z, ry] of [[3.6, 21.0, 0.4], [41.6, 20.6, -0.3], [76.2, 22.8, 2.4], [24.0, 43.6, 1.2], [70.5, 40.6, -1.0]] as [number, number, number][]) { prop("metal_trash_can", x, 0, z, ry, { only: ["rust"], s: 0.9 }); solid(x, z, 0.6, 0.6); }
+    for (const [x, z] of [[28.4, 41.0], [77.0, 43.8]]) { prop("utility_box_01", x, 0, z, Math.PI); solid(x, z, 0.55, 0.45); }
+    // boiler room
+    for (const [x, z] of [[52.4, 25.6], [53.1, 26.3], [52.2, 27.2]]) { prop("Barrel_01", x, 0, z, rnd() * 6); solid(x, z, 0.6, 0.6, 0, 0.9); }
+    prop("metal_tool_chest", 55.8, 0, 25.0, Math.PI); solid(55.8, 25.0, 0.7, 0.45); prop("metal_jerrycan", 54.4, 0, 25.3, 0.4); prop("metal_jerrycan", 51.6, 0, 37.8, 2.0);
+    prop("old_military_crate", 53.0, 0, 37.6, 0.1, { only: ["_a"] }); solid(53.0, 37.6, 0.85, 0.5, 0.1, 0.3);
+    // police checkpoint and ambulance bay
+    prop("ammo_box", 77.8, 0.79, 34.2, 0.4); prop("old_gas_mask", 79.6, 0.79 + 1.0, 34.8, 2.2, { only: ["mask"] }); prop("old_gas_mask", 72.3, 1.0, 29.2, 1.0, { only: ["mask"] });
+    prop("signal_flashlight", 76.9, 0.79, 34.7, 0.2, { rz: Math.PI / 2 }); prop("vintage_flashlight", 74.0, 0.0, 30.4, 2.6, { rz: Math.PI / 2 }); prop("portable_searchlight", 70.6, 0.08, 31.0, 1.0);
+    prop("old_military_crate", 80.2, 0, 37.2, -0.3); solid(80.0, 37.2, 1.8, 0.5, -0.3, 0.3);
+    prop("medical_box", 80.0, 0.9, 61.6, 0.3); prop("old_military_crate", 86.0, 0, 48.0, 1.6, { only: ["_b"] }); solid(86.0, 48.0, 0.5, 0.85, 0, 0.3);
+    // wards, offices, stores
+    prop("medical_box", 46.9, 0.79, 6.6, 0.6); prop("alarm_clock_01", 48.6, 0.79, 7.0, -2.4); prop("medical_box", 4.5, 1.0, 27.2, 0.2);
+    for (const [x, z, ry] of [[24.6, 4.6, 0.2], [37.0, 13.8, -0.4], [56.4, 61.8, 2.0]] as [number, number, number][]) prop("vintage_crutches_01", x, 0.02, z, ry, { rz: -0.14 });
+    prop("vintage_cabinet_01", 54.0, 0, 3.4, 0, { s: 0.9 }); solid(54.0, 3.6, 1.85, 0.6, 0, 2);
+    for (let i = 0; i < 6; i++) { const x = 46.2 + (i % 3) * 0.45, z = 37.6 - Math.floor(i / 3) * 0.55; prop("cardboard_box_01", x, Math.floor(i / 3) === 1 && i % 3 === 1 ? 0.34 : 0, z, rnd() * 0.6); }
+    for (let i = 0; i < 4; i++) prop("cardboard_box_01", 33.5 + (rnd() - 0.5), 0, 46.2 + i * 0.6, rnd());
+    prop("metal_stool_01", 24.5, 0, 31.8, 0.3); prop("metal_stool_01", 11.2, 0, 58.6, 1.1);
+  }
+
   // ── merge ──
   for (const [key, list] of BATCH) {
     const g = mergeGeometries(list, false); for (const x of list) x.dispose(); if (!g) continue;
@@ -547,7 +631,7 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
 
   // only a few real lights, moved to the nearest sources every frame (steady cost wherever you are)
   const pool = Array.from({ length: 4 }, () => { const l = new THREE.PointLight(0xffffff, 0, 8, 1.7); group.add(l); return l; });
-  return { group, boxes, lights: { sources, pool } as HospitalLights, goal: { liftDoors, cab: cabMat, liftLight, liftArrow: liftArrow.material as THREE.MeshBasicMaterial, fuseSlots }, dispose: () => textures.forEach((t) => t.dispose()) };
+  return { group, boxes, bodies, lights: { sources, pool } as HospitalLights, goal: { liftDoors, cab: cabMat, liftLight, liftArrow: liftArrow.material as THREE.MeshBasicMaterial, fuseSlots }, dispose: () => textures.forEach((t) => t.dispose()) };
 }
 
 /** Dying tubes, the alarm, the crack's slow pulse; then the nearest sources get the real lights. */

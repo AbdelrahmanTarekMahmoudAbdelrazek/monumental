@@ -1,5 +1,6 @@
 import { ECHO } from "@monumental/shared";
 import type { LightSource } from "./hospital";
+import { loadRealSounds, type SoundName } from "./realAssets";
 
 const T = ECHO.TILE;
 const HT = 3.2;
@@ -36,6 +37,8 @@ export class HospitalAudio {
   private highGain!: GainNode;
   private padOsc: OscillatorNode[] = [];
   private danger = 0;
+  /** v35: recorded gunshots, impacts and casings (the synth stays as a fallback). */
+  private rec: Partial<Record<SoundName, AudioBuffer>> = {};
   private voiceOrder: string[] = [];
   private heart = 0;
   private lastBeat = 0;
@@ -72,6 +75,7 @@ export class HospitalAudio {
     const now = ac.currentTime;
     this.next = { event: now + 4, music: now + 30, drip: now + 1, voice: now + 12, cry: now + 22, zone: now + 6, gliss: now + 25, boom: now + 40, pad: now, scream: now + 70 };
     this.startScore();
+    void loadRealSounds(ac).then((r) => { this.rec = r; });
     for (const name of CLIPS) {
       fetch(`/echo/sfx/${name}.mp3`).then((r) => r.arrayBuffer()).then((b) => ac.decodeAudioData(b)).then((b) => { this.buf[name] = b; }).catch(() => {});
     }
@@ -196,10 +200,25 @@ export class HospitalAudio {
   }
 
   /** A gunshot from (x, y, z): the crack, the slap back off the tiles, and (close by) the ringing in your ears. */
+  private playRec(name: SoundName, p: AudioNode, gain: number, rate = 1, at = 0) {
+    const b = this.rec[name]; if (!b) return false;
+    const s = this.ctx.createBufferSource(); s.buffer = b; s.playbackRate.value = rate;
+    const g = this.ctx.createGain(); g.gain.value = gain; s.connect(g).connect(p); s.start(this.ctx.currentTime + at); return true;
+  }
+  /** A spent case hitting the floor. */
+  casing(x: number, z: number, v: number) { if (!this.started) return; const p = this.panner(x, 0.05, z, 1); this.playRec("metal_fall_259553", p, 0.08 * v, 1.6 + Math.random() * 0.4); this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 3000)); }
   gunshot(x: number, y: number, z: number, d: number) {
     if (!this.started) return;
     const ac = this.ctx, t0 = ac.currentTime, p = this.panner(x, y, z, 6);
     const near = Math.max(0, 1 - d / 40);
+    const shots: SoundName[] = ["pistol_indoors_402789", "9mm_pistol_427592", "pistol_shot_427598"];
+    if (this.playRec(shots[Math.floor(Math.random() * shots.length)], p, 1.6 * (0.35 + near), 0.96 + Math.random() * 0.08)) {
+      this.playRec("gunshot_344142", p, 0.5 * (0.35 + near));
+      const s = ac.createGain(); s.gain.value = 1.0; p.connect(s).connect(this.send);
+      if (d < 7) { const o = ac.createOscillator(); o.frequency.value = 3900 + Math.random() * 300; const g = ac.createGain(); this.env(g, t0 + 0.05, 0.05, 0.035 * (1 - d / 7), 4); o.connect(g).connect(this.out); o.start(t0); o.stop(t0 + 4.3); }
+      this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 6000));
+      return;
+    }
     this.burst(p, t0, 0.09, "highpass", 1800, 0.7, 1.4 * (0.3 + near), 0.0008);
     this.burst(p, t0, 0.35, "lowpass", 900, 0.8, 1.1 * (0.3 + near), 0.001);
     this.thud(p, t0, 48, 1);
@@ -208,7 +227,8 @@ export class HospitalAudio {
     this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 6000));
   }
   /** A bullet hitting something soft. */
-  impact(x: number, y: number, z: number) { if (!this.started) return; const p = this.panner(x, y, z, 2), t0 = this.ctx.currentTime; this.burst(p, t0, 0.12, "lowpass", 500, 1, 0.9, 0.002); this.thud(p, t0, 80, 0.6); }
+  impact(x: number, y: number, z: number) { if (!this.started) return; const p = this.panner(x, y, z, 2), t0 = this.ctx.currentTime;
+    if (this.playRec("bullet_hit_266916", p, 0.6)) { if (Math.random() < 0.3) this.playRec("ricochet_213925", p, 0.35, 1.1, 0.03); return; } this.burst(p, t0, 0.12, "lowpass", 500, 1, 0.9, 0.002); this.thud(p, t0, 80, 0.6); }
   /** A locker door: shut quietly, or torn open. */
   locker(x: number, z: number, hard: boolean) {
     if (!this.started) return;

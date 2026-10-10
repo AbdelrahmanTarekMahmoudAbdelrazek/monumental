@@ -4,6 +4,13 @@ import { COPY, ECHO, ECHO_LOCKERS, ECHO_ROOMS, GOAL, HIDE, lockerFront, type Ech
 import { makeTextures } from "./textures";
 import { buildLevel, flickerLights, type HospitalLights } from "./hospital";
 import { HospitalAudio } from "./hospitalAudio";
+import { loadRealAssets, type RealAssets } from "./realAssets";
+import { loadRealPeople, RealBody, type CharacterName } from "./realPeople";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SoundBank } from "./sound";
 import { Voice, voiceMix, type PeerStatus } from "./voice";
 import { Avatar } from "./avatars";
@@ -150,6 +157,30 @@ export class EchoEngine {
   private recoil = 0;
   private hurtAt = 0;
   private hits: THREE.Mesh[] = [];
+  private real: RealAssets | null = null;
+  private composer: EffectComposer | null = null;
+  private film: ShaderPass | null = null;
+  private deadBodies: { body: RealBody; dirty: boolean }[] = [];
+  private casings: { m: THREE.Mesh; v: THREE.Vector3; spin: THREE.Vector3; hits: number }[] = [];
+
+  /** The lost police and patients, as real people lying where they fell. */
+  private placeBodies(list: { x: number; z: number; ry: number; who: "police" | "patient" | "nurse" }[], people: Awaited<ReturnType<typeof loadRealPeople>>) {
+    const police: CharacterName[] = ["swat", "swat_guy", "gas_mask", "copzombie"];
+    let pi = 0;
+    for (const b of list) {
+      const name: CharacterName = b.who === "police" ? police[pi++ % police.length] : b.who === "nurse" ? "chad" : "warzombie";
+      if (!people.chars[name] || !people.clips.dying) continue;
+      const body = new RealBody(people, name, !this.opts.mobile);
+      body.root.rotation.y = b.ry;
+      this.scene.add(body.root);
+      body.pose("dying", 0.985);
+      body.root.updateMatrixWorld(true);
+      // put the hips (not the feet) where the blood is
+      const hips = body.bone("Hips");
+      if (hips) { const w = new THREE.Vector3(); hips.getWorldPosition(w); body.root.position.set(b.x - w.x, 0, b.z - w.z); }
+      this.deadBodies.push({ body, dirty: false });
+    }
+  }
   private avatars = new Map<number, Avatar>();
   private remoteSteps = new Map<number, { panner: PannerNode; gain: GainNode; phase: number; lx: number; lz: number }>();
   private hist = new Map<number, EchoPeerState[]>();
@@ -235,7 +266,15 @@ export class EchoEngine {
 
     // ── the hospital ──
     const tex = makeTextures(mobile ? 512 : 1024, Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
-    const level = buildLevel(tex, !mobile, mobile ? 256 : 512);
+    // v35: real photo-scanned surfaces, props and people (each optional: anything missing falls back to the drawn version)
+    const [real, people] = await Promise.all([
+      loadRealAssets(mobile).catch(() => undefined),
+      loadRealPeople().catch(() => null),
+    ]);
+    if (this.destroyed) return;
+    this.real = real ?? null;
+    const level = buildLevel(tex, !mobile, mobile ? 256 : 512, real, !!people?.chars.swat);
+    if (people) this.placeBodies(level.bodies, people);
     this.scene.add(level.group);
     this.goalView = level.goal;
     this.lights = level.lights;
@@ -275,6 +314,19 @@ export class EchoEngine {
     this.prev.copy(this.cur);
     this.yaw = Math.PI; // face the doors to the corridor
 
+    // a film look on desktop: the tubes bloom, grain, a darker edge
+    if (!mobile) {
+      this.composer = new EffectComposer(this.renderer);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(512, 512), 0.4, 0.6, 0.85));
+      this.film = new ShaderPass({
+        uniforms: { tDiffuse: { value: null }, t: { value: 0 }, hurt: { value: 0 } },
+        vertexShader: "varying vec2 v; void main(){ v = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
+        fragmentShader: "uniform sampler2D tDiffuse; uniform float t; uniform float hurt; varying vec2 v; float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233)) + t) * 43758.5453); } void main(){ vec2 d = v - .5; float r2 = dot(d,d); vec3 c; c.r = texture2D(tDiffuse, v + d * .003).r; c.g = texture2D(tDiffuse, v).g; c.b = texture2D(tDiffuse, v - d * .003).b; c *= 1. - smoothstep(.15, .65, r2) * .7; c += (h(v * 911.) - .5) * .04; c = mix(c, c * vec3(1.4,.35,.3), hurt * smoothstep(.05,.4,r2)); gl_FragColor = vec4(c, 1.); }",
+      });
+      this.composer.addPass(this.film);
+      this.composer.addPass(new OutputPass());
+    }
     this.resize();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(this.canvas);
@@ -513,6 +565,13 @@ export class EchoEngine {
     this.recoil = 1;
     this.shake = Math.max(this.shake, 0.35);
     this.hospital?.gunshot(this.cur.x, 1.5, this.cur.z, 0);
+    if (this.gunHeld) {
+      const c = new THREE.Mesh(new THREE.CylinderGeometry(0.0048, 0.0048, 0.019, 8), new THREE.MeshStandardMaterial({ color: 0xb8913a, metalness: 0.9, roughness: 0.3 }));
+      const wp = new THREE.Vector3(0.04, 0.06, -0.1); this.gunHeld.localToWorld(wp); c.position.copy(wp); this.scene.add(c);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+      this.casings.push({ m: c, v: right.multiplyScalar(2 + Math.random()).add(new THREE.Vector3(0, 2.2, 0)), spin: new THREE.Vector3(Math.random() * 30, Math.random() * 30, 0), hits: 0 });
+      if (this.casings.length > 20) { const o = this.casings.shift()!; this.scene.remove(o.m); o.m.geometry.dispose(); }
+    }
     return aim;
   }
 
@@ -535,6 +594,7 @@ export class EchoEngine {
     const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(w, h, false);
+    this.composer?.setPixelRatio(this.pixelRatio); this.composer?.setSize(w, h);
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
   }
@@ -630,7 +690,7 @@ export class EchoEngine {
     this.camera.updateMatrixWorld();
 
     // ── torch follows the head with a little lag, like a real hand ──
-    const off = new THREE.Vector3(0.2, -0.2, -0.15).applyQuaternion(this.camera.quaternion);
+    const off = new THREE.Vector3(-0.1, -0.05, -0.55).applyQuaternion(this.camera.quaternion); // ahead of the hand, so the pistol isn't lit white
     this.torchRig.position.copy(this.camera.position).add(off);
     this.torchRig.quaternion.slerp(this.camera.quaternion, 1 - Math.exp(-dt * 16));
     this.torch.intensity = this.torchOn && this.hiddenIn === null ? 75 * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
@@ -766,7 +826,9 @@ export class EchoEngine {
     }
 
     this.adaptQuality();
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer && this.film) { this.film.uniforms.t.value = now * 0.001; this.film.uniforms.hurt.value = Math.max(0, 1 - (now - this.hurtAt) / 1600); this.composer.render(); }
+    else this.renderer.render(this.scene, this.camera);
+    for (const b of this.deadBodies) if (b.dirty) { b.body.update(0); b.dirty = false; }
     this.pushHud(false);
   };
 
@@ -985,6 +1047,20 @@ export class EchoEngine {
     const g = this.goal?.gun;
     if (!g) return;
     const build = () => {
+      const src = this.real?.props.service_pistol;
+      if (src) {
+        const g = new THREE.Group(), p = src.clone(true);
+        p.traverse((n) => { const m = n as THREE.Mesh; if (!m.isMesh) return; m.visible = ["pistol_a", "slide_a", "hammer_a", "trigger_a"].some((k) => m.name.includes(k)); m.castShadow = false; if (m.name.includes("slide_a")) g.userData.slide = m; });
+        p.rotation.y = Math.PI / 2; // its barrel points +x; the game's forward is −z
+        p.traverse((n) => {
+          const m = n as THREE.Mesh; if (!m.isMesh || !m.visible) return;
+          // the torch sits ahead of the gun, so it lights the room, not the gun: a faint self-light keeps the steel readable
+          const mat = (m.material as THREE.MeshStandardMaterial).clone();
+          if (mat.map) { mat.emissiveMap = mat.map; mat.emissive = new THREE.Color(0x45403a); }
+          m.material = mat;
+        });
+        g.add(p); g.userData.real = true; return g;
+      }
       const grp = new THREE.Group();
       // unlit: right in front of the torch a lit gun would just glare white
       const dark = new THREE.MeshBasicMaterial({ color: 0x232629 });
@@ -995,7 +1071,15 @@ export class EchoEngine {
       const guard = new THREE.Mesh(new THREE.TorusGeometry(0.018, 0.004, 4, 10, Math.PI), dark); guard.position.set(0, -0.01, 0.0); guard.rotation.set(Math.PI, Math.PI / 2, 0); grp.add(guard);
       return grp;
     };
-    if (!this.gunWorld) { this.gunWorld = build(); this.gunWorld.scale.setScalar(1.15); this.scene.add(this.gunWorld); }
+    if (!this.gunWorld) {
+      const w = build();
+      if (w.userData.real) {
+        // lying on its side on the floor: roll it about the barrel, then sit it on y = 0
+        const roll = new THREE.Group(); roll.add(...w.children); roll.rotation.z = Math.PI / 2; w.add(roll);
+        w.updateMatrixWorld(true); const bb = new THREE.Box3().setFromObject(w, true); roll.position.y = -bb.min.y;
+      } else w.scale.setScalar(1.15);
+      this.gunWorld = w; this.scene.add(w);
+    }
     if (!this.gunHeld) {
       this.gunHeld = build(); this.camera.add(this.gunHeld);
       this.muzzle = new THREE.PointLight(0xffc27a, 0, 9, 2); this.camera.add(this.muzzle); this.muzzle.position.set(0.14, -0.08, -0.6);
@@ -1004,10 +1088,24 @@ export class EchoEngine {
     }
     const mine = g.by === this.opts.me && !this.isTaken && this.hiddenIn === null;
     this.gunWorld.visible = g.by === null && !this.goal?.result;
-    if (this.gunWorld.visible) { this.gunWorld.position.set(g.x, g.y + 0.02, g.z); this.gunWorld.rotation.set(Math.PI / 2, 0.7, 0); }
+    if (this.gunWorld.visible) {
+      if (this.gunWorld.userData.real) { this.gunWorld.position.set(g.x, g.y - 0.055, g.z); this.gunWorld.rotation.set(0, 0.7, 0); } // spots sit 6 cm up for the old drawn gun
+      else { this.gunWorld.position.set(g.x, g.y + 0.02, g.z); this.gunWorld.rotation.set(Math.PI / 2, 0.7, 0); }
+    }
     this.gunHeld.visible = mine;
     const k = this.recoil;
-    this.gunHeld.position.set(0.17, -0.19 + k * 0.03, -0.42 + k * 0.06); this.gunHeld.rotation.set(k * 0.5, 0.06, 0);
+    if (this.gunHeld.userData.real) {
+      this.gunHeld.position.set(0.12, -0.135 + k * 0.03, -0.33 + k * 0.05); this.gunHeld.rotation.set(0.04 + k * 0.35, 0.14, 0);
+      const sl = this.gunHeld.userData.slide as THREE.Object3D | undefined;
+      if (sl) { if (sl.userData.home === undefined) sl.userData.home = sl.position.x; sl.position.x = sl.userData.home - k * 0.03; }
+    } else { this.gunHeld.position.set(0.17, -0.19 + k * 0.03, -0.42 + k * 0.06); this.gunHeld.rotation.set(k * 0.5, 0.06, 0); }
+    // brass cases fly out to the right and rattle on the floor
+    for (const c of this.casings) {
+      if (c.hits > 3) continue;
+      const dt = 1 / 60;
+      c.v.y -= 9.8 * dt; c.m.position.addScaledVector(c.v, dt); c.m.rotation.x += c.spin.x * dt; c.m.rotation.y += c.spin.y * dt;
+      if (c.m.position.y < 0.006) { c.m.position.y = 0.006; c.v.y *= -0.35; c.v.x *= 0.5; c.v.z *= 0.5; c.spin.multiplyScalar(0.5); c.hits++; if (c.hits <= 2) this.hospital?.casing(c.m.position.x, c.m.position.z, 1 / c.hits); }
+    }
     const flash = now < this.flashUntil;
     if (this.muzzle) this.muzzle.intensity = flash ? 60 : 0;
     if (this.muzzleSprite) { this.muzzleSprite.visible = flash; this.muzzleSprite.rotation.z = Math.random() * 6; }
