@@ -264,7 +264,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
                 <span className="w-full text-xs text-[#6E786E]">Uses your browser's speech-to-text (in Chrome this sends your audio to Google). Off: the mimic still works, just less clever.</span>
               </div>
               <p className="text-sm text-[#7E887E]">Your browser will ask for the microphone. Without one you can still listen.</p>
-              <button disabled={!ready || !consent} onClick={() => void enter()} data-testid="eh-enter" className={`${TITLE} h-16 rounded-2xl bg-[#E9E4D6] text-2xl text-black disabled:opacity-50`}>{!ready ? "Building the ward…" : consent ? "Enter the halls" : "Agree above to enter"}</button>
+              <button disabled={!ready || !consent} onClick={() => void enter()} data-testid="eh-enter" className={`${TITLE} h-16 rounded-2xl bg-[#E9E4D6] text-2xl text-black disabled:opacity-50`}>{!ready ? "Building the hospital…" : consent ? "Enter the halls" : "Agree above to enter"}</button>
             </div>
           </div>
         </div>
@@ -275,8 +275,9 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         <>
           <div className="pointer-events-none absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#E9E4D6]/70" />
           <div className="pointer-events-none absolute left-4 top-3">
-            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.night?.awake ? "Trust no voice" : "Explore the ward together"}</div>
+            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.night?.awake ? "Trust no voice" : "Explore the hospital together"}</div>
             <div className="text-xs text-[#9FA89F] md:text-sm" data-testid="eh-night">{nightText(meta, clockOff)}</div>
+            {hud.room && <div className={`${TITLE} mt-1 text-sm text-[#C9C4B4]`} data-testid="eh-room">{hud.room}</div>}
             {hud.peers.filter((p) => p.status !== "connected").map((p) => (
               <div key={p.n} className="mt-1 text-xs text-[#C9A66B]">No voice link with {nameOf(p.n)?.name ?? "a player"} yet — you can't hear each other and the mimic can't copy them.</div>
             ))}

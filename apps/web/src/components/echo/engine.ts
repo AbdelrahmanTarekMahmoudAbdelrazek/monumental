@@ -1,8 +1,9 @@
 import * as THREE from "three";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
-import { ECHO, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
+import { ECHO, ECHO_ROOMS, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
-import { buildLevel, flickerLights, type CeilingLight } from "./level";
+import { buildLevel, flickerLights, type HospitalLights } from "./hospital";
+import { HospitalAudio } from "./hospitalAudio";
 import { SoundBank } from "./sound";
 import { Voice, voiceMix, type PeerStatus } from "./voice";
 import { Avatar } from "./avatars";
@@ -25,6 +26,8 @@ export interface EchoHud {
   /** I was grabbed; seconds until I'm back. */
   taken: number;
   pieces: number;
+  /** The room I'm in. */
+  room: string;
 }
 
 export interface EchoNet {
@@ -86,7 +89,8 @@ export class EchoEngine {
   private camera: THREE.PerspectiveCamera;
   private torch!: THREE.SpotLight;
   private torchRig = new THREE.Group();
-  private lights: CeilingLight[] = [];
+  private lights: HospitalLights = { sources: [], pool: [] };
+  private hospital: HospitalAudio | null = null;
   private avatars = new Map<number, Avatar>();
   private remoteSteps = new Map<number, { panner: PannerNode; gain: GainNode; phase: number; lx: number; lz: number }>();
   private hist = new Map<number, EchoPeerState[]>();
@@ -141,7 +145,7 @@ export class EchoEngine {
 
   constructor(private canvas: HTMLCanvasElement, private opts: { me: number; spawn: { x: number; z: number }; mobile: boolean; net: EchoNet; onHud: (h: EchoHud) => void }) {
     this.sounds = new SoundBank();
-    // voice exists from the start so set-up messages that arrive while the ward is still building aren't lost
+    // voice exists from the start so set-up messages that arrive while the hospital is still building aren't lost
     this.voice = new Voice(this.sounds, opts.me, (to, d) => opts.net.sendSignal(to, d), () => this.pushHud(true));
     this.voice.onClip = (key) => opts.net.sendHave(key);
     this.camera = new THREE.PerspectiveCamera(opts.mobile ? 78 : 72, 1, 0.05, 70);
@@ -157,21 +161,21 @@ export class EchoEngine {
     // ── renderer ──
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: !mobile, powerPreference: "high-performance" });
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 0.95;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.maxRatio = Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2);
     this.pixelRatio = Math.min(this.maxRatio, mobile ? 1.1 : 1.5);
     this.scene.background = new THREE.Color(0x020303);
-    this.scene.fog = new THREE.FogExp2(0x030404, 0.055);
+    this.scene.fog = new THREE.FogExp2(0x010202, 0.075);
 
-    // ── the ward ──
+    // ── the hospital ──
     const tex = makeTextures(mobile ? 512 : 1024, Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
-    const level = buildLevel(tex, true);
+    const level = buildLevel(tex, !mobile, mobile ? 256 : 512);
     this.scene.add(level.group);
     this.lights = level.lights;
-    this.scene.add(new THREE.HemisphereLight(0x3a4550, 0x0b0907, 0.12));
+    this.scene.add(new THREE.HemisphereLight(0x3a4550, 0x0b0907, 0.03));
 
     // ── my torch: one shadowed spot light that lags a little behind my head ──
     this.torch = new THREE.SpotLight(0xfff2d6, 75, 30, 0.5, 0.45, 2);
@@ -204,7 +208,7 @@ export class EchoEngine {
     this.ctrl.setMaxSlopeClimbAngle((45 * Math.PI) / 180);
     this.cur.set(this.opts.spawn.x, CENTER_Y, this.opts.spawn.z);
     this.prev.copy(this.cur);
-    this.yaw = Math.PI; // face into the ward
+    this.yaw = Math.PI; // face the doors to the corridor
 
     this.resize();
     this.ro = new ResizeObserver(() => this.resize());
@@ -216,7 +220,8 @@ export class EchoEngine {
   /** Call from the "Enter" click: starts sound, the mic and pointer lock. */
   async enter() {
     await this.sounds.resume();
-    this.sounds.startAmbience();
+    this.hospital = new HospitalAudio(this.sounds.ctx, this.sounds.master);
+    this.hospital.start();
     if (await this.voice.startMic()) await this.startCapture();
     if (this.meta) this.voice.sync(this.meta.players.map((p) => p.n).filter((n) => n !== this.opts.me));
     this.lock();
@@ -477,6 +482,7 @@ export class EchoEngine {
     this.torch.intensity = this.torchOn ? 75 * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
 
     flickerLights(this.lights, now / 1000, px, pz);
+    this.hospital?.update({ x: px, y: this.camera.position.y, z: pz, yaw: this.yaw }, this.torchOn, this.lights.sources, now / 1000, this.isTaken);
 
     // ── friends, shown 0.12 s in the past so their movement is smooth ──
     const rt = this.tOff !== null ? now + this.tOff - INTERP_MS : 0;
@@ -573,6 +579,7 @@ export class EchoEngine {
       quality: this.pixelRatio,
       taken: Math.max(0, Math.ceil((this.takenUntil - now) / 1000)),
       pieces: [...this.voice.bank.keys()].filter((k) => k.startsWith(`${this.opts.me}:`)).length,
+      room: ECHO_ROOMS[echoTile(echoTileOf(this.cur.x), echoTileOf(this.cur.z))]?.name ?? "",
     });
   }
 
@@ -587,6 +594,7 @@ export class EchoEngine {
     this.transcriber?.stop();
     for (const v of this.mimics.values()) { v.snd.dispose(); v.fig.dispose(); }
     this.voice.destroy();
+    this.hospital?.stop();
     this.sounds.close();
     for (const a of this.avatars.values()) a.dispose();
     this.scene.traverse((o) => {

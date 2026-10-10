@@ -1,6 +1,6 @@
 import {
   ECHO, ECHO_COLORS, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, TEEN_LOOKS, cleanLook,
-  echoFree, echoPath, echoSpawns, echoTileOf, echoWallsBetween, mimicOpen,
+  echoFree, echoPassable, echoPath, echoSpawns, echoTileOf, echoWallsBetween, mimicOpen,
   type ClipInfo, type ClipTag, type EchoEvent, type EchoLook, type EchoMeta, type EchoSnap2, type EchoState, type MimicState,
 } from "@monumental/shared";
 
@@ -150,7 +150,7 @@ export class EchoRoom {
     m.torch = s.torch;
     m.crouch = s.crouch;
     m.talk = !!s.talk;
-    if (dist > ECHO.SPRINT * dt * 1.5 + 1 || !echoFree(s.x, s.z)) return false;
+    if (dist > ECHO.SPRINT * dt * 1.5 + 1 || !echoFree(s.x, s.z) || !echoPassable(m.x, m.z, s.x, s.z)) return false;
     m.x = s.x;
     m.y = Math.max(-0.5, Math.min(1, s.y));
     m.z = s.z;

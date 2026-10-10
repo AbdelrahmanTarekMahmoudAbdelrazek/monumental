@@ -23,37 +23,50 @@ export const ECHO = {
 } as const;
 
 /**
- * The Phase 1 test ward.
- * `#` wall · `.` floor · `S` spawn · `D` doorway (floor with a lintel above)
- * `L` ceiling light · `B` broken, flickering light · `b` hospital bed (solid, waist high)
+ * Marrowfield Cottage Hospital, ground floor. One character per 3 × 3 m cell; `#` is solid ground.
+ * Walls stand on the edges between two different rooms, except where ECHO_DOORS opens them.
+ * Rooms: c corridor · r reception · a ward A · b ward B · n nurses' station · o office · p pharmacy · s stairs
+ * w washrooms · t operating theatre · m morgue · i isolation (room 7) · k store · x boiler room
  */
-export const ECHO_MAP: readonly string[] = [
-  "########################",
-  "#SS.....#......#.......#",
-  "#.L.....D...B..#...L...#",
-  "#.......#..b...D.......#",
-  "####D####......#....b..#",
-  "#.......####D###########",
-  "#..B....#..............#",
-  "#.......D.....L........#",
-  "#.b.....#..............#",
-  "######D##########D######",
-  "#......#.......#.......#",
-  "#..L...#...B...#...L...#",
-  "#......D.......D.......#",
-  "#..b...#.......#....b..#",
-  "########################",
+export const ECHO_W = 20;
+export const ECHO_H = 14;
+const PLAN: [string, number, number, number, number][] = [
+  ["r", 1, 1, 5, 5], ["a", 6, 1, 8, 5], ["c", 9, 1, 10, 5], ["b", 11, 1, 14, 5], ["n", 15, 1, 16, 5], ["o", 17, 1, 18, 5],
+  ["c", 1, 6, 18, 7],
+  ["p", 1, 8, 3, 12], ["s", 4, 8, 5, 9], ["w", 4, 10, 5, 12], ["t", 6, 8, 8, 12], ["c", 9, 8, 10, 12],
+  ["m", 11, 8, 14, 12], ["i", 15, 8, 16, 10], ["k", 15, 11, 16, 12], ["x", 17, 8, 18, 12],
 ];
-
-export const ECHO_W = ECHO_MAP[0].length;
-export const ECHO_H = ECHO_MAP.length;
+export const ECHO_MAP: readonly string[] = (() => {
+  const g = Array.from({ length: ECHO_H }, () => Array<string>(ECHO_W).fill("#"));
+  for (const [k, x0, z0, x1, z1] of PLAN) for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) g[z][x] = k;
+  return g.map((r) => r.join(""));
+})();
+export const ECHO_ROOMS: Record<string, { name: string; sub: string }> = {
+  c: { name: "Main Corridor", sub: "" }, r: { name: "Reception", sub: "the front doors are buried" }, a: { name: "Ward A", sub: "eight beds, curtains drawn" },
+  b: { name: "Ward B", sub: "children's ward" }, n: { name: "Nurses' Station", sub: "the phone is off the hook" }, o: { name: "Matron's Office", sub: "October 2011" },
+  p: { name: "Pharmacy", sub: "behind the grille" }, s: { name: "Stairs & Lift", sub: "the way up is buried" }, w: { name: "Washrooms", sub: "" },
+  t: { name: "Operating Theatre", sub: "the emergency light is still on" }, m: { name: "Morgue", sub: "cold, even now" }, i: { name: "Isolation Room", sub: "Room 7" },
+  k: { name: "Store Room", sub: "" }, x: { name: "Boiler Room", sub: "something has been sleeping here" },
+};
+export type EchoDoorKind = "single" | "double" | "open" | "front";
+/** [cell x, cell z, edge ("E" = east side of the cell, "S" = south side), kind] */
+export const ECHO_DOORS: readonly [number, number, "E" | "S", EchoDoorKind][] = [
+  [3, 5, "S", "double"], [7, 5, "S", "single"], [12, 5, "S", "double"], [15, 5, "S", "open"], [16, 5, "S", "open"], [17, 5, "S", "single"],
+  [2, 7, "S", "single"], [4, 7, "S", "single"], [4, 9, "S", "single"], [7, 7, "S", "double"], [8, 10, "E", "single"], [10, 10, "E", "double"],
+  [15, 7, "S", "single"], [14, 11, "E", "single"], [17, 7, "S", "single"], [5, 3, "E", "single"], [2, 0, "S", "front"],
+];
+/** Width of each kind of opening, metres. */
+export const ECHO_DOOR_W: Record<EchoDoorKind, number> = { single: 1.2, double: 2.2, front: 2.4, open: 2.9 };
+const DOOR_SET = new Map(ECHO_DOORS.map((d) => [`${d[0]},${d[1]},${d[2]}`, d[3]]));
+export function echoDoor(x: number, z: number, side: "E" | "S"): EchoDoorKind | undefined { return DOOR_SET.get(`${x},${z},${side}`); }
+const SPAWN_CELLS: [number, number][] = [[2, 4], [3, 4], [2, 3], [3, 3]];
 
 export function echoTile(tx: number, tz: number): string {
   if (tx < 0 || tz < 0 || tx >= ECHO_W || tz >= ECHO_H) return "#";
   return ECHO_MAP[tz].charAt(tx);
 }
 
-/** Blocks sound and sight (full-height walls only). */
+/** Solid ground (no room here). */
 export function echoWall(tx: number, tz: number): boolean {
   return echoTile(tx, tz) === "#";
 }
@@ -61,29 +74,66 @@ export function echoWall(tx: number, tz: number): boolean {
 /** World position (metres) → tile. */
 export const echoTileOf = (v: number) => Math.floor(v / ECHO.TILE);
 
-/** Can a player stand at world position (x, z)? (Walls only; beds are small props handled by client physics.) */
+/** Can a player stand at world position (x, z)? (Inside a room; walls and furniture are handled by client physics.) */
 export function echoFree(x: number, z: number): boolean {
   return !echoWall(echoTileOf(x), echoTileOf(z));
 }
 
-/** Spawn points (tile centres, metres). */
-export function echoSpawns(): { x: number; z: number }[] {
-  const out: { x: number; z: number }[] = [];
-  ECHO_MAP.forEach((row, tz) => [...row].forEach((c, tx) => { if (c === "S") out.push({ x: (tx + 0.5) * ECHO.TILE, z: (tz + 0.5) * ECHO.TILE }); }));
-  return out;
+/** The door on the edge between two neighbouring cells, if any. */
+function edgeDoor(ax: number, az: number, bx: number, bz: number): EchoDoorKind | undefined {
+  if (bx === ax + 1 && bz === az) return echoDoor(ax, az, "E");
+  if (bx === ax - 1 && bz === az) return echoDoor(bx, bz, "E");
+  if (bz === az + 1 && bx === ax) return echoDoor(ax, az, "S");
+  if (bz === az - 1 && bx === ax) return echoDoor(bx, bz, "S");
+  return undefined;
+}
+/** Can you walk from a cell to its neighbour (same room, or a door between)? */
+export function echoEdgeOpen(ax: number, az: number, bx: number, bz: number): boolean {
+  const a = echoTile(ax, az), b = echoTile(bx, bz);
+  if (a === "#" || b === "#") return false;
+  return a === b || edgeDoor(ax, az, bx, bz) !== undefined;
+}
+/** Crossing from one cell to a neighbour at world point (x, z) on their shared edge: open if same room or through the door's gap. */
+function crossOpen(px: number, pz: number, tx: number, tz: number, x: number, z: number, exact: boolean): boolean {
+  if (Math.abs(tx - px) + Math.abs(tz - pz) !== 1) {
+    // diagonal: either way round the corner
+    return (crossOpen(px, pz, tx, pz, x, z, exact) && crossOpen(tx, pz, tx, tz, x, z, exact)) || (crossOpen(px, pz, px, tz, x, z, exact) && crossOpen(px, tz, tx, tz, x, z, exact));
+  }
+  const a = echoTile(px, pz), b = echoTile(tx, tz);
+  if (a === "#" || b === "#") return false;
+  if (a === b) return true;
+  const kind = edgeDoor(px, pz, tx, tz);
+  if (!kind) return false;
+  if (!exact) return true;
+  const along = tx !== px ? z - (pz + 0.5) * ECHO.TILE : x - (px + 0.5) * ECHO.TILE;
+  return Math.abs(along) <= ECHO_DOOR_W[kind] / 2 + 0.1;
 }
 
-/** How many separate walls a straight line crosses (used to muffle voices). */
+/** Spawn points (metres), in reception. */
+export function echoSpawns(): { x: number; z: number }[] {
+  return SPAWN_CELLS.map(([tx, tz]) => ({ x: (tx + 0.5) * ECHO.TILE, z: (tz + 0.5) * ECHO.TILE }));
+}
+
+/** How many walls a straight line crosses (used to muffle voices and to decide who can see whom). Doors only count as open where the gap is. */
 export function echoWallsBetween(ax: number, az: number, bx: number, bz: number): number {
+  return crossings(ax, az, bx, bz, true);
+}
+/** Could someone move in a straight line from a to b without passing through a wall? (Lenient at doors, for the server's sanity check.) */
+export function echoPassable(ax: number, az: number, bx: number, bz: number): boolean {
+  return crossings(ax, az, bx, bz, false) === 0;
+}
+function crossings(ax: number, az: number, bx: number, bz: number, exact: boolean): number {
   const d = Math.hypot(bx - ax, bz - az);
-  const steps = Math.max(1, Math.ceil(d / 0.25));
+  const steps = Math.max(1, Math.ceil(d / 0.2));
   let walls = 0;
-  let inside = false;
-  for (let i = 1; i < steps; i++) {
-    const f = i / steps;
-    const w = echoWall(echoTileOf(ax + (bx - ax) * f), echoTileOf(az + (bz - az) * f));
-    if (w && !inside) walls++;
-    inside = w;
+  let px = echoTileOf(ax), pz = echoTileOf(az);
+  for (let i = 1; i <= steps; i++) {
+    const f = i / steps, x = ax + (bx - ax) * f, z = az + (bz - az) * f;
+    const tx = echoTileOf(x), tz = echoTileOf(z);
+    if (tx === px && tz === pz) continue;
+    const g = (i - 0.5) / steps; // the crossing happened between the two samples
+    if (!crossOpen(px, pz, tx, tz, ax + (bx - ax) * g, az + (bz - az) * g, exact)) walls++;
+    px = tx; pz = tz;
   }
   return walls;
 }
@@ -301,10 +351,9 @@ export function tagText(text: string, names: Record<number, string>): ClipTag[] 
   return tags;
 }
 
-/** Tiles a mimic may walk on (beds are in the way). */
+/** Cells a mimic may stand in. */
 export function mimicOpen(tx: number, tz: number): boolean {
-  const c = echoTile(tx, tz);
-  return c !== "#" && c !== "b";
+  return echoTile(tx, tz) !== "#";
 }
 
 /** Shortest walk between two tiles (4-way), as tile coordinates excluding the start. Empty if unreachable. */
@@ -323,7 +372,7 @@ export function echoPath(from: [number, number], to: [number, number]): [number,
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nx = x + dx, nz = z + dz;
       const nk = key(nx, nz);
-      if (prev.has(nk) || !mimicOpen(nx, nz)) continue;
+      if (prev.has(nk) || !echoEdgeOpen(x, z, nx, nz)) continue;
       prev.set(nk, k);
       q.push(nk);
     }

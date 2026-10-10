@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ECHO, ECHO_MAP, ECHO_W, MIMIC, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap } from "@monumental/shared";
+import { ECHO, ECHO_MAP, ECHO_W, MIMIC, echoEdgeOpen, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap } from "@monumental/shared";
 import { EchoRoom } from "./EchoRoom";
 
 function room() {
@@ -29,21 +29,25 @@ describe("ECHO HALLS map", () => {
     while (q.length) {
       const [x, z] = q.pop()!;
       const k = `${x},${z}`;
-      if (seen.has(k) || ECHO_MAP[z][x] === "#") continue;
+      if (seen.has(k)) continue;
       seen.add(k);
-      q.push([x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]);
+      for (const [nx, nz] of [[x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]]) if (echoEdgeOpen(x, z, nx, nz)) q.push([nx, nz]);
     }
     const open = ECHO_MAP.join("").split("").filter((c) => c !== "#").length;
     expect(seen.size).toBe(open);
   });
   it("counts the walls between two points (for muffled voices)", () => {
     const T = ECHO.TILE;
-    // same room → no wall
-    expect(echoWallsBetween(1.5 * T, 1.5 * T, 6.5 * T, 3.5 * T)).toBe(0);
-    // spawn room → middle room straight across the wall at column 8 (row 1 has no door)
-    expect(echoWallsBetween(6.5 * T, 1.5 * T, 10.5 * T, 1.5 * T)).toBe(1);
-    // through the doorway at row 2 → open
-    expect(echoWallsBetween(6.5 * T, 2.5 * T, 10.5 * T, 2.5 * T)).toBe(0);
+    // same room (reception) → no wall
+    expect(echoWallsBetween(1.5 * T, 1.5 * T, 4.5 * T, 4.5 * T)).toBe(0);
+    // reception → ward A straight through the wall (row 1 has no door)
+    expect(echoWallsBetween(4.5 * T, 1.5 * T, 7.5 * T, 1.5 * T)).toBe(1);
+    // through the doorway in row 3 → open, but just beside the gap → wall
+    expect(echoWallsBetween(4.5 * T, 3.5 * T, 7.5 * T, 3.5 * T)).toBe(0);
+    expect(echoWallsBetween(4.5 * T, 3.5 * T + 1.2, 7.5 * T, 3.5 * T + 1.2)).toBe(1);
+    // ward A → corridor → operating theatre through two doors in a line; a step to the side hits both walls
+    expect(echoWallsBetween(7.5 * T, 4.5 * T, 7.5 * T, 9.5 * T)).toBe(0);
+    expect(echoWallsBetween(6.2 * T, 4.5 * T, 6.2 * T, 9.5 * T)).toBe(2);
   });
 });
 
@@ -69,7 +73,8 @@ describe("ECHO HALLS rooms", () => {
     advance(100);
     expect(r.state("a", st({ x: j.spawn.x + 30, z: j.spawn.z }))).toBe(false); // teleport
     advance(1000);
-    expect(r.state("a", st({ x: 0.5, z: 0.5 }))).toBe(false); // inside the outer wall
+    expect(r.state("a", st({ x: 0.5, z: 0.5 }))).toBe(false); // inside the rock
+    expect(r.state("a", st({ x: 18.3, z: j.spawn.z }))).toBe(false); // through the wall into ward A
     const me = decodeEchoSnap(r.snapshot())[0];
     expect(me.x).toBeCloseTo(j.spawn.x + 2, 1);
     r.destroy();
@@ -98,7 +103,7 @@ describe("ECHO HALLS mimic", () => {
     const d = x.r.debug();
     const [ann, bob] = d.members;
     // Ann alone in the bottom-right room, Bob in the spawn room
-    Object.assign(ann, { x: 20.5 * T, z: 11.5 * T, torch: false });
+    Object.assign(ann, { x: 14.5 * T, z: 10.5 * T, torch: false }); // alone in the morgue
     Object.assign(bob, { x: 1.5 * T, z: 1.5 * T });
     for (let i = 0; i < 4; i++) { x.r.clip("b", i, 900 + i * 200, i === 1 ? ["call"] : ["short"]); x.r.have("a", `2:${i}`); }
     const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { x.advance(50); x.r.step(); } };
@@ -106,9 +111,10 @@ describe("ECHO HALLS mimic", () => {
   }
 
   it("finds walking paths between rooms and never through walls", () => {
-    const p = echoPath([1, 1], [20, 12]);
+    const p = echoPath([1, 1], [17, 11]);
     expect(p.length).toBeGreaterThan(10);
-    for (const [tx, tz] of p) expect(ECHO_MAP[tz][tx]).not.toBe("#");
+    let prev: [number, number] = [1, 1];
+    for (const c of p) { expect(echoEdgeOpen(prev[0], prev[1], c[0], c[1])).toBe(true); prev = c; }
     expect(echoPath([1, 1], [0, 0])).toEqual([]);
   });
 
@@ -175,7 +181,7 @@ describe("ECHO HALLS mimic", () => {
     const x = night();
     x.run(MIMIC.WAKE_SEC + 1);
     const mm = x.d.mimics[0];
-    Object.assign(mm, { x: x.ann.x + 2, z: x.ann.z, state: "chase", target: 1, until: x.now() + 10_000, path: [] });
+    Object.assign(mm, { x: x.ann.x - 2, z: x.ann.z, state: "chase", target: 1, until: x.now() + 10_000, path: [] });
     x.run(1);
     expect(x.ann.taken).toBe(true);
     const taken = x.events.find((e) => e.type === "taken");
@@ -197,7 +203,7 @@ describe("ECHO HALLS mimic — audible calls", () => {
     r.join("a", "Ann"); r.join("b", "Bob");
     const d = r.debug();
     const [ann, bob] = d.members;
-    Object.assign(ann, { x: 61.5, z: 37.5, yaw: Math.PI });
+    Object.assign(ann, { x: 43.5, z: 34.5, yaw: Math.PI });
     Object.assign(bob, { x: 7.5, z: 4.5 });
     for (let i = 0; i < 10; i++) { r.clip("b", i, 1000, ["short"]); r.have("a", `2:${i}`); }
     let say = 0;
@@ -223,7 +229,7 @@ describe("ECHO HALLS mimic — spotted", () => {
     r.join("a", "Ann"); r.join("b", "Bob");
     const d = r.debug();
     const [ann, bob] = d.members;
-    Object.assign(ann, { x: 61.5, z: 34.5, yaw: Math.PI / 2, torch: true }); // facing −x
+    Object.assign(ann, { x: 43.5, z: 31.5, yaw: Math.PI / 2, torch: true }); // facing −x
     Object.assign(bob, { x: 7.5, z: 4.5 });
     for (let i = 0; i < 6; i++) { r.clip("b", i, 1000, ["short"]); r.have("a", `2:${i}`); }
     const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { t += 50; r.step(); } };
@@ -245,14 +251,14 @@ describe("ECHO HALLS mimic — never harmless", () => {
     r.join("a", "Ann"); r.join("b", "Bob");
     const d = r.debug();
     const [ann, bob] = d.members;
-    Object.assign(ann, { x: 61.5, z: 34.5, yaw: 0, torch: false });
+    Object.assign(ann, { x: 43.5, z: 31.5, yaw: 0, torch: false });
     Object.assign(bob, { x: 7.5, z: 4.5 });
     for (let i = 0; i < 6; i++) { r.clip("b", i, 1200, ["short"]); r.have("a", `2:${i}`); }
     const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { t += 50; r.step(); } };
     run(MIMIC.WAKE_SEC + 1);
     const mm = d.mimics[0];
     // just wandering (calm after a catch), Ann bumps into it from behind
-    Object.assign(mm, { x: ann.x + 2, z: ann.z, state: "wander", target: null, path: [], nextLure: t + 60_000 });
+    Object.assign(mm, { x: ann.x - 2, z: ann.z, state: "wander", target: null, path: [], nextLure: t + 60_000 });
     run(1.5);
     expect(ann.taken).toBe(true);
     r.destroy();
@@ -265,7 +271,7 @@ describe("ECHO HALLS mimic — never harmless", () => {
     r.join("a", "Ann"); r.join("b", "Bob");
     const d = r.debug();
     const [ann, bob] = d.members;
-    Object.assign(ann, { x: 61.5, z: 37.5, yaw: Math.PI });
+    Object.assign(ann, { x: 43.5, z: 34.5, yaw: Math.PI });
     Object.assign(bob, { x: 7.5, z: 4.5 });
     const lens = [420, 480, 520, 1400, 1600, 2200];
     lens.forEach((ms, i) => { r.clip("b", i, ms, ["short"]); r.have("a", `2:${i}`); });
