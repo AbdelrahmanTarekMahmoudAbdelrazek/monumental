@@ -111,6 +111,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       else if (e.type === "install") toast(`${you(e.n, "put", "put")} a fuse in. ${Math.min(GOAL.FUSES, (metaRef.current?.goal?.placed ?? 0) + 1)}/${GOAL.FUSES}`);
       else if (e.type === "power") toast("The power is back. Everyone to the lift — all of you, together.");
       if (e.type === "wake") toast("Something in the building is awake.", true);
+      else if (e.type === "free") toast(e.n === meRef.current ? "You cut yourself free! The cutters are spent." : `${nm(e.n)} cut free with the bolt cutters.`);
       else if (e.type === "exposed") toast(`${e.by === meRef.current ? "You" : nm(e.by)} caught a mimic in the light. It ran.`);
       else if (e.type === "taken") {
         const owner = e.lure ? Number(e.lure.split(":")[0]) : null;
@@ -309,7 +310,28 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
           {(hud.onAir.length > 0 || hud.fakeAir !== null) && (
             <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#5A2621] bg-[#160E0D]/85 px-4 py-1.5 text-sm text-[#F1C9C4]" data-testid="eh-radio">
               <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#E0675C]" />
-              CH 4 · {[...new Set([...hud.onAir, ...(hud.fakeAir !== null ? [hud.fakeAir] : [])])].map((n) => (n === 0 || n === me ? "you" : nameOf(n)?.name ?? "someone")).join(", ")}
+              CH 4 · {[...new Set([...hud.onAir, ...(hud.fakeAir !== null ? [hud.fakeAir] : [])])].map((n, i) => {
+                const who = n === 0 || n === me ? "you" : nameOf(n)?.name ?? "someone";
+                // Theo's walkie knows his friends' radios: a voice with no radio behind it is flagged
+                const fake = hud.teen === "theo" && n === hud.fakeAir && !hud.onAir.includes(n);
+                return <span key={n}>{i > 0 && ", "}{fake ? <span data-testid="eh-radio-fake"><s className="opacity-70">{who}</s> <b className="text-[#FF8A7A]">· no radio signal</b></span> : who}</span>;
+              })}
+            </div>
+          )}
+          {(hud.finder || hud.teen === "sam") && (
+            <div className="pointer-events-none absolute right-4 top-12 flex flex-col items-end gap-2 text-xs">
+              {hud.finder && (
+                <div className="flex items-center gap-2 rounded-2xl border border-[#2C3A33] bg-[#0C1210]/85 px-3 py-2 text-[#BFE8D6]" data-testid="eh-finder">
+                  <svg width="26" height="26" viewBox="0 0 26 26" style={{ transform: `rotate(${hud.finder.deg}deg)`, transition: "transform 120ms linear" }} aria-hidden="true">
+                    <circle cx="13" cy="13" r="12" fill="none" stroke="#2F4A3F" strokeWidth="1.5" />
+                    <path d="M13 4 L19 17 L13 14 L7 17 Z" fill="#6EE6C8" />
+                  </svg>
+                  <div className="leading-tight"><div className="text-[10px] uppercase tracking-wider text-[#6E8E80]">Maya's phone</div><div>{hud.finder.what} · {hud.finder.m} m</div></div>
+                </div>
+              )}
+              {hud.teen === "sam" && (
+                <div className={`rounded-full px-2.5 py-1 ${hud.cuttersUsed ? "bg-black/50 text-[#6E786E]" : "bg-[#1E1A12] text-[#D9B86A]"}`} data-testid="eh-cutters">{hud.cuttersUsed ? "Cutters used" : "Cutters ready · one escape"}</div>
+              )}
             </div>
           )}
           {hud.act && !mobile && <div className="pointer-events-none absolute left-1/2 top-[64%] -translate-x-1/2 rounded-full bg-black/60 px-4 py-2 text-sm text-[#E9E4D6]" data-testid="eh-act"><b className="mr-2 rounded border border-[#E9E4D6]/60 px-1.5">E</b>{hud.act}</div>}

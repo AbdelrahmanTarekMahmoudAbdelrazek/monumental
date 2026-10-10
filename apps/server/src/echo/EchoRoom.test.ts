@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ECHO, ECHO_MAP, ECHO_W, GOAL, MIMIC, echoEdgeOpen, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap } from "@monumental/shared";
+import { ECHO, ECHO_MAP, ECHO_W, GOAL, MIMIC, PERK, echoEdgeOpen, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap } from "@monumental/shared";
 import { EchoRoom } from "./EchoRoom";
 
 function room() {
@@ -280,6 +280,60 @@ describe("ECHO HALLS mimic — never harmless", () => {
     expect(said.length).toBeGreaterThan(0);
     for (const k of said) expect(lens[Number(k.split(":")[1])]).toBeGreaterThanOrEqual(1400);
     r.destroy();
+  });
+});
+
+describe("ECHO HALLS perks", () => {
+  const T = ECHO.TILE;
+  function night() {
+    const x = room();
+    x.r.join("a", "Ann"); x.r.join("b", "Bob");
+    const d = x.r.debug();
+    const [ann, bob] = d.members;
+    Object.assign(ann, { x: 14.5 * T, z: 10.5 * T, torch: false });
+    Object.assign(bob, { x: 1.5 * T, z: 1.5 * T });
+    for (let i = 0; i < 4; i++) { x.r.clip("b", i, 900 + i * 200, i === 1 ? ["call"] : ["short"]); x.r.have("a", `2:${i}`); }
+    const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { x.advance(50); x.r.step(); } };
+    return { ...x, d, ann, bob, run };
+  }
+  it("Sam cuts himself free once per match; the second grab takes him", () => {
+    const x = night();
+    expect(x.r.setLook("a", { teen: "sam" })).toEqual({ ok: true });
+    x.run(MIMIC.WAKE_SEC + 1);
+    const mm = x.d.mimics[0];
+    Object.assign(mm, { x: x.ann.x - 2, z: x.ann.z, state: "chase", target: 1, until: x.now() + 10_000, path: [] });
+    x.run(1);
+    expect(x.ann.taken).toBe(false);
+    expect(x.events.some((e) => e.type === "free" && e.n === 1)).toBe(true);
+    expect(mm.state).toBe("flee");
+    Object.assign(mm, { x: x.ann.x - 2, z: x.ann.z, state: "chase", target: 1, until: x.now() + 10_000, path: [], windUp: 0 });
+    x.run(1);
+    expect(x.ann.taken).toBe(true);
+    x.r.destroy();
+  });
+
+  it("Nora's headlamp exposes a calling monster twice as fast, from further away", () => {
+    const x = night();
+    expect(x.r.setLook("a", { teen: "nora" })).toEqual({ ok: true });
+    x.run(MIMIC.WAKE_SEC + 1);
+    const mm = x.d.mimics[0];
+    // 7 m away, half the usual time
+    Object.assign(mm, { x: x.ann.x - 7, z: x.ann.z, state: "lure", target: 1, until: x.now() + 60_000, path: [], lures: 1 });
+    Object.assign(x.ann, { yaw: Math.PI / 2, torch: true });
+    x.run(MIMIC.EXPOSE_SEC / PERK.NORA_EXPOSE + 0.2);
+    expect(x.events.some((e) => e.type === "exposed")).toBe(true);
+    x.r.destroy();
+  });
+
+  it("anyone else needs the full time", () => {
+    const x = night();
+    x.run(MIMIC.WAKE_SEC + 1);
+    const mm = x.d.mimics[0];
+    Object.assign(mm, { x: x.ann.x - 7, z: x.ann.z, state: "lure", target: 1, until: x.now() + 60_000, path: [], lures: 1 });
+    Object.assign(x.ann, { yaw: Math.PI / 2, torch: true });
+    x.run(MIMIC.EXPOSE_SEC / PERK.NORA_EXPOSE + 0.2);
+    expect(x.events.some((e) => e.type === "exposed")).toBe(false);
+    x.r.destroy();
   });
 });
 

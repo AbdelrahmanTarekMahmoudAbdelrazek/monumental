@@ -112,7 +112,7 @@ export default function TeenPicker({ meta, me, send }: { meta: EchoMeta | null; 
           </div>
           {teen && (
             <p className="mt-3 text-sm leading-relaxed text-[#A6AFA6]">
-              <b className="text-[#E9E4D6]">{teen.role}.</b> Kit: {LABEL[teen.item]}. <span className="text-[#6EE6C8]">Perk idea: {teen.perk}</span> <span className="text-[#6E786E]">(perks come in a later update)</span>
+              <b className="text-[#E9E4D6]">{teen.role}.</b> Kit: {LABEL[teen.item]}. <span className="text-[#6EE6C8]">Perk: {teen.perk}.</span>
             </p>
           )}
           {err && <p className="mt-2 rounded-lg bg-[#2A1512] px-3 py-2 text-sm text-[#F1C9C4]">{err}</p>}

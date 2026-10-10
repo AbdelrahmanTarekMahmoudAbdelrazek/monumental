@@ -88,7 +88,7 @@ export class TeenRig {
   private t = Math.random() * 10;
   private src: "head" | "right" | "left" = "right";
 
-  constructor(private light: TeenLightCfg, private castShadows: boolean) {
+  constructor(public light: TeenLightCfg, private castShadows: boolean) {
     this.root.add(this.hips);
     this.hips.add(this.torso);
     this.neck.position.y = 0.5; this.torso.add(this.neck);

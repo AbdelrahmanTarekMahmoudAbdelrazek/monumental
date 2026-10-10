@@ -144,10 +144,10 @@ export const ECHO_COLORS = ["#E9C46A", "#7FB89A", "#8AB8FF", "#E0675C"] as const
 
 export type EchoTeenId = "maya" | "theo" | "sam" | "nora";
 export const ECHO_TEENS: readonly { id: EchoTeenId; name: string; role: string; perk: string; item: EchoItem }[] = [
-  { id: "maya", name: "Maya", role: "The Navigator", perk: "Her phone traces the route you walked", item: "phone" },
-  { id: "theo", name: "Theo", role: "The Radio", perk: "His walkie reaches friends through walls", item: "walkie" },
-  { id: "sam", name: "Sam", role: "The Breaker", perk: "Opens fences, padlocks and grates (loud)", item: "cutters" },
-  { id: "nora", name: "Nora", role: "The Scout", perk: "Headlamp keeps both hands free", item: "torch" },
+  { id: "maya", name: "Maya", role: "The Navigator", perk: "Her phone points to the nearest fuse, the fuse box, then the lift", item: "phone" },
+  { id: "theo", name: "Theo", role: "The Radio", perk: "His walkie spots fake calls on Channel 4", item: "walkie" },
+  { id: "sam", name: "Sam", role: "The Breaker", perk: "Cuts himself free once per match when a monster grabs him", item: "cutters" },
+  { id: "nora", name: "Nora", role: "The Scout", perk: "Her headlamp reaches further and drives monsters off twice as fast", item: "torch" },
 ];
 export const LOOK_OPTS = {
   hair: ["short", "curly", "curlylong", "pony", "bob", "buzz"],
@@ -188,6 +188,15 @@ export const TEEN_LOOKS: Record<EchoTeenId, EchoLook> = {
   sam: { teen: "sam", skin: 2, build: "broad", hair: "buzz", hairC: 0, hat: "hood", coat: "hoodie", coatC: 4, coatC2: 4, pants: "joggers", pantsC: 1, shoes: "boots", pack: "none", item: "cutters", scarf: false, glasses: false, gloves: true },
   nora: { teen: "nora", skin: 0, build: "slim", hair: "pony", hairC: 3, hat: "headlamp", coat: "puffer", coatC: 2, coatC2: 7, pants: "cargo", pantsC: 3, shoes: "boots", pack: "sling", item: "torch", scarf: false, glasses: true, gloves: false },
 };
+/** What each teen's kit does in the game. */
+export const PERK = {
+  /** Nora: torch reach (m) on top of EXPOSE_RANGE, and how much faster she exposes. */
+  NORA_RANGE: 4,
+  NORA_EXPOSE: 2,
+  /** Sam: after cutting free, the monster that grabbed him backs off this long (s). */
+  SAM_STUN_SEC: 6,
+} as const;
+
 export const isTeen = (v: unknown): v is EchoTeenId => ECHO_TEENS.some((t) => t.id === v);
 
 /** Validate a look from the network or storage. Unknown fields fall back to the teen's default; the item always comes from the teen. */
@@ -368,6 +377,8 @@ export type EchoEvent =
   | { type: "say"; mimic: number; clips: string[] }
   | { type: "exposed"; mimic: number; by: number }
   | { type: "taken"; n: number; mimic: number; lure: string | null }
+  /** Sam cut himself free (his one escape this match). */
+  | { type: "free"; n: number; mimic: number }
   | { type: "back"; n: number; x: number; z: number }
   | { type: "wake" }
   | { type: "pickup"; n: number; fuse: number }

@@ -28,6 +28,9 @@ export class Avatar {
     const key = JSON.stringify(look);
     if (key === this.lookKey) return;
     this.lookKey = key;
+    // Nora's headlamp is the strong one
+    const nora = look.teen === "nora";
+    this.rig.light = { ...this.rig.light, intensity: nora ? 85 : 55, distance: nora ? 30 : 22 };
     this.rig.build(look);
   }
 

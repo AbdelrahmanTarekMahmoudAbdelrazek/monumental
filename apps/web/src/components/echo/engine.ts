@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
-import { ECHO, ECHO_ROOMS, GOAL, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
+import { ECHO, ECHO_ROOMS, GOAL, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoPath, type EchoTeenId, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
 import { buildLevel, flickerLights, type HospitalLights } from "./hospital";
 import { HospitalAudio } from "./hospitalAudio";
@@ -35,6 +35,12 @@ export interface EchoHud {
   onAir: number[];
   /** A voice on the radio that might not be who it sounds like. */
   fakeAir: number | null;
+  /** Which teen I play. */
+  teen: EchoTeenId | null;
+  /** Maya's phone: where to go next (through doors), how far, and which way relative to where I look (deg, + = right). */
+  finder: { what: string; m: number; deg: number } | null;
+  /** Sam has used his cutters this match. */
+  cuttersUsed: boolean;
 }
 
 export interface EchoNet {
@@ -208,6 +214,7 @@ export class EchoEngine {
     this.torch.shadow.normalBias = 0.035;
     this.torch.position.set(0, 0, 0);
     this.torch.target.position.set(0, 0, -1);
+    this.applyPerk();
     this.torchRig.add(this.torch, this.torch.target);
     this.scene.add(this.torchRig);
     // a very faint glow around me so total darkness still shows the nearest walls
@@ -288,6 +295,7 @@ export class EchoEngine {
   setMeta(m: EchoMeta) {
     this.meta = m;
     this.goal = m.goal ?? null;
+    this.applyPerk();
     this.names = Object.fromEntries(m.players.map((p) => [p.n, p.name.toLowerCase()]));
     const others = m.players.filter((p) => p.n !== this.opts.me);
     for (const p of others) {
@@ -353,14 +361,19 @@ export class EchoEngine {
       if (mine) this.teleport(mine[1], mine[2]);
       this.takenUntil = 0;
       this.doorOpen = 0;
+      this.cuttersUsed = false;
     }
     if (e.type === "radio") {
       const clips = e.clips.map((k) => this.voice.bank.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
-      if (clips.length && !this.isTaken) { const d = this.voice.radio.play(clips); this.fakeAir = { as: e.as, until: performance.now() + d * 1000 }; }
+      // a call in my own voice would give it away to me, so I don't hear that one
+      if (clips.length && !this.isTaken && e.as !== this.opts.me) { const d = this.voice.radio.play(clips); this.fakeAir = { as: e.as, until: performance.now() + d * 1000 }; }
     } else if (e.type === "say") {
       const v = this.mimics.get(e.mimic);
       const clips = e.clips.map((k) => this.voice.bank.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
       if (v && clips.length) v.snd.say(clips);
+    } else if (e.type === "free") {
+      if (e.n === this.opts.me) { this.cuttersUsed = true; this.sounds.sting(); }
+      this.mimics.get(e.mimic)?.snd.shriek();
     } else if (e.type === "exposed") {
       this.mimics.get(e.mimic)?.snd.shriek();
     } else if (e.type === "taken") {
@@ -600,6 +613,45 @@ export class EchoEngine {
     if (Math.abs(r - this.pixelRatio) > 0.01) { this.pixelRatio = r; this.resize(); }
   }
 
+  private cuttersUsed = false;
+  private myTeen(): EchoTeenId | null { return this.meta?.players.find((p) => p.n === this.opts.me)?.look?.teen ?? null; }
+
+  /** Nora's headlamp throws further and brighter. */
+  private applyPerk() {
+    if (!this.torch) return;
+    const nora = this.myTeen() === "nora";
+    this.torch.intensity = nora ? 115 : 75;
+    this.torch.distance = nora ? 38 : 30;
+    this.torch.angle = nora ? 0.56 : 0.5;
+  }
+
+  /** Maya's phone: the next thing to do, and the first step of the walk there (so it points at doors, not through walls). */
+  private finder(): { what: string; m: number; deg: number } | null {
+    const g = this.goal;
+    if (!g || g.result) return null;
+    const px = this.cur.x, pz = this.cur.z;
+    let what: string, tx: number, tz: number;
+    if (g.power) { what = "Lift"; tx = GOAL.LIFT.x; tz = GOAL.LIFT.z; }
+    else if (g.fuses.some((f) => f.by === this.opts.me)) { what = "Fuse box"; tx = GOAL.BOX.x; tz = GOAL.BOX.z; }
+    else {
+      const loose = g.fuses.filter((f) => !f.placed && f.by === null).sort((a, b) => Math.hypot(a.x - px, a.z - pz) - Math.hypot(b.x - px, b.z - pz))[0];
+      if (!loose) return null;
+      what = "Fuse"; tx = loose.x; tz = loose.z;
+    }
+    const path = echoPath([echoTileOf(px), echoTileOf(pz)], [echoTileOf(tx), echoTileOf(tz)]);
+    const T = ECHO.TILE;
+    // aim at the next tile's centre while there is more than one step left, else straight at the target
+    let wx = tx, wz = tz;
+    if (path.length > 1) { wx = (path[0][0] + 0.5) * T; wz = (path[0][1] + 0.5) * T; }
+    let m = 0, lx = px, lz = pz;
+    for (const [cx, cz] of path.slice(0, -1)) { const x = (cx + 0.5) * T, z = (cz + 0.5) * T; m += Math.hypot(x - lx, z - lz); lx = x; lz = z; }
+    m += Math.hypot(tx - lx, tz - lz);
+    const dx = wx - px, dz = wz - pz;
+    const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
+    const ahead = -sin * dx - cos * dz, right = cos * dx - sin * dz;
+    return { what, m: Math.round(m), deg: Math.round((Math.atan2(right, ahead) * 180) / Math.PI) };
+  }
+
   private pushHud(force: boolean) {
     const now = performance.now();
     if (!force && now - this.hudAt < 100) return;
@@ -620,6 +672,9 @@ export class EchoEngine {
       carrying: !!this.goal?.fuses.some((f) => f.by === this.opts.me),
       onAir: [...(this.wasOnAir ? [0] : []), ...this.onAir],
       fakeAir: this.fakeAir && this.fakeAir.until > now ? this.fakeAir.as : null,
+      teen: this.myTeen(),
+      finder: this.myTeen() === "maya" && !this.isTaken ? this.finder() : null,
+      cuttersUsed: this.cuttersUsed,
     });
   }
 

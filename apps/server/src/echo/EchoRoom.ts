@@ -2,6 +2,7 @@ import {
   ECHO, ECHO_COLORS, ECHO_RADIO, GOAL, RADIO, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, TEEN_LOOKS, cleanLook,
   echoFree, echoPassable, echoPath, echoSpawns, echoTileOf, echoWallsBetween, mimicOpen,
   type ClipInfo, type ClipTag, type EchoAct, type EchoEvent, type EchoGoal, type EchoLook, type EchoMeta, type EchoSnap2, type EchoState, type MimicState,
+  PERK,
 } from "@monumental/shared";
 
 interface Member {
@@ -30,6 +31,8 @@ interface Member {
   heard: { n: number; at: number } | null;
   /** When this player last asked a question ("where are you?"). */
   askedAt: number;
+  /** Sam has used his one escape this match. */
+  freed: boolean;
 }
 
 interface Clip extends ClipInfo {
@@ -106,7 +109,7 @@ export class EchoRoom {
       const color = ECHO_COLORS.find((c) => !used.has(c)) ?? ECHO_COLORS[0];
       // first teen nobody plays yet; the client sends its saved choice right after joining
       const teen = ECHO_TEENS.find((t) => !this.members.some((x) => x.look.teen === t.id))?.id ?? "maya";
-      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, radio: false, look: { ...TEEN_LOOKS[teen] }, entered: false, carry: null, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0 };
+      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, radio: false, look: { ...TEEN_LOOKS[teen] }, entered: false, carry: null, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0, freed: false };
       this.members.push(m);
     } else {
       m.name = name.slice(0, 20) || m.name;
@@ -257,7 +260,7 @@ export class EchoRoom {
     for (const mm of this.clips.values()) mm.used = false;
     const sp = echoSpawns();
     const spawns: [number, number, number][] = [];
-    this.members.forEach((m, i) => { const s = sp[i % sp.length]; Object.assign(m, { x: s.x, z: s.z, y: 0, taken: false, takenUntil: 0, carry: null, at: t }); spawns.push([m.n, s.x, s.z]); });
+    this.members.forEach((m, i) => { const s = sp[i % sp.length]; Object.assign(m, { x: s.x, z: s.z, y: 0, taken: false, takenUntil: 0, carry: null, freed: false, at: t }); spawns.push([m.n, s.x, s.z]); });
     if (this.members.some((m) => m.entered)) { this.goal.startedAt = t; this.goal.endsAt = t + this.matchSec * 1000; }
     this.ev.event({ type: "restart", spawns });
     this.pushMeta();
@@ -499,6 +502,20 @@ export class EchoRoom {
   }
 
   private take(mm: Mimic, target: Member, t: number) {
+    // Sam's bolt cutters: once per match he cuts himself loose and the monster reels back
+    if (target.look.teen === "sam" && !target.freed) {
+      target.freed = true;
+      this.ev.event({ type: "free", n: target.n, mimic: mm.id });
+      mm.state = "flee";
+      mm.target = null;
+      mm.pendingSay = null;
+      mm.expose.clear();
+      mm.until = t + PERK.SAM_STUN_SEC * 1000;
+      mm.nextLure = mm.until + 8000;
+      mm.path = echoPath(this.tileOf(mm), this.farTile(10));
+      this.pushMeta();
+      return;
+    }
     target.taken = true;
     target.takenUntil = t + MIMIC.TAKEN_SEC * 1000;
     this.takenCount++;
@@ -515,7 +532,8 @@ export class EchoRoom {
       const dx = mm.x - m.x, dz = mm.z - m.z;
       const d = Math.hypot(dx, dz);
       let lit = false;
-      if (m.torch && d < MIMIC.EXPOSE_RANGE && d > 0.01) {
+      const nora = m.look.teen === "nora";
+      if (m.torch && d < MIMIC.EXPOSE_RANGE + (nora ? PERK.NORA_RANGE : 0) && d > 0.01) {
         const fx = -Math.sin(m.yaw), fz = -Math.cos(m.yaw);
         const cos = (fx * dx + fz * dz) / d;
         lit = cos > Math.cos(MIMIC.BEAM) && echoWallsBetween(m.x, m.z, mm.x, mm.z) === 0;
@@ -526,7 +544,7 @@ export class EchoRoom {
         if (lit && d >= 6 && t > mm.slipUntil) { mm.slipUntil = t + 2500; mm.path = echoPath(this.tileOf(mm), this.farTile(6)); }
         continue;
       }
-      const v = Math.max(0, (mm.expose.get(m.n) ?? 0) + (lit ? dt : -dt * 2));
+      const v = Math.max(0, (mm.expose.get(m.n) ?? 0) + (lit ? dt * (nora ? PERK.NORA_EXPOSE : 1) : -dt * 2));
       mm.expose.set(m.n, v);
       if (v >= MIMIC.EXPOSE_SEC) {
         mm.expose.clear();
