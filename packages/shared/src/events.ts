@@ -169,6 +169,8 @@ export interface ClientToServerEvents {
   eh_look: (p: { look: import("./echo").EchoLook }, ack: (a: { ok: boolean; error?: string }) => void) => void;
   /** Go in / pick up a fuse / use the fuse box / play again. */
   eh_act: (p: import("./echo").EchoAct, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** Voice relay (TURN) logins for this match. Empty list = keep what you have. */
+  eh_ice: (ack: (a: { iceServers: { urls: string | string[]; username?: string; credential?: string }[] }) => void) => void;
   eh_state: (p: import("./echo").EchoState) => void;
   /** WebRTC voice set-up for one other player (`to` = their wire number). */
   eh_signal: (p: { to: number; data: unknown }) => void;

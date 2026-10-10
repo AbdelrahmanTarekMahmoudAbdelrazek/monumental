@@ -1,3 +1,4 @@
+import { iceService } from "./echo/ice";
 import type { Socket } from "socket.io";
 import { z } from "zod";
 import { normaliseCustomSettings, normaliseShakSettings, normaliseOwSettings, normaliseSmuggleSettings, normaliseNeonSettings, normaliseSqSettings, type ClipTag, type SqSettings, type SqAction, type NeonSettings, type NeonAction, type SmuggleSettings, type SmuggleAction, type OwSettings, type OwAction, type ClientToServerEvents, type ServerToClientEvents, type CustomRoomSettings, type ShakSettings } from "@monumental/shared";
@@ -531,6 +532,13 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       if (type === "enter" || type === "install" || type === "restart") return ack(r.act(me, { type }));
       if (type === "pickup" && Number.isInteger(p?.fuse)) return ack(r.act(me, { type, fuse: p!.fuse as number }));
       ack({ ok: false, error: "Invalid action" });
+    });
+    let iceAt = 0;
+    socket.on("eh_ice", (ack) => {
+      if (typeof ack !== "function") return;
+      if (!ehRoom() || Date.now() - iceAt < 5000) return ack({ iceServers: [] });
+      iceAt = Date.now();
+      iceService.get().then((iceServers) => ack({ iceServers }), () => ack({ iceServers: [] }));
     });
     socket.on("eh_signal", (raw) => {
       const r = ehRoom();

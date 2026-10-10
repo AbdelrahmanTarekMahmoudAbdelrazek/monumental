@@ -71,6 +71,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
           sendClip: (p) => s.emit("eh_clip", p),
           sendTag: (p) => s.emit("eh_tag", p),
           sendHave: (key) => s.emit("eh_have", { key }),
+          getIce: () => new Promise((res) => s.timeout(8000).emit("eh_ice", (err: unknown, a?: { iceServers: RTCIceServer[] }) => res(err || !a ? [] : a.iceServers))),
         },
         onHud: (h) => setHud(h),
       });
@@ -267,7 +268,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
               </div>
               <div className="rounded-xl border border-[#5A2621] bg-[#160E0D] p-4">
                 <div className="font-semibold text-[#F1C9C4]">This game uses your voice against you</div>
-                <p className="mt-1 text-sm leading-relaxed text-[#C7A7A2]">While you play, short pieces of what you say are cut on your device and sent straight to the other players. The monsters replay them in your voice to trick your friends. Pieces live only in this match and are deleted when you leave. They never go to our server and are never used to train anything.</p>
+                <p className="mt-1 text-sm leading-relaxed text-[#C7A7A2]">While you play, short pieces of what you say are cut on your device and sent straight to the other players. The monsters replay them in your voice to trick your friends. Pieces live only in this match and are deleted when you leave. On networks that block direct links they pass through an encrypted relay that cannot listen in or keep them. They never go to our server and are never used to train anything.</p>
                 <label className="mt-3 flex items-center gap-3 text-sm text-[#F1C9C4]"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="h-5 w-5 accent-[#D9463B]" data-testid="eh-consent" /> I understand and agree</label>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-sm">

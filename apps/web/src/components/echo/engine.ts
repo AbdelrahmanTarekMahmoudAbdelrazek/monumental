@@ -43,6 +43,8 @@ export interface EchoNet {
   sendClip: (p: { id: number; ms: number; tags: ClipTag[] }) => void;
   sendTag: (p: { id: number; tags: ClipTag[] }) => void;
   sendHave: (key: string) => void;
+  /** Voice relay logins from the game server. */
+  getIce?: () => Promise<RTCIceServer[]>;
 }
 
 const STEP = 1 / 60;
@@ -164,6 +166,7 @@ export class EchoEngine {
     // voice exists from the start so set-up messages that arrive while the hospital is still building aren't lost
     this.voice = new Voice(this.sounds, opts.me, (to, d) => opts.net.sendSignal(to, d), () => this.pushHud(true));
     this.voice.onClip = (key) => opts.net.sendHave(key);
+    opts.net.getIce?.().then((l) => this.voice.setIce(l), () => {});
     this.camera = new THREE.PerspectiveCamera(opts.mobile ? 78 : 72, 1, 0.05, 70);
   }
 

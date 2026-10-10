@@ -1,3 +1,4 @@
+import { iceService } from "./echo/ice";
 import http from "node:http";
 import express from "express";
 import cors from "cors";
@@ -62,7 +63,7 @@ export async function createServer() {
   }
 
   // ───────── REST (read-only live info) ─────────
-  app.get("/health", (_req, res) => res.json({ ok: true, store: store.kind, db: !!db, rooms: rooms.rooms.size, uptime: process.uptime() }));
+  app.get("/health", (_req, res) => res.json({ ok: true, store: store.kind, db: !!db, rooms: rooms.rooms.size, uptime: process.uptime(), voiceRelay: iceService.provider, voiceRelayError: iceService.lastError }));
   app.get("/rooms", (_req, res) => res.json(rooms.overview()));
   app.get("/rooms/:id", (req, res) => {
     const r = rooms.get(req.params.id);

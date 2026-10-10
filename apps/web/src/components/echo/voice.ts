@@ -49,7 +49,11 @@ interface Peer {
   remoteGen: number;
 }
 
-function iceServers(): RTCIceServer[] {
+/** `?ehrelay` in the address: voice only through the relay (to check the relay works). */
+const FORCE_RELAY = typeof window !== "undefined" && window.location.search.includes("ehrelay");
+
+/** Fallback when the game server hasn't sent relay logins (yet): public STUN, plus a build-time TURN if one is set. */
+function defaultIce(): RTCIceServer[] {
   const list: RTCIceServer[] = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
   const url = process.env.NEXT_PUBLIC_TURN_URL;
   if (url) list.push({ urls: url.split(","), username: process.env.NEXT_PUBLIC_TURN_USER, credential: process.env.NEXT_PUBLIC_TURN_PASS });
@@ -76,6 +80,51 @@ export class Voice {
   onClip: (key: string) => void = () => {};
   /** Someone's labels for one of their pieces changed. */
   onTags: (key: string, tags: ClipTag[]) => void = () => {};
+
+  /** Relay logins from the game server (null until they arrive). */
+  private ice: RTCIceServer[] | null = null;
+  private iceWait = performance.now() + 3000;
+  private wanted: number[] | null = null;
+
+  /** New relay logins: used for every connection from now on; stuck ones retry through the relay. */
+  setIce(list: RTCIceServer[]) {
+    if (!list.length) return;
+    this.ice = list;
+    if (this.wanted) this.sync(this.wanted);
+    const relay = list.some((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => u.startsWith("turn")));
+    this.trace(`ice servers: ${list.length}${relay ? " (relay)" : ""}`);
+    for (const p of this.peers.values()) {
+      try {
+        p.pc.setConfiguration({ ...p.pc.getConfiguration(), iceServers: list, iceTransportPolicy: FORCE_RELAY ? "relay" : "all" });
+        if (relay && (p.pc.connectionState === "failed" || p.pc.connectionState === "disconnected") && p.offerer) { this.trace(`ice restart ${p.n} (relay)`); p.pc.restartIce(); }
+      } catch { /* closed */ }
+    }
+  }
+
+  /** How each voice link travels: "direct" (device to device) or "relay" (through TURN). */
+  async routes(): Promise<{ n: number; route: "direct" | "relay" | "none" }[]> {
+    const out: { n: number; route: "direct" | "relay" | "none" }[] = [];
+    for (const p of this.peers.values()) {
+      let route: "direct" | "relay" | "none" = "none";
+      try {
+        const st = await p.pc.getStats();
+        st.forEach((r) => {
+          if (r.type !== "transport" || !r.selectedCandidatePairId) return;
+          const pair = st.get(r.selectedCandidatePairId);
+          const a = pair && st.get(pair.localCandidateId), b = pair && st.get(pair.remoteCandidateId);
+          if (a || b) route = a?.candidateType === "relay" || b?.candidateType === "relay" ? "relay" : "direct";
+        });
+        if (route === "none") st.forEach((r) => {
+          if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") {
+            const a = st.get(r.localCandidateId), b = st.get(r.remoteCandidateId);
+            route = a?.candidateType === "relay" || b?.candidateType === "relay" ? "relay" : "direct";
+          }
+        });
+      } catch { /* closed */ }
+      out.push({ n: p.n, route });
+    }
+    return out;
+  }
 
   private watchdog: ReturnType<typeof setInterval>;
 
@@ -201,12 +250,19 @@ export class Voice {
 
   /** Keep one connection per other player in the room. */
   sync(others: number[]) {
+    // give the relay logins a moment to arrive, so the first attempt can already use them
+    if (!this.ice && performance.now() < this.iceWait) {
+      if (!this.wanted) setTimeout(() => this.wanted && this.sync(this.wanted), this.iceWait - performance.now() + 20);
+      this.wanted = others;
+      return;
+    }
+    this.wanted = null;
     for (const n of others) if (!this.peers.has(n)) this.open(n);
     for (const n of [...this.peers.keys()]) if (!others.includes(n)) this.close(n);
   }
 
   private open(n: number) {
-    const pc = new RTCPeerConnection({ iceServers: iceServers() });
+    const pc = new RTCPeerConnection({ iceServers: this.ice ?? defaultIce(), iceTransportPolicy: this.ice && FORCE_RELAY ? "relay" : "all" });
     const ctx = this.sounds.ctx;
     const filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
