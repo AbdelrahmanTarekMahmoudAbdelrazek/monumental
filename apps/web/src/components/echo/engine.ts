@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
-import { ECHO, ECHO_TAKEN, MIMIC_STATES, decodeEchoSnap, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
+import { ECHO, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
 import { buildLevel, flickerLights, type CeilingLight } from "./level";
 import { SoundBank } from "./sound";
@@ -28,7 +28,7 @@ export interface EchoHud {
 }
 
 export interface EchoNet {
-  sendState: (s: { x: number; y: number; z: number; yaw: number; pitch: number; torch: boolean; crouch: boolean; seq: number }) => void;
+  sendState: (s: { x: number; y: number; z: number; yaw: number; pitch: number; torch: boolean; crouch: boolean; talk: boolean; seq: number }) => void;
   sendSignal: (to: number, data: unknown) => void;
   sendClip: (p: { id: number; ms: number; tags: ClipTag[] }) => void;
   sendTag: (p: { id: number; tags: ClipTag[] }) => void;
@@ -116,6 +116,7 @@ export class EchoEngine {
   private stamina = 1;
   private tired = false;
   private torchOn = true;
+  private talkUntil = 0;
   private crouch = false;
   private grounded = true;
   private realSpeed = 0;
@@ -264,8 +265,10 @@ export class EchoEngine {
     this.names = Object.fromEntries(m.players.map((p) => [p.n, p.name.toLowerCase()]));
     const others = m.players.filter((p) => p.n !== this.opts.me);
     for (const p of others) {
-      if (this.avatars.has(p.n)) continue;
-      const a = new Avatar(p.name, p.color, true);
+      const look = p.look ?? TEEN_LOOKS[ECHO_TEENS[(p.n - 1) % 4].id];
+      const had = this.avatars.get(p.n);
+      if (had) { had.setLook(look); continue; }
+      const a = new Avatar(p.name, p.color, look, !this.opts.mobile);
       this.avatars.set(p.n, a);
       this.scene.add(a.root);
       const gain = this.sounds.ctx.createGain();
@@ -484,7 +487,7 @@ export class EchoEngine {
       a.root.visible = true;
       const d = Math.hypot(s.x - px, s.z - pz);
       const seen = d < 12 && echoWallsBetween(px, pz, s.x, s.z) === 0;
-      a.update(s.x, s.y, s.z, s.yaw, s.pitch, s.torch, s.crouch, dt, seen, d);
+      a.update(s.x, s.y, s.z, s.yaw, s.pitch, s.torch, s.crouch, s.talk, dt, seen, d);
       others.set(num, { x: s.x, y: s.y, z: s.z });
       // their footsteps, from their feet, quieter through walls
       const st = this.remoteSteps.get(num);
@@ -532,7 +535,10 @@ export class EchoEngine {
     // ── tell the server where I am, 20 times a second ──
     if (now - this.sentAt >= ECHO.SEND_MS) {
       this.sentAt = now;
-      this.opts.net.sendState({ x: px, y: feet, z: pz, yaw: this.yaw, pitch: this.pitch, torch: this.torchOn, crouch: crouching, seq: ++this.seq });
+      // talking: my mic is loud enough, held a moment so the light doesn't flicker between words
+      const lvl = this.voice.hasMic && !this.voice.muted && !this.isTaken ? this.voice.micLevel() ?? 0 : 0;
+      if (lvl > 0.15) this.talkUntil = now + 350;
+      this.opts.net.sendState({ x: px, y: feet, z: pz, yaw: this.yaw, pitch: this.pitch, torch: this.torchOn, crouch: crouching, talk: now < this.talkUntil, seq: ++this.seq });
     }
 
     this.adaptQuality();

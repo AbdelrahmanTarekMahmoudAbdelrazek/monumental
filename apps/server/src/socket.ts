@@ -504,7 +504,18 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       const me = socket.data.identity?.playerKey;
       if (!r || !me || ehBudget-- <= 0 || !raw) return;
       const n = (v: unknown, lo: number, hi: number) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : 0; };
-      r.state(me, { x: n(raw.x, 0, 1000), y: n(raw.y, -5, 5), z: n(raw.z, 0, 1000), yaw: n(raw.yaw, -1e3, 1e3), pitch: n(raw.pitch, -2, 2), torch: !!raw.torch, crouch: !!raw.crouch, seq: n(raw.seq, 0, 1e9) });
+      r.state(me, { x: n(raw.x, 0, 1000), y: n(raw.y, -5, 5), z: n(raw.z, 0, 1000), yaw: n(raw.yaw, -1e3, 1e3), pitch: n(raw.pitch, -2, 2), torch: !!raw.torch, crouch: !!raw.crouch, talk: !!raw.talk, seq: n(raw.seq, 0, 1e9) });
+    });
+    let lookAt = 0;
+    socket.on("eh_look", (raw, ack) => {
+      const r = ehRoom();
+      const me = socket.data.identity?.playerKey;
+      if (typeof ack !== "function") return;
+      if (!r || !me) return ack({ ok: false, error: "Not in a room" });
+      if (Date.now() - lookAt < 150) return ack({ ok: false, error: "Slow down a little" });
+      lookAt = Date.now();
+      if (JSON.stringify(raw ?? null).length > 2000) return ack({ ok: false, error: "Invalid look" });
+      ack(r.setLook(me, (raw as { look?: unknown } | null)?.look));
     });
     socket.on("eh_signal", (raw) => {
       const r = ehRoom();

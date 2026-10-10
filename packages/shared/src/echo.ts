@@ -90,12 +90,82 @@ export function echoWallsBetween(ax: number, az: number, bx: number, bz: number)
 
 export const ECHO_COLORS = ["#E9C46A", "#7FB89A", "#8AB8FF", "#E0675C"] as const;
 
+// ───────── The crew: four teens, each with a starting kit; outfits are free ─────────
+
+export type EchoTeenId = "maya" | "theo" | "sam" | "nora";
+export const ECHO_TEENS: readonly { id: EchoTeenId; name: string; role: string; perk: string; item: EchoItem }[] = [
+  { id: "maya", name: "Maya", role: "The Navigator", perk: "Her phone traces the route you walked", item: "phone" },
+  { id: "theo", name: "Theo", role: "The Radio", perk: "His walkie reaches friends through walls", item: "walkie" },
+  { id: "sam", name: "Sam", role: "The Breaker", perk: "Opens fences, padlocks and grates (loud)", item: "cutters" },
+  { id: "nora", name: "Nora", role: "The Scout", perk: "Headlamp keeps both hands free", item: "torch" },
+];
+export const LOOK_OPTS = {
+  hair: ["short", "curly", "curlylong", "pony", "bob", "buzz"],
+  hat: ["none", "beanie", "cap", "capback", "hood", "headlamp", "bucket"],
+  coat: ["hoodie", "rain", "puffer", "denim", "varsity", "flannel"],
+  pants: ["jeans", "cargo", "joggers"],
+  shoes: ["sneakers", "boots"],
+  pack: ["none", "school", "hiking", "sling"],
+  item: ["torch", "walkie", "phone", "cutters", "crowbar", "map"],
+  build: ["slim", "mid", "broad"],
+} as const;
+/** How many swatches each colour slot has (the colours themselves live in the client). */
+export const LOOK_COLORS = { skin: 6, hairC: 6, coatC: 8, coatC2: 8, pantsC: 4 } as const;
+export type EchoItem = (typeof LOOK_OPTS.item)[number];
+export interface EchoLook {
+  teen: EchoTeenId;
+  skin: number;
+  build: (typeof LOOK_OPTS.build)[number];
+  hair: (typeof LOOK_OPTS.hair)[number];
+  hairC: number;
+  hat: (typeof LOOK_OPTS.hat)[number];
+  coat: (typeof LOOK_OPTS.coat)[number];
+  coatC: number;
+  coatC2: number;
+  pants: (typeof LOOK_OPTS.pants)[number];
+  pantsC: number;
+  shoes: (typeof LOOK_OPTS.shoes)[number];
+  pack: (typeof LOOK_OPTS.pack)[number];
+  /** Set by the teen (their kit), not chosen. */
+  item: EchoItem;
+  scarf: boolean;
+  glasses: boolean;
+  gloves: boolean;
+}
+export const TEEN_LOOKS: Record<EchoTeenId, EchoLook> = {
+  maya: { teen: "maya", skin: 3, build: "slim", hair: "curlylong", hairC: 0, hat: "none", coat: "rain", coatC: 0, coatC2: 7, pants: "jeans", pantsC: 0, shoes: "sneakers", pack: "school", item: "phone", scarf: true, glasses: false, gloves: false },
+  theo: { teen: "theo", skin: 1, build: "mid", hair: "curly", hairC: 2, hat: "none", coat: "varsity", coatC: 1, coatC2: 7, pants: "cargo", pantsC: 2, shoes: "sneakers", pack: "hiking", item: "walkie", scarf: false, glasses: false, gloves: false },
+  sam: { teen: "sam", skin: 2, build: "broad", hair: "buzz", hairC: 0, hat: "hood", coat: "hoodie", coatC: 4, coatC2: 4, pants: "joggers", pantsC: 1, shoes: "boots", pack: "none", item: "cutters", scarf: false, glasses: false, gloves: true },
+  nora: { teen: "nora", skin: 0, build: "slim", hair: "pony", hairC: 3, hat: "headlamp", coat: "puffer", coatC: 2, coatC2: 7, pants: "cargo", pantsC: 3, shoes: "boots", pack: "sling", item: "torch", scarf: false, glasses: true, gloves: false },
+};
+export const isTeen = (v: unknown): v is EchoTeenId => ECHO_TEENS.some((t) => t.id === v);
+
+/** Validate a look from the network or storage. Unknown fields fall back to the teen's default; the item always comes from the teen. */
+export function cleanLook(raw: unknown): EchoLook | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!isTeen(r.teen)) return null;
+  const base = TEEN_LOOKS[r.teen];
+  const out: EchoLook = { ...base };
+  const pick = <K extends keyof typeof LOOK_OPTS>(k: K) => ((LOOK_OPTS[k] as readonly string[]).includes(r[k] as string) ? r[k] : base[k as keyof EchoLook]) as never;
+  out.hair = pick("hair"); out.hat = pick("hat"); out.coat = pick("coat"); out.pants = pick("pants"); out.shoes = pick("shoes"); out.pack = pick("pack"); out.build = pick("build");
+  for (const k of Object.keys(LOOK_COLORS) as (keyof typeof LOOK_COLORS)[]) {
+    const v = r[k];
+    if (typeof v === "number" && Number.isInteger(v) && v >= 0 && v < LOOK_COLORS[k]) out[k] = v;
+  }
+  for (const k of ["scarf", "glasses", "gloves"] as const) if (typeof r[k] === "boolean") out[k] = r[k] as boolean;
+  out.item = ECHO_TEENS.find((t) => t.id === out.teen)!.item;
+  return out;
+}
+
 export interface EchoPlayer {
   id: string;
   /** Small number used on the wire. */
   n: number;
   name: string;
   color: string;
+  /** Which teen they play and what they wear. */
+  look?: EchoLook;
 }
 
 export interface EchoMeta {
@@ -116,10 +186,12 @@ export interface EchoState {
   pitch: number;
   torch: boolean;
   crouch: boolean;
+  /** Speaking right now (blinks their radio light). */
+  talk?: boolean;
   seq: number;
 }
 
-/** Snapshot on the wire: rows [n, x×100, y×100, z×100, yaw×1000, pitch×1000, flags (1 torch, 2 crouch)]. */
+/** Snapshot on the wire: rows [n, x×100, y×100, z×100, yaw×1000, pitch×1000, flags (1 torch, 2 crouch, 4 taken, 8 talking)]. */
 export interface EchoSnap {
   t: number;
   p: number[][];
@@ -135,10 +207,13 @@ export interface EchoPeerState {
   pitch: number;
   torch: boolean;
   crouch: boolean;
+  talk: boolean;
 }
 
+export const ECHO_TALK = 8;
+
 export function decodeEchoSnap(s: EchoSnap): EchoPeerState[] {
-  return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2 }));
+  return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2, talk: (r[6] & 8) === 8 }));
 }
 
 // ───────── Phase 2: the mimic ─────────

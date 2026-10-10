@@ -165,6 +165,8 @@ export interface ClientToServerEvents {
     ack: (a: { ok: boolean; error?: string; playerId?: string; n?: number; meta?: import("./echo").EchoMeta; spawn?: { x: number; z: number } }) => void,
   ) => void;
   eh_leave: () => void;
+  /** Pick a teen / change outfit. Fails if another player already plays that teen. */
+  eh_look: (p: { look: import("./echo").EchoLook }, ack: (a: { ok: boolean; error?: string }) => void) => void;
   eh_state: (p: import("./echo").EchoState) => void;
   /** WebRTC voice set-up for one other player (`to` = their wire number). */
   eh_signal: (p: { to: number; data: unknown }) => void;

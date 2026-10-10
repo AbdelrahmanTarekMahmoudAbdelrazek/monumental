@@ -1,7 +1,7 @@
 import {
-  ECHO, ECHO_COLORS, ECHO_TAKEN, ECHO_H, ECHO_W, MIMIC, MIMIC_STATES,
+  ECHO, ECHO_COLORS, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, TEEN_LOOKS, cleanLook,
   echoFree, echoPath, echoSpawns, echoTileOf, echoWallsBetween, mimicOpen,
-  type ClipInfo, type ClipTag, type EchoEvent, type EchoMeta, type EchoSnap2, type EchoState, type MimicState,
+  type ClipInfo, type ClipTag, type EchoEvent, type EchoLook, type EchoMeta, type EchoSnap2, type EchoState, type MimicState,
 } from "@monumental/shared";
 
 interface Member {
@@ -16,6 +16,8 @@ interface Member {
   pitch: number;
   torch: boolean;
   crouch: boolean;
+  talk: boolean;
+  look: EchoLook;
   at: number;
   taken: boolean;
   takenUntil: number;
@@ -93,7 +95,9 @@ export class EchoRoom {
       const s = spawns[this.members.length % spawns.length];
       const used = new Set(this.members.map((x) => x.color));
       const color = ECHO_COLORS.find((c) => !used.has(c)) ?? ECHO_COLORS[0];
-      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0 };
+      // first teen nobody plays yet; the client sends its saved choice right after joining
+      const teen = ECHO_TEENS.find((t) => !this.members.some((x) => x.look.teen === t.id))?.id ?? "maya";
+      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, look: { ...TEEN_LOOKS[teen] }, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0 };
       this.members.push(m);
     } else {
       m.name = name.slice(0, 20) || m.name;
@@ -118,6 +122,19 @@ export class EchoRoom {
     if (!this.members.length) { this.stopLoop(); this.scheduleIdle(); }
   }
 
+  /** Pick a teen and outfit. Two players can't play the same teen. */
+  setLook(id: string, raw: unknown): { ok: true } | { ok: false; error: string } {
+    const m = this.members.find((x) => x.id === id);
+    if (!m) return { ok: false, error: "Not in this room" };
+    const look = cleanLook(raw);
+    if (!look) return { ok: false, error: "Invalid look" };
+    const other = this.members.find((x) => x !== m && x.look.teen === look.teen);
+    if (other) return { ok: false, error: `${other.name} is already playing ${ECHO_TEENS.find((t) => t.id === look.teen)!.name}` };
+    m.look = look;
+    this.pushMeta();
+    return { ok: true };
+  }
+
   numberOf(id: string) { return this.members.find((x) => x.id === id)?.n; }
   idOf(n: number) { return this.members.find((x) => x.n === n)?.id; }
 
@@ -132,6 +149,7 @@ export class EchoRoom {
     m.pitch = Math.max(-1.6, Math.min(1.6, s.pitch));
     m.torch = s.torch;
     m.crouch = s.crouch;
+    m.talk = !!s.talk;
     if (dist > ECHO.SPRINT * dt * 1.5 + 1 || !echoFree(s.x, s.z)) return false;
     m.x = s.x;
     m.y = Math.max(-0.5, Math.min(1, s.y));
@@ -490,7 +508,7 @@ export class EchoRoom {
   meta(): EchoMeta {
     return {
       code: this.code, hostId: this.hostId, serverNow: this.now(),
-      players: this.members.map((m) => ({ id: m.id, n: m.n, name: m.name, color: m.color })),
+      players: this.members.map((m) => ({ id: m.id, n: m.n, name: m.name, color: m.color, look: m.look })),
       night: { awake: this.awake, wakeAt: this.wakeAt, exposed: this.exposed, taken: this.takenCount },
     };
   }
@@ -499,7 +517,7 @@ export class EchoRoom {
     const t = this.now();
     return {
       t,
-      p: this.members.map((m) => [m.n, Math.round(m.x * 100), Math.round(m.y * 100), Math.round(m.z * 100), Math.round(m.yaw * 1000), Math.round(m.pitch * 1000), (m.torch ? 1 : 0) | (m.crouch ? 2 : 0) | (m.taken ? ECHO_TAKEN : 0)]),
+      p: this.members.map((m) => [m.n, Math.round(m.x * 100), Math.round(m.y * 100), Math.round(m.z * 100), Math.round(m.yaw * 1000), Math.round(m.pitch * 1000), (m.torch ? 1 : 0) | (m.crouch ? 2 : 0) | (m.taken ? ECHO_TAKEN : 0) | (m.talk && !m.taken ? ECHO_TALK : 0)]),
       m: this.mimics.map((mm) => [mm.id, Math.round(mm.x * 100), Math.round(mm.z * 100), Math.round(mm.yaw * 1000), MIMIC_STATES.indexOf(mm.state), t < mm.speakingUntil ? 1 : 0]),
     };
   }

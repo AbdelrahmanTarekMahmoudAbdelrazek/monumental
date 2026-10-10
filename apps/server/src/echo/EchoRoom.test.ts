@@ -276,3 +276,38 @@ describe("ECHO HALLS mimic — never harmless", () => {
     r.destroy();
   });
 });
+
+describe("ECHO HALLS crew", () => {
+  it("gives each new player a different teen, and refuses a teen someone already plays", () => {
+    const { r, metas } = room();
+    r.join("a", "Ann"); r.join("b", "Bo");
+    const teens = metas.at(-1)!.players.map((p) => p.look?.teen);
+    expect(new Set(teens).size).toBe(2);
+    const bTeen = teens[1]!;
+    const res = r.setLook("a", { teen: bTeen });
+    expect(res.ok).toBe(false);
+    expect(r.setLook("a", { teen: "nora", coat: "denim", hat: "beanie", coatC: 5 })).toEqual({ ok: true });
+    const a = metas.at(-1)!.players.find((p) => p.id === "a")!.look!;
+    expect(a).toMatchObject({ teen: "nora", coat: "denim", hat: "beanie", coatC: 5, item: "torch" });
+  });
+  it("cleans bad looks: unknown teen refused, bad fields fall back, the item comes from the teen", () => {
+    const { r, metas } = room();
+    r.join("a", "Ann");
+    expect(r.setLook("a", { teen: "zed" }).ok).toBe(false);
+    expect(r.setLook("a", { teen: "sam", coat: "spacesuit", coatC: 99, item: "torch", gloves: "yes" }).ok).toBe(true);
+    const look = metas.at(-1)!.players[0].look!;
+    expect(look.coat).toBe("hoodie");
+    expect(look.coatC).toBe(4);
+    expect(look.item).toBe("cutters");
+    expect(look.gloves).toBe(true);
+  });
+  it("shares who is talking in the snapshot", () => {
+    const { r, snaps, advance } = room();
+    r.join("a", "Ann");
+    const sp = echoSpawns()[0];
+    advance(100);
+    r.state("a", { ...st({ x: sp.x, z: sp.z }), talk: true });
+    r.step();
+    expect(decodeEchoSnap(snaps.at(-1)!)[0].talk).toBe(true);
+  });
+});

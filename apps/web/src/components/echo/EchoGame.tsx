@@ -4,6 +4,8 @@ import type { EchoEvent, EchoMeta } from "@monumental/shared";
 import { getSocket, measurePing } from "@/lib/socket";
 import { getGuestId, getNickname } from "@/lib/identity";
 import type { EchoEngine, EchoHud } from "./engine";
+import TeenPicker from "./TeenPicker";
+import { ECHO_TEENS, type EchoLook } from "@monumental/shared";
 
 const FONT = "font-['IBM_Plex_Sans_Arabic',system-ui,sans-serif]";
 const TITLE = "font-['Special_Elite',ui-monospace,monospace]";
@@ -32,6 +34,9 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   const [clockOff, setClockOff] = useState(0);
   const [, setTick] = useState(0);
   const metaRef = useRef<EchoMeta | null>(null);
+  const sendLook = useRef((look: EchoLook) => new Promise<string | null>((res) => {
+    getSocket().emit("eh_look", { look }, (a) => res(a.ok ? null : a.error ?? "Could not change"));
+  })).current;
   useEffect(() => { metaRef.current = meta; if (meta) setClockOff(meta.serverNow - Date.now()); }, [meta]);
   useEffect(() => {
     try { setConsent(localStorage.getItem("eh:consent") === "1"); setSmart(localStorage.getItem("eh:smart") ?? "off"); } catch { /* private mode */ }
@@ -212,6 +217,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
               <h1 className={`${TITLE} text-6xl leading-[0.95] text-[#E9E4D6] md:text-7xl`}>ECHO<br />HALLS</h1>
               <p className="mt-4 text-lg text-[#9FA89F]">Marrowfield, fifteen years later. Go down together, stay close, and talk. Something down there is listening.</p>
               {onStory && <button className="mt-2 text-sm text-[#6EE6C8] underline underline-offset-4" onClick={onStory} data-testid="eh-story">▶ Watch the story again</button>}
+              <div className="mt-5"><TeenPicker meta={meta} me={me} send={sendLook} /></div>
               <ul className="mt-6 space-y-2 text-[15px] text-[#A6AFA6]">
                 <li>Voices are 3D: you hear friends from where they stand.</li>
                 <li>Far away they fade out; through a wall they sound muffled.</li>
@@ -231,7 +237,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
                 {(meta?.players ?? []).map((p) => (
                   <div key={p.n} className="rounded-xl border border-[#222924] bg-[#101412] px-4 py-3">
                     <div className="font-semibold" style={{ color: p.color }}>{p.name}{p.n === me ? " (you)" : ""}</div>
-                    <div className="text-xs text-[#7E887E]">{p.id === meta?.hostId ? "Host" : "In the room"}</div>
+                    <div className="text-xs text-[#7E887E]">{p.look ? `as ${ECHO_TEENS.find((t) => t.id === p.look!.teen)?.name}` : ""}{p.look ? " · " : ""}{p.id === meta?.hostId ? "Host" : "In the room"}</div>
                   </div>
                 ))}
                 {Array.from({ length: Math.max(0, 4 - (meta?.players.length ?? 0)) }).map((_, i) => (
