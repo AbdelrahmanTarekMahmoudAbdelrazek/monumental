@@ -308,14 +308,14 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
           </div>
           {!hud.torch && <div className="pointer-events-none absolute left-1/2 top-[58%] -translate-x-1/2 text-sm text-[#7E887E]">Torch off · {mobile ? "tap Torch" : "press F"}</div>}
           {(hud.onAir.length > 0 || hud.fakeAir !== null) && (
-            <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#5A2621] bg-[#160E0D]/85 px-4 py-1.5 text-sm text-[#F1C9C4]" data-testid="eh-radio">
-              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#E0675C]" />
-              CH 4 · {[...new Set([...hud.onAir, ...(hud.fakeAir !== null ? [hud.fakeAir] : [])])].map((n, i) => {
+            <div className="pointer-events-none absolute left-1/2 top-[7.5rem] flex max-w-[92vw] -translate-x-1/2 items-center gap-2 rounded-full border border-[#5A2621] bg-[#160E0D]/85 px-4 py-1.5 text-sm text-[#F1C9C4] md:top-3" data-testid="eh-radio">
+              <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-[#E0675C]" />
+              <span className="truncate whitespace-nowrap">CH 4 · {[...new Set([...hud.onAir, ...(hud.fakeAir !== null ? [hud.fakeAir] : [])])].map((n, i) => {
                 const who = n === 0 || n === me ? "you" : nameOf(n)?.name ?? "someone";
                 // Theo's walkie knows his friends' radios: a voice with no radio behind it is flagged
                 const fake = hud.teen === "theo" && n === hud.fakeAir && !hud.onAir.includes(n);
                 return <span key={n}>{i > 0 && ", "}{fake ? <span data-testid="eh-radio-fake"><s className="opacity-70">{who}</s> <b className="text-[#FF8A7A]">· no radio signal</b></span> : who}</span>;
-              })}
+              })}</span>
             </div>
           )}
           {(hud.finder || hud.teen === "sam") && (
