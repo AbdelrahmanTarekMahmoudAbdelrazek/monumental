@@ -1,7 +1,7 @@
 import {
-  ECHO, ECHO_COLORS, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, TEEN_LOOKS, cleanLook,
+  ECHO, ECHO_COLORS, GOAL, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, TEEN_LOOKS, cleanLook,
   echoFree, echoPassable, echoPath, echoSpawns, echoTileOf, echoWallsBetween, mimicOpen,
-  type ClipInfo, type ClipTag, type EchoEvent, type EchoLook, type EchoMeta, type EchoSnap2, type EchoState, type MimicState,
+  type ClipInfo, type ClipTag, type EchoAct, type EchoEvent, type EchoGoal, type EchoLook, type EchoMeta, type EchoSnap2, type EchoState, type MimicState,
 } from "@monumental/shared";
 
 interface Member {
@@ -18,6 +18,10 @@ interface Member {
   crouch: boolean;
   talk: boolean;
   look: EchoLook;
+  /** Clicked "Enter" (past the lobby). */
+  entered: boolean;
+  /** The fuse I'm carrying. */
+  carry: number | null;
   at: number;
   taken: boolean;
   takenUntil: number;
@@ -79,10 +83,14 @@ export class EchoRoom {
   private debugAt = 0;
   exposed = 0;
   takenCount = 0;
+  goal!: EchoGoal;
   /** Seconds before mimics wake (tests and local play-testing can shorten it). */
   wakeSec: number = MIMIC.WAKE_SEC;
+  /** Match length in seconds (tests and local play-testing can shorten it). */
+  matchSec: number = GOAL.MATCH_SEC;
 
   constructor(public readonly code: string, private hostId: string, private ev: EchoEvents, private now: () => number = Date.now, private rnd: () => number = Math.random) {
+    this.goal = this.newGoal();
     this.scheduleIdle();
   }
 
@@ -97,7 +105,7 @@ export class EchoRoom {
       const color = ECHO_COLORS.find((c) => !used.has(c)) ?? ECHO_COLORS[0];
       // first teen nobody plays yet; the client sends its saved choice right after joining
       const teen = ECHO_TEENS.find((t) => !this.members.some((x) => x.look.teen === t.id))?.id ?? "maya";
-      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, look: { ...TEEN_LOOKS[teen] }, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0 };
+      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, look: { ...TEEN_LOOKS[teen] }, entered: false, carry: null, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0 };
       this.members.push(m);
     } else {
       m.name = name.slice(0, 20) || m.name;
@@ -114,6 +122,7 @@ export class EchoRoom {
     const i = this.members.findIndex((x) => x.id === id);
     if (i < 0) return;
     const gone = this.members[i];
+    this.dropFuse(gone);
     this.members.splice(i, 1);
     for (const [k, c] of this.clips) if (c.owner === gone.n) this.clips.delete(k); // their voice leaves with them
     for (const mm of this.mimics) if (mm.target === gone.n) this.calm(mm);
@@ -133,6 +142,107 @@ export class EchoRoom {
     m.look = look;
     this.pushMeta();
     return { ok: true };
+  }
+
+  // ───────── the goal: three fuses, the fuse box, the lift ─────────
+  private newGoal(): EchoGoal {
+    const spots = [...GOAL.SPOTS];
+    const fuses = Array.from({ length: GOAL.FUSES }, (_, id) => { const [x, y, z] = spots.splice(Math.floor(this.rnd() * spots.length), 1)[0]; return { id, x, y, z, by: null, placed: false }; });
+    return { fuses, placed: 0, power: false, startedAt: 0, endsAt: 0, inLift: [], need: 0, result: null, endedAt: 0 };
+  }
+  /** 1 → 1.24 as fuses go in: it gets bolder the closer you are to leaving. */
+  private fury() { return 1 + this.goal.placed * 0.08; }
+  private dropFuse(m: Member) {
+    if (m.carry === null) return;
+    const f = this.goal.fuses[m.carry];
+    m.carry = null;
+    if (!f || f.placed) return;
+    Object.assign(f, { by: null, x: m.x, y: 0.05, z: m.z });
+    this.ev.event({ type: "drop", n: m.n, fuse: f.id });
+    this.pushMeta();
+  }
+
+  /** A player acts: goes in, picks up a fuse, uses the fuse box, or asks for another round. */
+  act(id: string, a: EchoAct): { ok: true } | { ok: false; error: string } {
+    const m = this.members.find((x) => x.id === id);
+    if (!m) return { ok: false, error: "Not in this room" };
+    const t = this.now(), g = this.goal;
+    if (a.type === "restart") {
+      if (!g.result) return { ok: false, error: "The match is still on" };
+      this.restart(t);
+      return { ok: true };
+    }
+    if (a.type === "enter") {
+      m.entered = true;
+      if (!g.startedAt && !g.result) { g.startedAt = t; g.endsAt = t + this.matchSec * 1000; }
+      this.pushMeta();
+      return { ok: true };
+    }
+    if (g.result) return { ok: false, error: "The match is over" };
+    if (m.taken) return { ok: false, error: "You were taken" };
+    if (a.type === "pickup") {
+      const f = g.fuses[a.fuse];
+      if (!f || f.placed || f.by !== null) return { ok: false, error: "Not there any more" };
+      if (m.carry !== null) return { ok: false, error: "You can only carry one" };
+      if (Math.hypot(f.x - m.x, f.z - m.z) > GOAL.REACH + 0.3) return { ok: false, error: "Too far" };
+      f.by = m.n; m.carry = f.id;
+      this.ev.event({ type: "pickup", n: m.n, fuse: f.id });
+      this.pushMeta();
+      return { ok: true };
+    }
+    if (a.type === "install") {
+      if (m.carry === null) return { ok: false, error: "You have no fuse" };
+      if (Math.hypot(GOAL.BOX.x - m.x, GOAL.BOX.z - m.z) > GOAL.REACH + 0.3) return { ok: false, error: "Too far from the fuse box" };
+      const f = g.fuses[m.carry];
+      m.carry = null;
+      Object.assign(f, { by: null, placed: true, x: GOAL.BOX.x, y: 1.4, z: GOAL.BOX.z });
+      g.placed++;
+      this.ev.event({ type: "install", n: m.n, fuse: f.id });
+      if (g.placed >= GOAL.FUSES && !g.power) { g.power = true; this.ev.event({ type: "power" }); }
+      this.pushMeta();
+      return { ok: true };
+    }
+    return { ok: false, error: "Unknown" };
+  }
+
+  private stepGoal(t: number, dt: number) {
+    const g = this.goal;
+    if (!g.startedAt || g.result) return;
+    if (t >= g.endsAt) return this.end("lose", t);
+    // carried fuses travel with their carrier
+    for (const m of this.members) if (m.carry !== null) { const f = g.fuses[m.carry]; f.x = m.x; f.z = m.z; }
+    if (!g.power) return;
+    const living = this.members.filter((m) => m.entered && !m.taken);
+    const inLift = living.filter((m) => Math.hypot(m.x - GOAL.LIFT.x, m.z - GOAL.LIFT.z) <= GOAL.LIFT_R).map((m) => m.n);
+    const changed = inLift.join() !== g.inLift.join() || g.need !== living.length;
+    g.inLift = inLift; g.need = living.length;
+    this.liftHold = living.length > 0 && inLift.length === living.length ? this.liftHold + dt : 0;
+    if (changed) this.pushMeta();
+    if (this.liftHold >= GOAL.LIFT_HOLD) this.end("win", t);
+  }
+  private liftHold = 0;
+
+  private end(result: "win" | "lose", t: number) {
+    this.goal.result = result;
+    this.goal.endedAt = t;
+    this.mimics = [];
+    this.ev.event({ type: "end", result });
+    this.pushMeta();
+  }
+
+  /** Another round in the same room: new fuse spots, everyone back to reception, the mimics asleep again. */
+  private restart(t: number) {
+    this.goal = this.newGoal();
+    this.liftHold = 0;
+    this.mimics = []; this.awake = false; this.exposed = 0; this.takenCount = 0;
+    this.wakeAt = this.members.length >= 2 ? t + this.wakeSec * 1000 : 0;
+    for (const mm of this.clips.values()) mm.used = false;
+    const sp = echoSpawns();
+    const spawns: [number, number, number][] = [];
+    this.members.forEach((m, i) => { const s = sp[i % sp.length]; Object.assign(m, { x: s.x, z: s.z, y: 0, taken: false, takenUntil: 0, carry: null, at: t }); spawns.push([m.n, s.x, s.z]); });
+    if (this.members.some((m) => m.entered)) { this.goal.startedAt = t; this.goal.endsAt = t + this.matchSec * 1000; }
+    this.ev.event({ type: "restart", spawns });
+    this.pushMeta();
   }
 
   numberOf(id: string) { return this.members.find((x) => x.id === id)?.n; }
@@ -205,7 +315,8 @@ export class EchoRoom {
       }
     }
     this.wake(t);
-    for (const mm of this.mimics) this.think(mm, dt, t);
+    if (!this.goal.result) for (const mm of this.mimics) this.think(mm, dt, t);
+    this.stepGoal(t, dt);
     if (process.env.ECHO_DEBUG && t - this.debugAt > 3000) {
       this.debugAt = t;
       // eslint-disable-next-line no-console
@@ -327,12 +438,12 @@ export class EchoRoom {
         if (t < mm.windUp) { mm.yaw = Math.atan2(-(target.x - mm.x), -(target.z - mm.z)); break; }
         const sees = echoWallsBetween(mm.x, mm.z, target.x, target.z) === 0;
         if (sees && d < 5) {
-          this.stepTo(mm, target.x, target.z, MIMIC.CHASE, dt);
+          this.stepTo(mm, target.x, target.z, MIMIC.CHASE * this.fury(), dt);
         } else {
           const goal: [number, number] = [echoTileOf(target.x), echoTileOf(target.z)];
           const last = mm.path[mm.path.length - 1];
           if (!last || last[0] !== goal[0] || last[1] !== goal[1]) mm.path = echoPath(this.tileOf(mm), goal);
-          this.walk(mm, MIMIC.CHASE, dt);
+          this.walk(mm, MIMIC.CHASE * this.fury(), dt);
         }
         break;
       }
@@ -364,13 +475,14 @@ export class EchoRoom {
     mm.target = null;
     mm.path = [];
     mm.pendingSay = null;
-    mm.nextLure = Math.max(mm.nextLure, t + (MIMIC.LURE_GAP_MIN + this.rnd() * (MIMIC.LURE_GAP_MAX - MIMIC.LURE_GAP_MIN)) * 1000);
+    mm.nextLure = Math.max(mm.nextLure, t + ((MIMIC.LURE_GAP_MIN + this.rnd() * (MIMIC.LURE_GAP_MAX - MIMIC.LURE_GAP_MIN)) * 1000) / this.fury() ** 2);
   }
 
   private take(mm: Mimic, target: Member, t: number) {
     target.taken = true;
     target.takenUntil = t + MIMIC.TAKEN_SEC * 1000;
     this.takenCount++;
+    this.dropFuse(target);
     this.ev.event({ type: "taken", n: target.n, mimic: mm.id, lure: mm.lastLure });
     this.calm(mm);
     mm.nextLure = t + 25_000;
@@ -510,6 +622,7 @@ export class EchoRoom {
       code: this.code, hostId: this.hostId, serverNow: this.now(),
       players: this.members.map((m) => ({ id: m.id, n: m.n, name: m.name, color: m.color, look: m.look })),
       night: { awake: this.awake, wakeAt: this.wakeAt, exposed: this.exposed, taken: this.takenCount },
+      goal: this.goal,
     };
   }
 

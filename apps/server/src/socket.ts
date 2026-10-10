@@ -517,6 +517,21 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       if (JSON.stringify(raw ?? null).length > 2000) return ack({ ok: false, error: "Invalid look" });
       ack(r.setLook(me, (raw as { look?: unknown } | null)?.look));
     });
+    let actAt = 0;
+    socket.on("eh_act", (raw, ack) => {
+      const r = ehRoom();
+      const me = socket.data.identity?.playerKey;
+      if (typeof ack !== "function") return;
+      if (!r || !me) return ack({ ok: false, error: "Not in a room" });
+      if (Date.now() - actAt < 120) return ack({ ok: false, error: "Slow down a little" });
+      actAt = Date.now();
+      const p = raw as { type?: unknown; fuse?: unknown } | null;
+      const type = p?.type;
+      if (process.env.ECHO_DEBUG) console.log("[eh_act]", me, JSON.stringify(p));
+      if (type === "enter" || type === "install" || type === "restart") return ack(r.act(me, { type }));
+      if (type === "pickup" && Number.isInteger(p?.fuse)) return ack(r.act(me, { type, fuse: p!.fuse as number }));
+      ack({ ok: false, error: "Invalid action" });
+    });
     socket.on("eh_signal", (raw) => {
       const r = ehRoom();
       const from = socket.data.ehN;

@@ -19,6 +19,8 @@ export class EchoManager {
     });
     const wake = Number(process.env.ECHO_WAKE_SEC);
     if (Number.isFinite(wake) && wake > 0) r.wakeSec = wake;
+    const match = Number(process.env.ECHO_MATCH_SEC);
+    if (Number.isFinite(match) && match > 0) r.matchSec = match;
     this.rooms.set(code, r);
     return r;
   }

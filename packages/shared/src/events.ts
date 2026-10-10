@@ -167,6 +167,8 @@ export interface ClientToServerEvents {
   eh_leave: () => void;
   /** Pick a teen / change outfit. Fails if another player already plays that teen. */
   eh_look: (p: { look: import("./echo").EchoLook }, ack: (a: { ok: boolean; error?: string }) => void) => void;
+  /** Go in / pick up a fuse / use the fuse box / play again. */
+  eh_act: (p: import("./echo").EchoAct, ack: (a: { ok: boolean; error?: string }) => void) => void;
   eh_state: (p: import("./echo").EchoState) => void;
   /** WebRTC voice set-up for one other player (`to` = their wire number). */
   eh_signal: (p: { to: number; data: unknown }) => void;

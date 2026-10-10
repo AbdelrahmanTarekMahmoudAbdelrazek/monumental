@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
-import { ECHO, ECHO_ROOMS, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
+import { ECHO, ECHO_ROOMS, GOAL, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
 import { buildLevel, flickerLights, type HospitalLights } from "./hospital";
 import { HospitalAudio } from "./hospitalAudio";
@@ -28,6 +28,9 @@ export interface EchoHud {
   pieces: number;
   /** The room I'm in. */
   room: string;
+  /** What E / Use would do right now. */
+  act: string | null;
+  carrying: boolean;
 }
 
 export interface EchoNet {
@@ -91,6 +94,12 @@ export class EchoEngine {
   private torchRig = new THREE.Group();
   private lights: HospitalLights = { sources: [], pool: [] };
   private hospital: HospitalAudio | null = null;
+  private goalView: ReturnType<typeof buildLevel>["goal"] | null = null;
+  private goal: EchoGoal | null = null;
+  private fuses = new Map<number, { g: THREE.Group; glow: THREE.MeshStandardMaterial }>();
+  private doorOpen = 0;
+  /** What E / Use would do right now. */
+  private act: { type: "pickup"; fuse: number } | { type: "install" } | null = null;
   private avatars = new Map<number, Avatar>();
   private remoteSteps = new Map<number, { panner: PannerNode; gain: GainNode; phase: number; lx: number; lz: number }>();
   private hist = new Map<number, EchoPeerState[]>();
@@ -174,6 +183,7 @@ export class EchoEngine {
     const tex = makeTextures(mobile ? 512 : 1024, Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
     const level = buildLevel(tex, !mobile, mobile ? 256 : 512);
     this.scene.add(level.group);
+    this.goalView = level.goal;
     this.lights = level.lights;
     this.scene.add(new THREE.HemisphereLight(0x3a4550, 0x0b0907, 0.03));
 
@@ -267,6 +277,7 @@ export class EchoEngine {
 
   setMeta(m: EchoMeta) {
     this.meta = m;
+    this.goal = m.goal ?? null;
     this.names = Object.fromEntries(m.players.map((p) => [p.n, p.name.toLowerCase()]));
     const others = m.players.filter((p) => p.n !== this.opts.me);
     for (const p of others) {
@@ -326,6 +337,13 @@ export class EchoEngine {
   onEvent(e: EchoEvent) {
     this.events.push(e);
     if (this.events.length > 50) this.events.shift();
+    if (e.type === "pickup" || e.type === "install" || e.type === "power" || e.type === "end" || e.type === "drop") this.hospital?.sfx(e.type === "end" ? e.result : e.type);
+    if (e.type === "restart") {
+      const mine = e.spawns.find((s) => s[0] === this.opts.me);
+      if (mine) this.teleport(mine[1], mine[2]);
+      this.takenUntil = 0;
+      this.doorOpen = 0;
+    }
     if (e.type === "say") {
       const v = this.mimics.get(e.mimic);
       const clips = e.clips.map((k) => this.voice.bank.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
@@ -483,6 +501,7 @@ export class EchoEngine {
 
     flickerLights(this.lights, now / 1000, px, pz);
     this.hospital?.update({ x: px, y: this.camera.position.y, z: pz, yaw: this.yaw }, this.torchOn, this.lights.sources, now / 1000, this.isTaken);
+    this.updateGoal(dt, now / 1000, px, pz);
 
     // ── friends, shown 0.12 s in the past so their movement is smooth ──
     const rt = this.tOff !== null ? now + this.tOff - INTERP_MS : 0;
@@ -580,8 +599,59 @@ export class EchoEngine {
       taken: Math.max(0, Math.ceil((this.takenUntil - now) / 1000)),
       pieces: [...this.voice.bank.keys()].filter((k) => k.startsWith(`${this.opts.me}:`)).length,
       room: ECHO_ROOMS[echoTile(echoTileOf(this.cur.x), echoTileOf(this.cur.z))]?.name ?? "",
+      act: this.act ? (this.act.type === "pickup" ? "pick up the fuse" : "put the fuse in") : null,
+      carrying: !!this.goal?.fuses.some((f) => f.by === this.opts.me),
     });
   }
+
+  /** The fuses, the fuse box lights, the lift doors; and what E / Use would do. */
+  private updateGoal(dt: number, t: number, px: number, pz: number) {
+    const g = this.goal, v = this.goalView;
+    if (!g || !v) return;
+    for (const f of g.fuses) {
+      let o = this.fuses.get(f.id);
+      if (!o) {
+        const grp = new THREE.Group();
+        const glow = new THREE.MeshStandardMaterial({ color: 0x3a2a14, emissive: 0xffa040, emissiveIntensity: 0.6, roughness: 0.3, transparent: true, opacity: 0.85 });
+        const cap = new THREE.MeshStandardMaterial({ color: 0x9aa0a2, metalness: 0.8, roughness: 0.3 });
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.16, 12), glow); body.rotation.z = Math.PI / 2; grp.add(body);
+        for (const k of [-1, 1]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.04, 12), cap); c.rotation.z = Math.PI / 2; c.position.x = k * 0.1; grp.add(c); }
+        this.scene.add(grp);
+        o = { g: grp, glow };
+        this.fuses.set(f.id, o);
+      }
+      const { g: grp, glow } = o;
+      grp.visible = !f.placed;
+      glow.emissiveIntensity = 0.35 + 0.35 * Math.max(0, Math.sin(t * 3 + f.id * 2));
+      if (f.placed) continue;
+      if (f.by === this.opts.me) {
+        if (grp.parent !== this.camera) this.camera.add(grp);
+        grp.position.set(-0.2, -0.2, -0.55); grp.rotation.set(0.3, 0.6, 0.2); grp.scale.setScalar(0.55);
+      } else {
+        if (grp.parent !== this.scene) { this.scene.add(grp); grp.scale.setScalar(1); }
+        const a = f.by !== null ? this.avatars.get(f.by) : null;
+        if (a) { const yaw = a.root.rotation.y; grp.position.set(a.root.position.x - Math.cos(yaw) * 0.3 - Math.sin(yaw) * 0.25, 0.95, a.root.position.z + Math.sin(yaw) * 0.3 - Math.cos(yaw) * 0.25); grp.rotation.set(0, yaw, 0); }
+        else { grp.position.set(f.x, f.y + 0.05 + Math.sin(t * 2 + f.id) * 0.01, f.z); grp.rotation.set(0, t * 0.4 + f.id, 0); }
+      }
+    }
+    v.fuseSlots.forEach((m, i) => m.material.color.set(i < g.placed ? (g.power ? 0x3cff8a : 0x2fd27a) : 0x3a0c08));
+    // the lift wakes up when the power is back
+    this.doorOpen = Math.min(1, Math.max(0, this.doorOpen + (g.power && !g.result ? dt / 2 : g.result === "win" ? -dt / 1.5 : 0)));
+    v.liftDoors.forEach((d, i) => { d.position.z = 9 * ECHO.TILE + 0.75 + (i ? 1 : -1) * (0.28 + 0.5 * this.doorOpen); });
+    v.cab.color.setRGB(0.04 + 0.85 * this.doorOpen, 0.035 + 0.72 * this.doorOpen, 0.03 + 0.5 * this.doorOpen);
+    v.liftLight.base = 6 * this.doorOpen;
+    v.liftArrow.color.set(g.power ? (Math.sin(t * 4) > 0 ? 0xffb040 : 0x3a1a10) : 0x3a1a10);
+    // what can I do right here?
+    this.act = null;
+    if (g.result || this.isTaken || !g.startedAt) return;
+    const mine = g.fuses.find((f) => f.by === this.opts.me);
+    if (mine) { if (Math.hypot(GOAL.BOX.x - px, GOAL.BOX.z - pz) < GOAL.REACH) this.act = { type: "install" }; return; }
+    let best: number = GOAL.REACH;
+    for (const f of g.fuses) { if (f.placed || f.by !== null) continue; const d = Math.hypot(f.x - px, f.z - pz); if (d < best) { best = d; this.act = { type: "pickup", fuse: f.id }; } }
+  }
+
+  /** E / Use: what to send to the server, if anything. */
+  useAct() { return this.act; }
 
   /** Debug / tests: where I am. */
   position() { return { x: this.cur.x, z: this.cur.z, yaw: this.yaw }; }

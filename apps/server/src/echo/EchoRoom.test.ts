@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ECHO, ECHO_MAP, ECHO_W, MIMIC, echoEdgeOpen, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap } from "@monumental/shared";
+import { ECHO, ECHO_MAP, ECHO_W, GOAL, MIMIC, echoEdgeOpen, echoFree, echoPath, echoSpawns, echoWallsBetween, decodeEchoSnap, muDecode, muEncode, tagText, mulberry32, type EchoEvent, type EchoMeta, type EchoSnap } from "@monumental/shared";
 import { EchoRoom } from "./EchoRoom";
 
 function room() {
@@ -315,5 +315,72 @@ describe("ECHO HALLS crew", () => {
     r.state("a", { ...st({ x: sp.x, z: sp.z }), talk: true });
     r.step();
     expect(decodeEchoSnap(snaps.at(-1)!)[0].talk).toBe(true);
+  });
+});
+
+describe("ECHO HALLS goal — the lift", () => {
+  function match(players = 2) {
+    const x = room();
+    const ids = ["a", "b", "c"].slice(0, players);
+    ids.forEach((id) => x.r.join(id, id.toUpperCase()));
+    ids.forEach((id) => x.r.act(id, { type: "enter" }));
+    const d = x.r.debug();
+    const run = (sec: number) => { for (let i = 0; i < sec * 20; i++) { x.advance(50); x.r.step(); } };
+    const put = (id: string, px: number, pz: number) => Object.assign(d.members.find((m) => m.id === id)!, { x: px, z: pz });
+    return { ...x, d, run, put, g: () => x.r.goal };
+  }
+  it("hides three fuses in different spots and starts the clock when someone goes in", () => {
+    const x = match();
+    const g = x.g();
+    expect(g.fuses).toHaveLength(GOAL.FUSES);
+    expect(new Set(g.fuses.map((f) => `${f.x},${f.z}`)).size).toBe(GOAL.FUSES);
+    expect(g.endsAt - g.startedAt).toBe(GOAL.MATCH_SEC * 1000);
+    x.r.destroy();
+  });
+  it("you pick a fuse up only when close, carry one at a time, and install it at the fuse box", () => {
+    const x = match();
+    const [f0, f1] = x.g().fuses;
+    expect(x.r.act("a", { type: "pickup", fuse: f0.id }).ok).toBe(false); // too far
+    x.put("a", f0.x + 1, f0.z);
+    expect(x.r.act("a", { type: "pickup", fuse: f0.id }).ok).toBe(true);
+    x.put("a", f1.x, f1.z + 0.5);
+    expect(x.r.act("a", { type: "pickup", fuse: f1.id }).ok).toBe(false); // hands full
+    expect(x.r.act("a", { type: "install" }).ok).toBe(false); // not at the box
+    x.put("a", GOAL.BOX.x - 1, GOAL.BOX.z);
+    expect(x.r.act("a", { type: "install" }).ok).toBe(true);
+    expect(x.g().placed).toBe(1);
+    expect(x.events.some((e) => e.type === "install")).toBe(true);
+    x.r.destroy();
+  });
+  it("a taken player drops the fuse where they were grabbed", () => {
+    const x = match();
+    const f = x.g().fuses[0];
+    x.put("a", f.x, f.z);
+    x.r.act("a", { type: "pickup", fuse: f.id });
+    x.put("a", 20, 20);
+    x.run(0.1);
+    const a = x.d.members[0];
+    (x.r as unknown as { take: (mm: unknown, m: unknown, t: number) => void }).take({ id: 1, x: 0, z: 0, state: "chase", nextLure: 0, path: [], pendingSay: null }, a, x.now());
+    expect(x.g().fuses[0]).toMatchObject({ by: null, x: 20, z: 20 });
+    expect(x.events.some((e) => e.type === "drop")).toBe(true);
+    x.r.destroy();
+  });
+  it("with power on, everyone alive at the lift for a few seconds wins; the clock running out loses", () => {
+    const x = match();
+    for (const f of x.g().fuses) { x.put("a", f.x, f.z); x.r.act("a", { type: "pickup", fuse: f.id }); x.put("a", GOAL.BOX.x, GOAL.BOX.z); x.r.act("a", { type: "install" }); x.advance(200); }
+    expect(x.g().power).toBe(true);
+    x.put("a", GOAL.LIFT.x, GOAL.LIFT.z); x.put("b", 30, 20);
+    x.run(GOAL.LIFT_HOLD + 1);
+    expect(x.g().result).toBe(null); // Bob isn't there yet
+    x.put("b", GOAL.LIFT.x + 0.5, GOAL.LIFT.z);
+    x.run(GOAL.LIFT_HOLD + 0.5);
+    expect(x.g().result).toBe("win");
+    // another round: new fuses, back in reception, the clock restarts
+    expect(x.r.act("b", { type: "restart" }).ok).toBe(true);
+    expect(x.g().result).toBe(null);
+    expect(x.g().placed).toBe(0);
+    x.run(GOAL.MATCH_SEC + 1);
+    expect(x.g().result).toBe("lose");
+    x.r.destroy();
   });
 });

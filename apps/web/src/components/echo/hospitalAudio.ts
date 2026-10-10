@@ -116,6 +116,22 @@ export class HospitalAudio {
     }
   }
 
+  /** Goal sounds: a fuse picked up / dropped / installed, the power coming back, the end. */
+  sfx(kind: "pickup" | "drop" | "install" | "power" | "win" | "lose") {
+    if (!this.started) return;
+    const ac = this.ctx, t0 = ac.currentTime, out = this.bus;
+    if (kind === "pickup") { this.tone("triangle", 880, out, t0, 0.12, 0.12); this.tone("triangle", 1320, out, t0 + 0.08, 0.1, 0.2); }
+    if (kind === "drop") { this.thud(out, t0, 300, 0.25); this.tone("sine", 2400, out, t0 + 0.02, 0.05, 0.3); }
+    if (kind === "install") { this.thud(out, t0, 90, 0.7); this.burst(out, t0 + 0.05, 0.3, "bandpass", 2500, 2, 0.15); this.tone("sawtooth", 60, out, t0 + 0.1, 0.06, 1.2); }
+    if (kind === "power") {
+      this.thud(out, t0, 45, 1); const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.setValueAtTime(40, t0); o.frequency.exponentialRampToValueAtTime(120, t0 + 3);
+      const f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 700; const g = ac.createGain(); this.env(g, t0, 1.5, 0.25, 2.5); o.connect(f).connect(g).connect(out); o.connect(f); g.connect(this.send); o.start(t0); o.stop(t0 + 4.2);
+      for (let i = 0; i < 2; i++) this.tone("sine", 1318.5, out, t0 + 3 + i * 0.35, 0.12, 1.4); // the lift bell
+    }
+    if (kind === "win") { [523.3, 659.3, 784, 1046.5].forEach((f, i) => this.tone("triangle", f, out, t0 + i * 0.18, 0.12, 1.6)); }
+    if (kind === "lose") { this.thud(out, t0, 40, 1); [220, 207.7, 196, 185].forEach((f, i) => this.tone("sawtooth", f, out, t0 + i * 0.5, 0.05, 1.2)); }
+  }
+
   // ── building blocks ──
   private ir(sec: number) { const ac = this.ctx, n = Math.floor(ac.sampleRate * sec), b = ac.createBuffer(2, n, ac.sampleRate); for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3.2); } return b; }
   private noise(sec: number, brown: boolean) {

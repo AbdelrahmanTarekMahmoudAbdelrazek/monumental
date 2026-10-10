@@ -218,11 +218,48 @@ export interface EchoPlayer {
   look?: EchoLook;
 }
 
+// ───────── The goal: get the lift working ─────────
+
+export const GOAL = {
+  FUSES: 3,
+  /** A match lasts this long before the lights go out for good. */
+  MATCH_SEC: 20 * 60,
+  /** How close you must be to pick up a fuse or use the fuse box (metres). */
+  REACH: 1.9,
+  /** The fuse box in the boiler room, and the lift in the stairwell. */
+  BOX: { x: 56.4, z: 31.5 },
+  LIFT: { x: 13.6, z: 27.75 },
+  LIFT_R: 2.2,
+  /** Everyone alive must stand at the lift this long once the power is on. */
+  LIFT_HOLD: 4,
+  /** Where a fuse can be hidden: [x, y, z] — on a morgue drawer, the theatre trolley, a desk, a bed... */
+  SPOTS: [
+    [43.9, 1.31, 29.7], [23.9, 1.0, 30.9], [7.5, 0.05, 33.0], [54.3, 0.81, 9.0], [38.4, 0.8, 13.6], [48.6, 0.8, 28.5],
+    [17.2, 0.94, 30.9], [48.0, 0.05, 36.0], [48.6, 0.81, 7.4], [22.5, 0.05, 6.5], [30.6, 0.05, 37.0], [3.6, 1.07, 29.5],
+  ] as [number, number, number][],
+} as const;
+export interface EchoFuse { id: number; x: number; y: number; z: number; by: number | null; placed: boolean }
+export interface EchoGoal {
+  fuses: EchoFuse[];
+  placed: number;
+  power: boolean;
+  /** 0 until the first player goes in. */
+  startedAt: number;
+  endsAt: number;
+  /** Wire numbers of living players standing at the lift. */
+  inLift: number[];
+  need: number;
+  result: null | "win" | "lose";
+  endedAt: number;
+}
+export type EchoAct = { type: "enter" } | { type: "pickup"; fuse: number } | { type: "install" } | { type: "restart" };
+
 export interface EchoMeta {
   code: string;
   hostId: string;
   players: EchoPlayer[];
   serverNow: number;
+  goal?: EchoGoal;
   /** Phase 2: are the mimics awake, and how the night is going. */
   night?: { awake: boolean; wakeAt: number; exposed: number; taken: number };
 }
@@ -326,7 +363,13 @@ export type EchoEvent =
   | { type: "exposed"; mimic: number; by: number }
   | { type: "taken"; n: number; mimic: number; lure: string | null }
   | { type: "back"; n: number; x: number; z: number }
-  | { type: "wake" };
+  | { type: "wake" }
+  | { type: "pickup"; n: number; fuse: number }
+  | { type: "drop"; n: number; fuse: number }
+  | { type: "install"; n: number; fuse: number }
+  | { type: "power" }
+  | { type: "end"; result: "win" | "lose" }
+  | { type: "restart"; spawns: [number, number, number][] };
 
 /** Player flags in snapshot rows (bit 4 = taken). */
 export const ECHO_TAKEN = 4;

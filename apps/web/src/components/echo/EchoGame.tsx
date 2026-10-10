@@ -5,7 +5,7 @@ import { getSocket, measurePing } from "@/lib/socket";
 import { getGuestId, getNickname } from "@/lib/identity";
 import type { EchoEngine, EchoHud } from "./engine";
 import TeenPicker from "./TeenPicker";
-import { ECHO_TEENS, type EchoLook } from "@monumental/shared";
+import { ECHO_TEENS, GOAL, type EchoLook } from "@monumental/shared";
 
 const FONT = "font-['IBM_Plex_Sans_Arabic',system-ui,sans-serif]";
 const TITLE = "font-['Special_Elite',ui-monospace,monospace]";
@@ -34,6 +34,12 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   const [clockOff, setClockOff] = useState(0);
   const [, setTick] = useState(0);
   const metaRef = useRef<EchoMeta | null>(null);
+  const toastRef = useRef<(text: string, bad?: boolean) => void>(() => {});
+  const doAct = useRef(() => {
+    const a = engineRef.current?.useAct();
+    if (!a) return;
+    getSocket().emit("eh_act", a, (r) => { if (!r.ok && r.error) toastRef.current(r.error, true); });
+  }).current;
   const sendLook = useRef((look: EchoLook) => new Promise<string | null>((res) => {
     getSocket().emit("eh_look", { look }, (a) => res(a.ok ? null : a.error ?? "Could not change"));
   })).current;
@@ -94,9 +100,15 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       setToasts((ts) => [...ts.slice(-3), { id, text, bad }]);
       setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 6000);
     };
+    toastRef.current = toast;
     const onEvent = (e: EchoEvent) => {
       engineRef.current?.onEvent(e);
       const nm = (n: number) => metaRef.current?.players.find((p) => p.n === n)?.name ?? "Someone";
+      const you = (n: number, verb: string, other: string) => (n === meRef.current ? `You ${verb}` : `${nm(n)} ${other}`);
+      if (e.type === "pickup") toast(`${you(e.n, "found", "found")} a fuse.${e.n === meRef.current ? " Take it to the fuse box in the boiler room." : ""}`);
+      else if (e.type === "drop") toast(`${you(e.n, "dropped", "dropped")} a fuse.`, true);
+      else if (e.type === "install") toast(`${you(e.n, "put", "put")} a fuse in. ${Math.min(GOAL.FUSES, (metaRef.current?.goal?.placed ?? 0) + 1)}/${GOAL.FUSES}`);
+      else if (e.type === "power") toast("The power is back. Everyone to the lift — all of you, together.");
       if (e.type === "wake") toast("Something in the building is awake.", true);
       else if (e.type === "exposed") toast(`${e.by === meRef.current ? "You" : nm(e.by)} caught a mimic in the light. It ran.`);
       else if (e.type === "taken") {
@@ -147,6 +159,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       if (e.repeat) return;
       if (e.code === "KeyF") eng.toggleTorch();
       if (e.code === "KeyM") eng.toggleMute();
+      if (e.code === "KeyE") doAct();
     };
     const up = (e: KeyboardEvent) => { const k = map[e.code]; if (k && engineRef.current) engineRef.current.keys[k] = false; };
     const move = (e: MouseEvent) => { if (document.pointerLockElement === canvasRef.current) engineRef.current?.look(e.movementX, e.movementY); };
@@ -184,13 +197,17 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
     setEntered(true);
     requestAnimationFrame(() => eng.resize());
     await eng.enter();
+    getSocket().emit("eh_act", { type: "enter" }, () => {});
     if (mobile) document.documentElement.requestFullscreen?.().catch(() => {});
   };
 
   const invite = typeof window !== "undefined" ? `${window.location.origin}/echo/${code}` : `/echo/${code}`;
   const copy = () => { void navigator.clipboard?.writeText(invite).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); };
   const nameOf = (n: number) => meta?.players.find((p) => p.n === n);
-  const paused = entered && !mobile && hud && !hud.locked;
+  const over = !!meta?.goal?.result;
+  const paused = entered && !mobile && hud && !hud.locked && !over;
+  // at the end of a match, give the mouse back so the buttons can be clicked
+  useEffect(() => { if (over && document.pointerLockElement) document.exitPointerLock?.(); }, [over]);
 
   return (
     <div className={`${entered && mobile ? "fixed inset-0 z-50 h-[100dvh]" : "relative h-[calc(100dvh-57px)]"} w-full overflow-hidden bg-black text-[#D9DED8] ${FONT}`}>
@@ -275,7 +292,8 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         <>
           <div className="pointer-events-none absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#E9E4D6]/70" />
           <div className="pointer-events-none absolute left-4 top-3">
-            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.night?.awake ? "Trust no voice" : "Explore the hospital together"}</div>
+            <div className={`${TITLE} text-lg text-[#E9E4D6] md:text-xl`}>{meta?.goal?.power ? "Everyone to the lift" : meta?.night?.awake ? "Trust no voice" : "Find the three fuses"}</div>
+            <div className="text-sm text-[#E0D7BE]" data-testid="eh-goal">{goalText(meta, hud.carrying, clockOff)}</div>
             <div className="text-xs text-[#9FA89F] md:text-sm" data-testid="eh-night">{nightText(meta, clockOff)}</div>
             {hud.room && <div className={`${TITLE} mt-1 text-sm text-[#C9C4B4]`} data-testid="eh-room">{hud.room}</div>}
             {hud.peers.filter((p) => p.status !== "connected").map((p) => (
@@ -287,6 +305,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
             <span className="rounded-full bg-black/50 px-2.5 py-1 text-[#7E887E]">{hud.fps} fps</span>
           </div>
           {!hud.torch && <div className="pointer-events-none absolute left-1/2 top-[58%] -translate-x-1/2 text-sm text-[#7E887E]">Torch off · {mobile ? "tap Torch" : "press F"}</div>}
+          {hud.act && !mobile && <div className="pointer-events-none absolute left-1/2 top-[64%] -translate-x-1/2 rounded-full bg-black/60 px-4 py-2 text-sm text-[#E9E4D6]" data-testid="eh-act"><b className="mr-2 rounded border border-[#E9E4D6]/60 px-1.5">E</b>{hud.act}</div>}
           {hud.stamina < 0.99 && (
             <div className="pointer-events-none absolute bottom-20 left-1/2 h-1 w-40 -translate-x-1/2 overflow-hidden rounded-full bg-white/10 md:bottom-24"><div className="h-full bg-[#E9E4D6]/70" style={{ width: `${hud.stamina * 100}%` }} /></div>
           )}
@@ -333,9 +352,36 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         </div>
       )}
 
-      {entered && mobile && hud && <TouchControls engine={engineRef} hud={hud} />}
+      {entered && mobile && hud && <TouchControls engine={engineRef} hud={hud} onUse={doAct} />}
+
+      {/* ── the end of a match ── */}
+      {entered && meta?.goal?.result && (
+        <div className="absolute inset-0 z-20 grid place-items-center bg-black/85 p-6" data-testid="eh-result">
+          <div className="w-full max-w-md text-center">
+            <div className={`${TITLE} text-5xl ${meta.goal.result === "win" ? "text-[#E9E4D6]" : "text-[#D9463B]"}`}>{meta.goal.result === "win" ? "You got out" : "The lights went out"}</div>
+            <p className="mt-3 text-[#A6AFA6]">{meta.goal.result === "win" ? "The lift doors closed on the dark. Everyone who was still with you made it." : "Twenty minutes, and the hospital kept you."}</p>
+            <div className="mt-6 grid grid-cols-3 gap-2 text-sm">
+              <div className="rounded-xl border border-[#222924] p-3"><div className={`${TITLE} text-2xl text-[#E9E4D6]`}>{fmtTime(((meta.goal.endedAt || meta.serverNow) - meta.goal.startedAt) / 1000)}</div><div className="text-xs text-[#7E887E]">time</div></div>
+              <div className="rounded-xl border border-[#222924] p-3"><div className={`${TITLE} text-2xl text-[#E9E4D6]`}>{meta.night?.taken ?? 0}</div><div className="text-xs text-[#7E887E]">times taken</div></div>
+              <div className="rounded-xl border border-[#222924] p-3"><div className={`${TITLE} text-2xl text-[#E9E4D6]`}>{meta.night?.exposed ?? 0}</div><div className="text-xs text-[#7E887E]">mimics exposed</div></div>
+            </div>
+            <button className={`${TITLE} mt-6 h-14 w-full rounded-2xl bg-[#E9E4D6] text-xl text-black`} data-testid="eh-again" onClick={() => getSocket().emit("eh_act", { type: "restart" }, (r) => { if (!r.ok) toastRef.current(r.error ?? "Could not restart", true); })}>Play again</button>
+            <a href="/echo" className="mt-3 inline-block text-sm text-[#7E887E] underline">Leave</a>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function fmtTime(sec: number) { const s = Math.max(0, Math.round(sec)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+
+function goalText(meta: EchoMeta | null, carrying: boolean, clockOff: number) {
+  const g = meta?.goal;
+  if (!g || !g.startedAt) return "";
+  const left = fmtTime((g.endsAt - (Date.now() + clockOff)) / 1000);
+  if (g.power) return `Power on · at the lift ${g.inLift.length}/${g.need} · ${left} left`;
+  return `${carrying ? "Carrying a fuse → boiler room · " : ""}Fuses ${g.placed}/${GOAL.FUSES} · ${left} left`;
 }
 
 function nightText(meta: EchoMeta | null, clockOff: number) {
@@ -364,7 +410,7 @@ function Meter({ level }: { level: number }) {
 }
 
 /** Phones: left thumb moves, right thumb looks, buttons for torch / crouch / run / mic. */
-function TouchControls({ engine, hud }: { engine: React.MutableRefObject<EchoEngine | null>; hud: EchoHud }) {
+function TouchControls({ engine, hud, onUse }: { engine: React.MutableRefObject<EchoEngine | null>; hud: EchoHud; onUse: () => void }) {
   const stickId = useRef<number | null>(null);
   const lookId = useRef<number | null>(null);
   const origin = useRef({ x: 0, y: 0 });
@@ -419,6 +465,7 @@ function TouchControls({ engine, hud }: { engine: React.MutableRefObject<EchoEng
         </div>
       )}
       {!knob && <div className="pointer-events-none absolute bottom-8 left-8 text-xs text-[#6E786E]">Drag here to move</div>}
+      {hud.act && <button className="pointer-events-auto absolute bottom-48 right-5 rounded-2xl border border-[#E9C46A] bg-[#2A2414]/90 px-5 py-4 text-sm font-semibold text-[#F3E3B5]" onTouchStart={(e) => { e.stopPropagation(); onUse(); }} data-testid="eh-use">{hud.act}</button>}
       <div className="pointer-events-none absolute bottom-5 right-5 grid grid-cols-2 gap-3">
         <button className={btn} aria-label="Torch" onTouchStart={(e) => { e.stopPropagation(); engine.current?.toggleTorch(); }}>{hud.torch ? "Torch" : "Off"}</button>
         <button className={btn} aria-label="Crouch" onTouchStart={(e) => { e.stopPropagation(); engine.current?.toggleCrouch(); }}>{hud.crouch ? "Stand" : "Crouch"}</button>

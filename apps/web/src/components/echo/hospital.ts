@@ -5,7 +5,7 @@ import { ECHO, ECHO_DOOR_W, ECHO_H, ECHO_ROOMS, ECHO_W, echoDoor, echoTile, type
 /** A physics box (centre + half sizes). */
 export interface Box { x: number; y: number; z: number; hx: number; hy: number; hz: number }
 /** Something that gives off light: a tube, the alarm, the crack. Only the nearest few get a real light each frame. */
-export interface LightSource { pos: THREE.Vector3; color: string; dist: number; base: number; phase: number; kind: "fluoro" | "alarm" | "alien" | "exit"; tube?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>; cur: number; toggled: number }
+export interface LightSource { pos: THREE.Vector3; color: string; dist: number; base: number; phase: number; kind: "fluoro" | "alarm" | "alien" | "exit" | "lift"; tube?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>; cur: number; toggled: number }
 export interface HospitalLights { sources: LightSource[]; pool: THREE.PointLight[] }
 export type CeilingLight = LightSource;
 
@@ -229,7 +229,21 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
   // stairs & lift
   { for (let i = 0; i < 9; i++) box("concrete", 1.4, 0.18, 0.3, 5.5 * T - 0.1, 0.09 + i * 0.18, 8 * T + 0.4 + i * 0.3, 0, 0, 0, 2); solid(5.5 * T - 0.1, 8 * T + 1.75, 1.4, 2.8, 0, 2);
     rocks(10, () => [5.5 * T + (rnd() - 0.5) * 1.2, 1.7 + rnd() * 1.2, 8 * T + 2.4 + rnd() * 0.8]);
-    box("steel", 0.06, 2.2, 0.7, 4 * T + 0.13, 1.1, 9 * T + 0.2); box("steel", 0.06, 2.2, 0.7, 4 * T + 0.13, 1.1, 9 * T + 1.3); box("void", 0.02, 2.2, 0.4, 4 * T + 0.11, 1.1, 9 * T + 0.75); }
+  }
+  // the lift: two doors that slide apart when the power comes back, a lit cab behind them
+  const steelMat = MAT.steel;
+  const liftDoors = [-1, 1].map((k) => { const d = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 0.56), steelMat); d.position.set(4 * T + 0.14, 1.1, 9 * T + 0.75 + k * 0.28); d.castShadow = shadows; group.add(d); return d; });
+  box("trimLight", 0.08, 0.3, 1.5, 4 * T + 0.14, 2.38, 9 * T + 0.75); box("trim", 0.1, 2.25, 0.08, 4 * T + 0.14, 1.12, 9 * T + 0.0); box("trim", 0.1, 2.25, 0.08, 4 * T + 0.14, 1.12, 9 * T + 1.5);
+  const cabMat = new THREE.MeshBasicMaterial({ color: "#0a0a08" });
+  const cab = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 2.15), cabMat); cab.position.set(4 * T + 0.105, 1.08, 9 * T + 0.75); cab.rotation.y = Math.PI / 2; group.add(cab);
+  const liftLight: LightSource = { pos: new THREE.Vector3(4 * T + 0.7, 2.4, 9 * T + 0.75), color: "#ffe2b0", dist: 7, base: 0, phase: 0, kind: "lift", cur: 0, toggled: 0 };
+  sources.push(liftLight);
+  const liftArrow = new THREE.Mesh(new THREE.CircleGeometry(0.09, 3), new THREE.MeshBasicMaterial({ color: "#3a1a10" })); liftArrow.position.set(4 * T + 0.19, 2.38, 9 * T + 0.75); liftArrow.rotation.set(0, Math.PI / 2, Math.PI / 2); group.add(liftArrow);
+  // the fuse box on the boiler room wall, three empty slots
+  { const X = 19 * T - 0.1 - 0.13, Z = 10.5 * T;
+    box("darkSteel", 0.26, 1.0, 0.8, X, 1.45, Z); box("steel", 0.04, 0.95, 0.75, X - 0.14, 1.45, Z); box("pipe", 0.08, 1.6, 0.08, X + 0.05, 2.5, Z - 0.3);
+    signs.push({ text: "FUSES · LIFT", x: X - 0.17, y: 2.1, z: Z, yaw: -Math.PI / 2, w: 0.8, plate: true }); }
+  const fuseSlots = [0, 1, 2].map((i) => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.14), new THREE.MeshBasicMaterial({ color: "#3a0c08" })); m.position.set(19 * T - 0.1 - 0.13 - 0.17, 1.6 - i * 0.22, 10.5 * T); group.add(m); return m; });
   // washrooms
   { for (let i = 0; i < 3; i++) { const x = 4 * T + 0.3 + i * 1.2; box("green", 0.05, 2.0, 1.4, x + 1.2, 1.05, 12 * T + 2.25); box("green", 0.95, 2.0, 0.04, x + 0.6, 1.05, 12 * T + 1.5); cyl("white", 0.2, 0.18, 0.42, x + 0.6, 0.21, 12 * T + 2.5); }
     boxes.push({ x: 4 * T + 1.8, y: 1, z: 12 * T + 2.25, hx: 1.8, hy: 1, hz: 0.75 });
@@ -295,7 +309,7 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512) {
 
   // only a few real lights, moved to the nearest sources every frame (steady cost wherever you are)
   const pool = Array.from({ length: 4 }, () => { const l = new THREE.PointLight(0xffffff, 0, 8, 1.7); group.add(l); return l; });
-  return { group, boxes, lights: { sources, pool } as HospitalLights, dispose: () => textures.forEach((t) => t.dispose()) };
+  return { group, boxes, lights: { sources, pool } as HospitalLights, goal: { liftDoors, cab: cabMat, liftLight, liftArrow: liftArrow.material as THREE.MeshBasicMaterial, fuseSlots }, dispose: () => textures.forEach((t) => t.dispose()) };
 }
 
 /** Dying tubes, the alarm, the crack's slow pulse; then the nearest sources get the real lights. */
@@ -304,7 +318,7 @@ export function flickerLights(lights: HospitalLights, t: number, px: number, pz:
     const was = L.cur > 0;
     if (L.kind === "alarm") { const on = Math.sin(t * 3.2) > 0; L.cur = on ? L.base : 0.2; L.tube?.material.color.set(on ? "#ff3a2a" : "#3a0c08"); }
     else if (L.kind === "alien") L.cur = L.base * (0.7 + 0.3 * Math.sin(t * 0.9 + L.phase));
-    else if (L.kind === "exit") L.cur = L.base;
+    else if (L.kind === "exit" || L.kind === "lift") L.cur = L.base;
     else {
       const cyc = (t * 0.23 + L.phase) % 1, stutter = Math.sin(t * 31 + L.phase * 7) > 0.2;
       const off = cyc < 0.55 || (cyc < 0.62 && stutter) || Math.sin(t * 19 + L.phase * 5) > 0.93;
