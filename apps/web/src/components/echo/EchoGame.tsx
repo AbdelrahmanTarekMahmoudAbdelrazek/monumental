@@ -8,7 +8,7 @@ import type { EchoEngine, EchoHud } from "./engine";
 const FONT = "font-['IBM_Plex_Sans_Arabic',system-ui,sans-serif]";
 const TITLE = "font-['Special_Elite',ui-monospace,monospace]";
 
-export default function EchoGame({ code, userToken }: { code: string; userToken: string | null }) {
+export default function EchoGame({ code, userToken, onStory }: { code: string; userToken: string | null; onStory?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<EchoEngine | null>(null);
   const meRef = useRef<number | null>(null);
@@ -210,7 +210,8 @@ export default function EchoGame({ code, userToken }: { code: string; userToken:
           <div className="mx-auto grid max-w-5xl gap-8 md:grid-cols-[1fr_1.1fr]">
             <div>
               <h1 className={`${TITLE} text-6xl leading-[0.95] text-[#E9E4D6] md:text-7xl`}>ECHO<br />HALLS</h1>
-              <p className="mt-4 text-lg text-[#9FA89F]">Phase 1 test: walk the ward together in the dark and talk.</p>
+              <p className="mt-4 text-lg text-[#9FA89F]">Marrowfield, fifteen years later. Go down together, stay close, and talk. Something down there is listening.</p>
+              {onStory && <button className="mt-2 text-sm text-[#6EE6C8] underline underline-offset-4" onClick={onStory} data-testid="eh-story">▶ Watch the story again</button>}
               <ul className="mt-6 space-y-2 text-[15px] text-[#A6AFA6]">
                 <li>Voices are 3D: you hear friends from where they stand.</li>
                 <li>Far away they fade out; through a wall they sound muffled.</li>
