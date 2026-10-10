@@ -1,5 +1,5 @@
 import {
-  ECHO, ECHO_COLORS, GOAL, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, TEEN_LOOKS, cleanLook,
+  ECHO, ECHO_COLORS, ECHO_RADIO, GOAL, RADIO, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, TEEN_LOOKS, cleanLook,
   echoFree, echoPassable, echoPath, echoSpawns, echoTileOf, echoWallsBetween, mimicOpen,
   type ClipInfo, type ClipTag, type EchoAct, type EchoEvent, type EchoGoal, type EchoLook, type EchoMeta, type EchoSnap2, type EchoState, type MimicState,
 } from "@monumental/shared";
@@ -17,6 +17,7 @@ interface Member {
   torch: boolean;
   crouch: boolean;
   talk: boolean;
+  radio: boolean;
   look: EchoLook;
   /** Clicked "Enter" (past the lobby). */
   entered: boolean;
@@ -105,7 +106,7 @@ export class EchoRoom {
       const color = ECHO_COLORS.find((c) => !used.has(c)) ?? ECHO_COLORS[0];
       // first teen nobody plays yet; the client sends its saved choice right after joining
       const teen = ECHO_TEENS.find((t) => !this.members.some((x) => x.look.teen === t.id))?.id ?? "maya";
-      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, look: { ...TEEN_LOOKS[teen] }, entered: false, carry: null, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0 };
+      m = { id, n: this.nextN++, name: name.slice(0, 20) || "Player", color, x: s.x, y: 0, z: s.z, yaw: 0, pitch: 0, torch: true, crouch: false, talk: false, radio: false, look: { ...TEEN_LOOKS[teen] }, entered: false, carry: null, at: this.now(), taken: false, takenUntil: 0, heard: null, askedAt: 0 };
       this.members.push(m);
     } else {
       m.name = name.slice(0, 20) || m.name;
@@ -142,6 +143,23 @@ export class EchoRoom {
     m.look = look;
     this.pushMeta();
     return { ok: true };
+  }
+
+  // ───────── Channel 4: a stolen voice on everyone's walkie ─────────
+  private nextRadio = 0;
+  private radioCall(t: number) {
+    if (!this.nextRadio) { this.nextRadio = t + RADIO.FIRST_SEC * 1000; return; }
+    if (t < this.nextRadio) return;
+    this.nextRadio = t + ((RADIO.GAP_MIN + this.rnd() * (RADIO.GAP_MAX - RADIO.GAP_MIN)) * 1000) / this.fury();
+    const others = this.members.length - 1;
+    // a piece everyone else already has, preferably a whole phrase, not used before
+    const ok = [...this.clips.values()].filter((c) => !c.used && c.have.size >= others && c.ms >= 700);
+    if (!ok.length) return;
+    const long = ok.filter((c) => c.ms >= 1300);
+    const pool = long.length ? long : ok;
+    const c = pool[Math.floor(this.rnd() * pool.length)];
+    c.used = true;
+    this.ev.event({ type: "radio", clips: [c.key], as: c.owner });
   }
 
   // ───────── the goal: three fuses, the fuse box, the lift ─────────
@@ -234,7 +252,7 @@ export class EchoRoom {
   private restart(t: number) {
     this.goal = this.newGoal();
     this.liftHold = 0;
-    this.mimics = []; this.awake = false; this.exposed = 0; this.takenCount = 0;
+    this.mimics = []; this.awake = false; this.exposed = 0; this.takenCount = 0; this.nextRadio = 0;
     this.wakeAt = this.members.length >= 2 ? t + this.wakeSec * 1000 : 0;
     for (const mm of this.clips.values()) mm.used = false;
     const sp = echoSpawns();
@@ -260,6 +278,7 @@ export class EchoRoom {
     m.torch = s.torch;
     m.crouch = s.crouch;
     m.talk = !!s.talk;
+    m.radio = !!s.radio;
     if (dist > ECHO.SPRINT * dt * 1.5 + 1 || !echoFree(s.x, s.z) || !echoPassable(m.x, m.z, s.x, s.z)) return false;
     m.x = s.x;
     m.y = Math.max(-0.5, Math.min(1, s.y));
@@ -316,6 +335,7 @@ export class EchoRoom {
     }
     this.wake(t);
     if (!this.goal.result) for (const mm of this.mimics) this.think(mm, dt, t);
+    if (this.awake && !this.goal.result) this.radioCall(t);
     this.stepGoal(t, dt);
     if (process.env.ECHO_DEBUG && t - this.debugAt > 3000) {
       this.debugAt = t;
@@ -630,7 +650,7 @@ export class EchoRoom {
     const t = this.now();
     return {
       t,
-      p: this.members.map((m) => [m.n, Math.round(m.x * 100), Math.round(m.y * 100), Math.round(m.z * 100), Math.round(m.yaw * 1000), Math.round(m.pitch * 1000), (m.torch ? 1 : 0) | (m.crouch ? 2 : 0) | (m.taken ? ECHO_TAKEN : 0) | (m.talk && !m.taken ? ECHO_TALK : 0)]),
+      p: this.members.map((m) => [m.n, Math.round(m.x * 100), Math.round(m.y * 100), Math.round(m.z * 100), Math.round(m.yaw * 1000), Math.round(m.pitch * 1000), (m.torch ? 1 : 0) | (m.crouch ? 2 : 0) | (m.taken ? ECHO_TAKEN : 0) | (m.talk && !m.taken ? ECHO_TALK : 0) | (m.radio && !m.taken ? ECHO_RADIO : 0)]),
       m: this.mimics.map((mm) => [mm.id, Math.round(mm.x * 100), Math.round(mm.z * 100), Math.round(mm.yaw * 1000), MIMIC_STATES.indexOf(mm.state), t < mm.speakingUntil ? 1 : 0]),
     };
   }

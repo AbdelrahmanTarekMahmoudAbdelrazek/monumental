@@ -150,7 +150,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   // ── keyboard + mouse (desktop) ──
   useEffect(() => {
     if (!entered) return;
-    const map: Record<string, keyof EchoEngine["keys"]> = { KeyW: "f", ArrowUp: "f", KeyS: "b", ArrowDown: "b", KeyA: "l", ArrowLeft: "l", KeyD: "r", ArrowRight: "r", ShiftLeft: "run", ShiftRight: "run", ControlLeft: "crouch", KeyC: "crouch" };
+    const map: Record<string, keyof EchoEngine["keys"]> = { KeyW: "f", ArrowUp: "f", KeyS: "b", ArrowDown: "b", KeyA: "l", ArrowLeft: "l", KeyD: "r", ArrowRight: "r", ShiftLeft: "run", ShiftRight: "run", ControlLeft: "crouch", KeyC: "crouch", KeyV: "radio" };
     const down = (e: KeyboardEvent) => {
       const eng = engineRef.current;
       if (!eng) return;
@@ -241,8 +241,8 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
                 <li><b className="text-[#E9E4D6]">Use headphones</b>, or your speakers leak into your mic.</li>
               </ul>
               <div className="mt-6 rounded-xl border border-[#222924] bg-[#0E1210] p-4 text-sm text-[#A6AFA6]">
-                {mobile ? <p>Left thumb: move. Right thumb: look. Buttons: torch, crouch, run, mic.</p>
-                  : <p><b className="text-[#E9E4D6]">WASD</b> move · <b className="text-[#E9E4D6]">Mouse</b> look · <b className="text-[#E9E4D6]">Shift</b> run · <b className="text-[#E9E4D6]">C / Ctrl</b> crouch · <b className="text-[#E9E4D6]">F</b> torch · <b className="text-[#E9E4D6]">M</b> mute · <b className="text-[#E9E4D6]">Esc</b> pause</p>}
+                {mobile ? <p>Left thumb: move. Right thumb: look. Buttons: torch, crouch, mic, and hold Radio to talk to everyone on Channel 4.</p>
+                  : <p><b className="text-[#E9E4D6]">WASD</b> move · <b className="text-[#E9E4D6]">Mouse</b> look · <b className="text-[#E9E4D6]">Shift</b> run · <b className="text-[#E9E4D6]">C / Ctrl</b> crouch · <b className="text-[#E9E4D6]">F</b> torch · <b className="text-[#E9E4D6]">M</b> mute · <b className="text-[#E9E4D6]">V</b> hold to talk on the radio · <b className="text-[#E9E4D6]">E</b> pick up / use · <b className="text-[#E9E4D6]">Esc</b> pause</p>}
               </div>
             </div>
             <div className="flex flex-col gap-4">
@@ -305,6 +305,12 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
             <span className="rounded-full bg-black/50 px-2.5 py-1 text-[#7E887E]">{hud.fps} fps</span>
           </div>
           {!hud.torch && <div className="pointer-events-none absolute left-1/2 top-[58%] -translate-x-1/2 text-sm text-[#7E887E]">Torch off · {mobile ? "tap Torch" : "press F"}</div>}
+          {(hud.onAir.length > 0 || hud.fakeAir !== null) && (
+            <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#5A2621] bg-[#160E0D]/85 px-4 py-1.5 text-sm text-[#F1C9C4]" data-testid="eh-radio">
+              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#E0675C]" />
+              CH 4 · {[...new Set([...hud.onAir, ...(hud.fakeAir !== null ? [hud.fakeAir] : [])])].map((n) => (n === 0 || n === me ? "you" : nameOf(n)?.name ?? "someone")).join(", ")}
+            </div>
+          )}
           {hud.act && !mobile && <div className="pointer-events-none absolute left-1/2 top-[64%] -translate-x-1/2 rounded-full bg-black/60 px-4 py-2 text-sm text-[#E9E4D6]" data-testid="eh-act"><b className="mr-2 rounded border border-[#E9E4D6]/60 px-1.5">E</b>{hud.act}</div>}
           {hud.stamina < 0.99 && (
             <div className="pointer-events-none absolute bottom-20 left-1/2 h-1 w-40 -translate-x-1/2 overflow-hidden rounded-full bg-white/10 md:bottom-24"><div className="h-full bg-[#E9E4D6]/70" style={{ width: `${hud.stamina * 100}%` }} /></div>
@@ -469,6 +475,10 @@ function TouchControls({ engine, hud, onUse }: { engine: React.MutableRefObject<
       <div className="pointer-events-none absolute bottom-5 right-5 grid grid-cols-2 gap-3">
         <button className={btn} aria-label="Torch" onTouchStart={(e) => { e.stopPropagation(); engine.current?.toggleTorch(); }}>{hud.torch ? "Torch" : "Off"}</button>
         <button className={btn} aria-label="Crouch" onTouchStart={(e) => { e.stopPropagation(); engine.current?.toggleCrouch(); }}>{hud.crouch ? "Stand" : "Crouch"}</button>
+        <button className={`${btn} col-span-2 w-full rounded-2xl ${hud.onAir.includes(0) ? "border-[#E0675C] bg-[#2A1512]/90" : ""}`} aria-label="Hold to talk on the radio" data-testid="eh-radio-btn"
+          onTouchStart={(e) => { e.stopPropagation(); if (engine.current) engine.current.keys.radio = true; }} onTouchEnd={(e) => { e.stopPropagation(); if (engine.current) engine.current.keys.radio = false; }} onTouchCancel={() => { if (engine.current) engine.current.keys.radio = false; }}>
+          {hud.onAir.includes(0) ? "On air…" : "Hold: Radio"}
+        </button>
         <button className={`${btn} col-span-2 h-16 w-full rounded-2xl ${hud.mic.muted || !hud.mic.has ? "border-[#8A3A33]" : "border-[#7FB89A]"}`} aria-label="Microphone" onTouchStart={(e) => { e.stopPropagation(); engine.current?.toggleMute(); }}>
           <span className="flex items-center gap-2"><MicIcon off={!hud.mic.has || hud.mic.muted} />{!hud.mic.has ? "No mic" : hud.mic.muted ? "Muted" : "Mic on"}<Meter level={hud.mic.level} /></span>
         </button>

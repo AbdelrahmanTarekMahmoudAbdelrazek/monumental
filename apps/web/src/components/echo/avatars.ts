@@ -32,7 +32,7 @@ export class Avatar {
   }
 
   /** Called every frame with the smoothed position of this friend. */
-  update(x: number, y: number, z: number, yaw: number, pitch: number, torch: boolean, crouch: boolean, talk: boolean, dt: number, seen: boolean, near: number) {
+  update(x: number, y: number, z: number, yaw: number, pitch: number, torch: boolean, crouch: boolean, talk: boolean, dt: number, seen: boolean, near: number, radio = false) {
     const moved = Math.hypot(x - this.lastX, z - this.lastZ);
     const inst = dt > 0 && moved < 3 ? moved / dt : 0;
     this.speed = this.speed * 0.8 + inst * 0.2;
@@ -40,8 +40,8 @@ export class Avatar {
     this.root.position.set(x, y, z);
     this.root.rotation.y = yaw;
     const sp = this.speed;
-    const move: TeenMove = crouch ? (sp > 0.3 ? "crouch" : "crouchIdle") : sp > ECHO.WALK + 0.6 ? "run" : sp > 0.35 ? "walk" : "idle";
-    this.rig.update(dt, { move, speed: Math.max(0.6, sp), pitch, lightOn: torch, talk });
+    const move: TeenMove = crouch ? (sp > 0.3 ? "crouch" : "crouchIdle") : sp > ECHO.WALK + 0.6 ? "run" : sp > 0.35 ? "walk" : radio ? "radio" : "idle";
+    this.rig.update(dt, { move, speed: Math.max(0.6, sp), pitch, lightOn: torch, talk: talk || radio });
     // the name only shows when you can actually see them, close by
     this.label.visible = seen && near < 9;
     (this.label.material as THREE.SpriteMaterial).opacity = Math.max(0, Math.min(1, (9 - near) / 3));

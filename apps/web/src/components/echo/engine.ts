@@ -31,10 +31,14 @@ export interface EchoHud {
   /** What E / Use would do right now. */
   act: string | null;
   carrying: boolean;
+  /** Who is talking on Channel 4 right now (wire numbers; 0 = me). */
+  onAir: number[];
+  /** A voice on the radio that might not be who it sounds like. */
+  fakeAir: number | null;
 }
 
 export interface EchoNet {
-  sendState: (s: { x: number; y: number; z: number; yaw: number; pitch: number; torch: boolean; crouch: boolean; talk: boolean; seq: number }) => void;
+  sendState: (s: { x: number; y: number; z: number; yaw: number; pitch: number; torch: boolean; crouch: boolean; talk: boolean; radio: boolean; seq: number }) => void;
   sendSignal: (to: number, data: unknown) => void;
   sendClip: (p: { id: number; ms: number; tags: ClipTag[] }) => void;
   sendTag: (p: { id: number; tags: ClipTag[] }) => void;
@@ -130,6 +134,9 @@ export class EchoEngine {
   private tired = false;
   private torchOn = true;
   private talkUntil = 0;
+  private wasOnAir = false;
+  private fakeAir: { as: number; until: number } | null = null;
+  private onAir = new Set<number>();
   private crouch = false;
   private grounded = true;
   private realSpeed = 0;
@@ -144,7 +151,7 @@ export class EchoEngine {
   private maxRatio = 1;
 
   // input
-  keys = { f: false, b: false, l: false, r: false, run: false, crouch: false };
+  keys = { f: false, b: false, l: false, r: false, run: false, crouch: false, radio: false };
   /** Touch stick, −1…1. */
   stick = { x: 0, y: 0 };
   sensitivity = 0.0022;
@@ -344,7 +351,10 @@ export class EchoEngine {
       this.takenUntil = 0;
       this.doorOpen = 0;
     }
-    if (e.type === "say") {
+    if (e.type === "radio") {
+      const clips = e.clips.map((k) => this.voice.bank.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
+      if (clips.length && !this.isTaken) { const d = this.voice.radio.play(clips); this.fakeAir = { as: e.as, until: performance.now() + d * 1000 }; }
+    } else if (e.type === "say") {
       const v = this.mimics.get(e.mimic);
       const clips = e.clips.map((k) => this.voice.bank.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
       if (v && clips.length) v.snd.say(clips);
@@ -512,7 +522,9 @@ export class EchoEngine {
       a.root.visible = true;
       const d = Math.hypot(s.x - px, s.z - pz);
       const seen = d < 12 && echoWallsBetween(px, pz, s.x, s.z) === 0;
-      a.update(s.x, s.y, s.z, s.yaw, s.pitch, s.torch, s.crouch, s.talk, dt, seen, d);
+      a.update(s.x, s.y, s.z, s.yaw, s.pitch, s.torch, s.crouch, s.talk, dt, seen, d, s.radio);
+      this.voice.setRadio(num, s.radio);
+      if (s.radio) this.onAir.add(num); else this.onAir.delete(num);
       others.set(num, { x: s.x, y: s.y, z: s.z });
       // their footsteps, from their feet, quieter through walls
       const st = this.remoteSteps.get(num);
@@ -563,7 +575,9 @@ export class EchoEngine {
       // talking: my mic is loud enough, held a moment so the light doesn't flicker between words
       const lvl = this.voice.hasMic && !this.voice.muted && !this.isTaken ? this.voice.micLevel() ?? 0 : 0;
       if (lvl > 0.15) this.talkUntil = now + 350;
-      this.opts.net.sendState({ x: px, y: feet, z: pz, yaw: this.yaw, pitch: this.pitch, torch: this.torchOn, crouch: crouching, talk: now < this.talkUntil, seq: ++this.seq });
+      const onAir = this.keys.radio && !!this.voice.hasMic && !this.voice.muted && !this.isTaken;
+      if (onAir !== this.wasOnAir) { this.wasOnAir = onAir; this.voice.radio.squelch(onAir); }
+      this.opts.net.sendState({ x: px, y: feet, z: pz, yaw: this.yaw, pitch: this.pitch, torch: this.torchOn, crouch: crouching, talk: now < this.talkUntil, radio: onAir, seq: ++this.seq });
     }
 
     this.adaptQuality();
@@ -601,6 +615,8 @@ export class EchoEngine {
       room: ECHO_ROOMS[echoTile(echoTileOf(this.cur.x), echoTileOf(this.cur.z))]?.name ?? "",
       act: this.act ? (this.act.type === "pickup" ? "pick up the fuse" : "put the fuse in") : null,
       carrying: !!this.goal?.fuses.some((f) => f.by === this.opts.me),
+      onAir: [...(this.wasOnAir ? [0] : []), ...this.onAir],
+      fakeAir: this.fakeAir && this.fakeAir.until > now ? this.fakeAir.as : null,
     });
   }
 

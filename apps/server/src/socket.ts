@@ -504,7 +504,7 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       const me = socket.data.identity?.playerKey;
       if (!r || !me || ehBudget-- <= 0 || !raw) return;
       const n = (v: unknown, lo: number, hi: number) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : 0; };
-      r.state(me, { x: n(raw.x, 0, 1000), y: n(raw.y, -5, 5), z: n(raw.z, 0, 1000), yaw: n(raw.yaw, -1e3, 1e3), pitch: n(raw.pitch, -2, 2), torch: !!raw.torch, crouch: !!raw.crouch, talk: !!raw.talk, seq: n(raw.seq, 0, 1e9) });
+      r.state(me, { x: n(raw.x, 0, 1000), y: n(raw.y, -5, 5), z: n(raw.z, 0, 1000), yaw: n(raw.yaw, -1e3, 1e3), pitch: n(raw.pitch, -2, 2), torch: !!raw.torch, crouch: !!raw.crouch, talk: !!raw.talk, radio: !!raw.radio, seq: n(raw.seq, 0, 1e9) });
     });
     let lookAt = 0;
     socket.on("eh_look", (raw, ack) => {

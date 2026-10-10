@@ -384,3 +384,21 @@ describe("ECHO HALLS goal — the lift", () => {
     x.r.destroy();
   });
 });
+
+describe("ECHO HALLS Channel 4", () => {
+  it("shares who is on the radio, and the awake mimic sometimes speaks on Channel 4 with a stolen phrase", () => {
+    const x = room();
+    x.r.join("a", "Ann"); x.r.join("b", "Bob");
+    const sp = echoSpawns()[0];
+    x.advance(100);
+    x.r.state("a", { ...st({ x: sp.x, z: sp.z }), radio: true });
+    x.r.step();
+    expect(decodeEchoSnap(x.snaps.at(-1)!).find((p) => p.n === 1)!.radio).toBe(true);
+    for (let i = 0; i < 5; i++) { x.r.clip("b", i, 1500, ["short"]); x.r.have("a", `2:${i}`); }
+    for (let i = 0; i < (MIMIC.WAKE_SEC + 60 + 130) * 20; i++) { x.advance(50); x.r.step(); }
+    const calls = x.events.filter((e): e is Extract<EchoEvent, { type: "radio" }> => e.type === "radio");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c.as === 2 && c.clips[0].startsWith("2:"))).toBe(true);
+    x.r.destroy();
+  });
+});

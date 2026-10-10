@@ -1,5 +1,6 @@
 import { ECHO, echoWallsBetween, muEncode, type ClipTag } from "@monumental/shared";
 import type { SoundBank } from "./sound";
+import { RadioFx } from "./radio";
 
 /** A voice piece held on this device (8-bit, 16 kHz). Never sent to the game server. */
 export interface BankClip { bytes: Uint8Array; ms: number; tags: ClipTag[] }
@@ -33,6 +34,9 @@ interface Peer {
   filter: BiquadFilterNode;
   gain: GainNode;
   panner: PannerNode;
+  /** Their voice on Channel 4 (open while they hold the talk button). */
+  radio: GainNode;
+  onAir: boolean;
   offeredAt: number;
   failedAt: number;
   /** Network candidates that arrived before the other side's description. */
@@ -75,7 +79,11 @@ export class Voice {
 
   private watchdog: ReturnType<typeof setInterval>;
 
+  /** Channel 4: every walkie in the building. */
+  readonly radio: RadioFx;
+
   constructor(private sounds: SoundBank, private me: number, private send: (to: number, data: Signal) => void, private onStatus: () => void) {
+    this.radio = new RadioFx(sounds.ctx, sounds.master);
     // an offer that got no answer is sent again; a dead connection is restarted
     this.watchdog = setInterval(() => {
       const now = performance.now();
@@ -207,7 +215,10 @@ export class Voice {
     gain.gain.value = 0;
     const panner = this.sounds.panner();
     filter.connect(gain).connect(panner);
-    const peer: Peer = { n, pc, offerer: this.me < n, filter, gain, panner, sinks: [], sources: [], offeredAt: 0, failedAt: 0, queued: [], dc: pc.createDataChannel("clips", { negotiated: true, id: 5 }), incoming: null, gen: 0, remoteGen: -1 };
+    const radio = ctx.createGain();
+    radio.gain.value = 0;
+    radio.connect(this.radio.input);
+    const peer: Peer = { n, pc, offerer: this.me < n, filter, gain, panner, radio, onAir: false, sinks: [], sources: [], offeredAt: 0, failedAt: 0, queued: [], dc: pc.createDataChannel("clips", { negotiated: true, id: 5 }), incoming: null, gen: 0, remoteGen: -1 };
     this.peers.set(n, peer);
     peer.dc.binaryType = "arraybuffer";
     peer.dc.onmessage = (e) => this.onData(peer, e.data);
@@ -239,6 +250,7 @@ export class Voice {
       peer.sinks.push(sink);
       const src = ctx.createMediaStreamSource(stream);
       src.connect(filter);
+      src.connect(radio);
       peer.sources.push(src);
     };
 
@@ -304,6 +316,15 @@ export class Voice {
     }
   }
 
+  /** A friend pressed or released their walkie's talk button. */
+  setRadio(n: number, on: boolean) {
+    const p = this.peers.get(n);
+    if (!p || p.onAir === on) return;
+    p.onAir = on;
+    this.radio.squelch(on);
+    p.radio.gain.setTargetAtTime(on ? 1 : 0, this.sounds.ctx.currentTime, 0.03);
+  }
+
   private close(n: number) {
     const p = this.peers.get(n);
     if (!p) return;
@@ -312,6 +333,8 @@ export class Voice {
     p.sources.forEach((x) => x.disconnect());
     p.sinks.forEach((x) => { x.srcObject = null; });
     p.panner.disconnect();
+    p.radio.disconnect();
+    if (p.onAir) this.radio.squelch(false);
     this.peers.delete(n);
     this.onStatus();
   }

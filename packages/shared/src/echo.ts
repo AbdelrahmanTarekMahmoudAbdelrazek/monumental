@@ -275,10 +275,12 @@ export interface EchoState {
   crouch: boolean;
   /** Speaking right now (blinks their radio light). */
   talk?: boolean;
+  /** Holding the walkie's talk button: everyone hears me on Channel 4. */
+  radio?: boolean;
   seq: number;
 }
 
-/** Snapshot on the wire: rows [n, x×100, y×100, z×100, yaw×1000, pitch×1000, flags (1 torch, 2 crouch, 4 taken, 8 talking)]. */
+/** Snapshot on the wire: rows [n, x×100, y×100, z×100, yaw×1000, pitch×1000, flags (1 torch, 2 crouch, 4 taken, 8 talking, 16 on the radio)]. */
 export interface EchoSnap {
   t: number;
   p: number[][];
@@ -295,12 +297,16 @@ export interface EchoPeerState {
   torch: boolean;
   crouch: boolean;
   talk: boolean;
+  radio: boolean;
 }
 
 export const ECHO_TALK = 8;
+export const ECHO_RADIO = 16;
+/** The mimic speaks on Channel 4 now and then, with a stolen voice. */
+export const RADIO = { FIRST_SEC: 45, GAP_MIN: 50, GAP_MAX: 110 } as const;
 
 export function decodeEchoSnap(s: EchoSnap): EchoPeerState[] {
-  return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2, talk: (r[6] & 8) === 8 }));
+  return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2, talk: (r[6] & 8) === 8, radio: (r[6] & 16) === 16 }));
 }
 
 // ───────── Phase 2: the mimic ─────────
@@ -368,6 +374,8 @@ export type EchoEvent =
   | { type: "drop"; n: number; fuse: number }
   | { type: "install"; n: number; fuse: number }
   | { type: "power" }
+  /** A voice on Channel 4 that nobody pressed the button for. `as` is whose voice it is. */
+  | { type: "radio"; clips: string[]; as: number }
   | { type: "end"; result: "win" | "lose" }
   | { type: "restart"; spawns: [number, number, number][] };
 
