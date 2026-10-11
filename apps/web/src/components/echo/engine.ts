@@ -175,7 +175,7 @@ export class EchoEngine {
     for (const b of list) {
       const name: CharacterName = b.who === "police" ? police[pi++ % police.length] : b.who === "nurse" ? "chad" : "warzombie";
       if (!people.chars[name] || !people.clips.dying) continue;
-      const body = new RealBody(people, name, !this.opts.mobile);
+      const body = new RealBody(people, name, false); // v41: they lie on the floor: no shadow pass for them
       body.root.rotation.y = b.ry;
       this.scene.add(body.root);
       body.pose("dying", 0.985);
@@ -247,7 +247,7 @@ export class EchoEngine {
     this.voice = new Voice(this.sounds, opts.me, (to, d) => opts.net.sendSignal(to, d), () => this.pushHud(true));
     this.voice.onClip = (key) => opts.net.sendHave(key);
     opts.net.getIce?.().then((l) => this.voice.setIce(l), () => {});
-    this.camera = new THREE.PerspectiveCamera(opts.mobile ? 78 : 72, 1, 0.05, 70);
+    this.camera = new THREE.PerspectiveCamera(opts.mobile ? 78 : 72, 1, 0.05, 34); // v41: the fog hides everything past ~25 m, so nothing further is drawn
   }
 
   async init() {
@@ -265,7 +265,8 @@ export class EchoEngine {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.maxRatio = Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2);
-    this.pixelRatio = Math.min(this.maxRatio, mobile ? 1.1 : 1.5);
+    this.tier = mobile ? 1 : 3;
+    this.pixelRatio = Math.min(this.maxRatio, EchoEngine.TIERS[this.tier].ratio);
     this.scene.background = new THREE.Color(0x020303);
     this.scene.fog = new THREE.FogExp2(0x010202, 0.075);
 
@@ -327,7 +328,9 @@ export class EchoEngine {
     if (!mobile) {
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(512, 512), 0.4, 0.6, 0.85));
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.4, 0.6, 0.85);
+      this.bloom.enabled = false; // only on the top quality tier
+      this.composer.addPass(this.bloom);
       this.film = new ShaderPass({
         uniforms: { tDiffuse: { value: null }, t: { value: 0 }, hurt: { value: 0 } },
         vertexShader: "varying vec2 v; void main(){ v = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
@@ -336,7 +339,7 @@ export class EchoEngine {
       this.composer.addPass(this.film);
       this.composer.addPass(new OutputPass());
     }
-    this.resize();
+    this.applyTier();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(this.canvas);
     this.last = performance.now();
@@ -839,7 +842,7 @@ export class EchoEngine {
     }
 
     this.adaptQuality();
-    if (this.composer && this.film) { this.film.uniforms.t.value = now * 0.001; this.film.uniforms.hurt.value = Math.max(0, 1 - (now - this.hurtAt) / 1600); this.composer.render(); }
+    if (this.composer && this.film && this.post) { this.film.uniforms.t.value = now * 0.001; this.film.uniforms.hurt.value = Math.max(0, 1 - (now - this.hurtAt) / 1600); this.composer.render(); }
     else this.renderer.render(this.scene, this.camera);
     for (const b of this.deadBodies) if (b.dirty) { b.body.update(0); b.dirty = false; }
     this.pushHud(false);
@@ -847,14 +850,40 @@ export class EchoEngine {
 
   /** Lower the resolution a little when frames get slow, raise it again when there's room. */
   private qualityAt = 0;
+  private bloom: UnrealBloomPass | null = null;
+  private post = true;
+  /**
+   * v41: steady 60 fps. Quality tiers from best to cheapest; it starts in the middle, drops a tier as soon as the
+   * frame rate sags, and only tries a better tier after a long stretch of holding 60 (and stays put if that fails).
+   */
+  private static TIERS = [
+    { ratio: 0.7, post: false, bloom: false, shadow: 512 },
+    { ratio: 0.85, post: false, bloom: false, shadow: 1024 },
+    { ratio: 1, post: true, bloom: false, shadow: 1024 },
+    { ratio: 1.25, post: true, bloom: false, shadow: 1024 },
+    { ratio: 1.5, post: true, bloom: true, shadow: 1024 },
+  ];
+  private tier = 3;
+  private goodSince = 0;
+  private lockUpUntil = 0;
+  private applyTier() {
+    const T = EchoEngine.TIERS[this.tier];
+    this.post = T.post && !!this.composer;
+    if (this.bloom) this.bloom.enabled = T.bloom;
+    this.pixelRatio = Math.min(this.maxRatio, T.ratio);
+    if (this.torch && this.torch.shadow.mapSize.x !== T.shadow) { this.torch.shadow.mapSize.set(T.shadow, T.shadow); this.torch.shadow.map?.dispose(); this.torch.shadow.map = null as unknown as THREE.WebGLRenderTarget; }
+    this.resize();
+  }
   private adaptQuality() {
     const now = performance.now();
-    if (now - this.qualityAt < 2000) return;
+    if (now - this.qualityAt < 1500) return;
     this.qualityAt = now;
-    let r = this.pixelRatio;
-    if (this.frameMs > 22) r = Math.max(0.6, r - 0.15);
-    else if (this.frameMs < 13 && r < this.maxRatio) r = Math.min(this.maxRatio, r + 0.1);
-    if (Math.abs(r - this.pixelRatio) > 0.01) { this.pixelRatio = r; this.resize(); }
+    const top = this.opts.mobile ? 1 : EchoEngine.TIERS.length - 1;
+    if (this.frameMs > 18 && this.tier > 0) {
+      this.tier--; this.goodSince = now; this.lockUpUntil = now + 60_000; this.applyTier(); return;
+    }
+    if (this.frameMs <= 17.4) { if (!this.goodSince) this.goodSince = now; } else this.goodSince = 0;
+    if (this.goodSince && now - this.goodSince > 10_000 && now > this.lockUpUntil && this.tier < top) { this.tier++; this.goodSince = now; this.applyTier(); }
   }
 
   private cuttersUsed = false;

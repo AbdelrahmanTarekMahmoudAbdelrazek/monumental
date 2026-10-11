@@ -104,6 +104,7 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512, real?: R
 
   // ── batching: every static piece is moved into place, given world-scale UVs, and merged per material ──
   const BATCH = new Map<string, THREE.BufferGeometry[]>();
+  const CHUNK = 18;
   /** Real photo-scanned surfaces tile every SCALE metres; DADO puts a tiled band under a painted wall. */
   const SCALE: Record<string, number> = {};
   const DADO: Record<string, string> = {};
@@ -119,7 +120,10 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512, real?: R
     if (!g.attributes.uv) g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
     if (uvScale) { const r = SCALE[key]; worldUV(g, r ?? uvScale, r ?? uvY ?? uvScale); }
     for (const k of Object.keys(g.attributes)) if (!["position", "normal", "uv"].includes(k)) g.deleteAttribute(k);
-    if (!BATCH.has(key)) BATCH.set(key, []); BATCH.get(key)!.push(g);
+    // v41: merged per material AND per 10 m block of the map, so the parts behind you or far away are never drawn
+    g.computeBoundingBox(); const bb = g.boundingBox!;
+    const ck = `${key}|${Math.floor((bb.min.x + bb.max.x) / 2 / CHUNK)},${Math.floor((bb.min.z + bb.max.z) / 2 / CHUNK)}`;
+    if (!BATCH.has(ck)) BATCH.set(ck, []); BATCH.get(ck)!.push(g);
   }
   const box = (key: string, w: number, h: number, d: number, x: number, y: number, z: number, ry = 0, rx = 0, rz = 0, uv = 1) => put(key, new THREE.BoxGeometry(w, h, d), M4(x, y, z, ry, rx, rz), uv);
   const cyl = (key: string, rt: number, rb: number, h: number, x: number, y: number, z: number, ry = 0, rx = 0, rz = 0, seg = 10) => put(key, new THREE.CylinderGeometry(rt, rb, h, seg), M4(x, y, z, ry, rx, rz), 1);
@@ -201,7 +205,9 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512, real?: R
       box("trimLight", 1.3, 0.08, 0.32, cx, HT - 0.04, cz);
       const on = hash(x, z * 2) > 0.9 || (k === "c" && x === 9 && z === 6) || (k === "n" && z === 3) || (k === "a" && x === 7 && z === 3) || (k === "c" && x === 16 && z === 6)
         || (k === "c" && x === 27 && z === 9) || (k === "c" && x === 18 && z === 14) || (k === "g" && x === 15 && z === 17) || (k === "f" && x === 26 && z === 4) || (k === "l" && x === 3 && z === 19) || (k === "c" && x === 24 && z === 6);
-      const tube = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.22), on ? new THREE.MeshBasicMaterial({ color: "#dff0e6" }) : (MAT.lampOff as unknown as THREE.MeshBasicMaterial));
+      // v41: dead tubes never change, so they are merged with the rest (hundreds of draws saved); only live ones stay separate
+      if (!on) { box("lampOff", 1.2, 0.04, 0.22, cx, HT - 0.09, cz); continue; }
+      const tube = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.22), new THREE.MeshBasicMaterial({ color: "#dff0e6" }));
       tube.position.set(cx, HT - 0.09, cz); group.add(tube);
       if (on) sources.push({ pos: new THREE.Vector3(cx, HT - 0.3, cz), color: "#d8eee2", dist: 8, tube: tube as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>, base: 7, phase: rnd() * 10, kind: "fluoro", cur: 0, toggled: 0 });
     }
@@ -591,9 +597,12 @@ export function buildLevel(_tex: unknown, shadows: boolean, size = 512, real?: R
   }
 
   // ── merge ──
-  for (const [key, list] of BATCH) {
+  for (const [ck, list] of BATCH) {
+    const key = ck.slice(0, ck.lastIndexOf("|"));
     const g = mergeGeometries(list, false); for (const x of list) x.dispose(); if (!g) continue;
+    g.computeBoundingSphere();
     const m = new THREE.Mesh(g, MAT[key]);
+    m.matrixAutoUpdate = false; // never moves: skip its matrix work every frame
     m.castShadow = shadows && !["void", "glow", "ceiling", "lino", "tileF", "concrete"].includes(key); m.receiveShadow = key !== "void";
     group.add(m);
   }

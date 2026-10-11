@@ -9,6 +9,17 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 41, name: "Smooth 60", date: "2026-10",
+    big: "Echo Halls aims for a steady 60 fps: it only draws what you can see and adjusts its own quality to hold the frame rate.",
+    more: [
+      "The hospital is cut into blocks: rooms behind you and beyond the fog are no longer drawn (up to 10× fewer triangles per frame)",
+      "Nothing past 34 m is drawn — the fog already hides it",
+      "Hundreds of dead ceiling tubes merged into one draw",
+      "Automatic quality: drops resolution, glow and film effects the moment fps sags; tries better quality only after holding 60 for 10 seconds",
+      "Bodies on the floor no longer cost a shadow pass",
+    ],
+  },
+  {
     v: 40, name: "It Learns", date: "2026-10",
     big: "The Copy now learns across matches: the more people play, the more real ways of moving it knows, the new moves it invents, and the tricks it keeps because they worked.",
     more: [
