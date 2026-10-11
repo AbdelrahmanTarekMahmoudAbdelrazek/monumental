@@ -326,7 +326,7 @@ export class HospitalAudio {
   }
   /** Someone in pain: a long low groan that swells, catches, and fades. */
   private moan(p: AudioNode) {
-    const t0 = this.ctx.currentTime, female = Math.random() < 0.4, f0 = female ? 190 + Math.random() * 40 : 98 + Math.random() * 30;
+    const t0 = this.ctx.currentTime, female = false, f0 = female ? 190 + Math.random() * 40 : 98 + Math.random() * 30;
     const d = 1.6 + Math.random() * 1.8;
     const vowel: [number, number, number][] = Math.random() < 0.5 ? [[480, 7, 1.3], [820, 8, 0.7], [2600, 8, 0.15]] : [[640, 7, 1.2], [1100, 8, 0.6], [2500, 8, 0.15]];
     this.voice(p, t0, d, f0, [[0, 0.95], [0.3, 1.1], [0.55, 1.02], [0.7, 1.16], [1, 0.82]], vowel, 0.35, { vib: 0.03, breath: 0.35, rough: 0.25, attack: 0.5 });

@@ -15,13 +15,44 @@ export type ClipName = (typeof CLIP_FILES)[number];
 /** Which real person plays each teen. */
 export const TEEN_CHARACTER: Record<EchoTeenId, CharacterName> = { maya: "megan", theo: "bryce", sam: "josh", nora: "kate" };
 
-export interface RealPeople { chars: Partial<Record<CharacterName, THREE.Group>>; clips: Partial<Record<ClipName, THREE.AnimationClip>> }
+export interface RealPeople {
+  chars: Partial<Record<CharacterName, THREE.Group>>;
+  clips: Partial<Record<ClipName, THREE.AnimationClip>>;
+  /** v37: each character's own copy of the clips, hips height scaled to its skeleton (cached). */
+  fitted?: Map<string, Partial<Record<ClipName, THREE.AnimationClip>>>;
+}
+
+/**
+ * The clips move the hips in the units and proportions of the skeleton they were recorded on. A character whose
+ * rig is built differently (the parasite) would be pushed half into the floor. Scale the hips track so that this
+ * character's hips sit, at the start of "idle", exactly where its own rest pose puts them.
+ */
+function fitClips(people: RealPeople, name: CharacterName, model: THREE.Object3D): Partial<Record<ClipName, THREE.AnimationClip>> {
+  people.fitted ??= new Map();
+  const hit = people.fitted.get(name);
+  if (hit) return hit;
+  const hips = model.getObjectByName("Hips");
+  const idle = people.clips.idle?.tracks.find((t) => t.name === "Hips.position");
+  const ref = idle ? idle.values[hipsUp] : 0;
+  const k = hips && ref ? hips.position.getComponent(hipsUp) / ref : 1;
+  const out: Partial<Record<ClipName, THREE.AnimationClip>> = {};
+  for (const [n, c] of Object.entries(people.clips) as [ClipName, THREE.AnimationClip][]) {
+    if (Math.abs(k - 1) < 0.02) { out[n] = c; continue; }
+    const cc = c.clone();
+    for (const t of cc.tracks) if (t.name === "Hips.position") { const v = t.values; for (let i = hipsUp; i < v.length; i += 3) v[i] *= k; }
+    out[n] = cc;
+  }
+  people.fitted.set(name, out);
+  return out;
+}
 let loaded: RealPeople | null = null;
 let loading: Promise<RealPeople> | null = null;
 /** The people, once loaded (null until then: the game falls back to the drawn teens). */
 export const realPeople = () => loaded;
 
 const BASE = "/echo/real/c/";
+/** Index (0, 1, 2) of the hips translation that is height. */
+let hipsUp = 1;
 /** "mixamorig:Hips" / "mixamorig2Hips" → "Hips", so every rig and every clip line up. */
 const norm = (n: string) => n.replace(/^mixamorig\d*:?/, "");
 
@@ -49,12 +80,19 @@ export function loadRealPeople(onProgress?: (f: number) => void): Promise<RealPe
       }, () => step())),
       ...CLIP_FILES.map((n) => gl.loadAsync(`${BASE}anim_${n}.glb`).then((g) => {
         const clip = g.animations[0];
+        // which of the hips' own axes is "up" in the world (Blender's export turns the armature: it is z, not y)
+        let up = 1, hn: THREE.Object3D | null = null;
+        g.scene.traverse((o) => { if (!hn && /Hips$/.test(o.name)) hn = o; });
+        const hp = (hn as THREE.Object3D | null)?.parent;
+        if (hp) { g.scene.updateMatrixWorld(true); const q = new THREE.Quaternion(); hp.getWorldQuaternion(q); const u = new THREE.Vector3(0, 1, 0).applyQuaternion(q.invert()); const a = [Math.abs(u.x), Math.abs(u.y), Math.abs(u.z)]; up = a.indexOf(Math.max(...a)); }
+        hipsUp = up;
         if (clip) {
           clip.name = n;
           for (const t of clip.tracks) t.name = norm(t.name);
           // only the hips may move the body; "in place" clips keep it on the spot
           clip.tracks = clip.tracks.filter((t) => !t.name.endsWith(".position") || t.name.startsWith("Hips."));
-          if (n !== "dying") for (const t of clip.tracks) if (t.name === "Hips.position") { const v = t.values; for (let i = 0; i < v.length; i += 3) { v[i] = 0; v[i + 2] = 0; } }
+          // "in place": the hips keep their height but not their travel (v37: the two level axes, whichever they are)
+          if (n !== "dying") for (const t of clip.tracks) if (t.name === "Hips.position") { const v = t.values; for (let i = 0; i < v.length; i += 3) for (let k = 0; k < 3; k++) if (k !== up) v[i + k] = 0; }
           out.clips[n] = clip;
         }
         step();
@@ -81,7 +119,7 @@ export class RealBody {
     this.model.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = shadows; m.receiveShadow = shadows; m.frustumCulled = false; } });
     this.root.add(this.model);
     this.mixer = new THREE.AnimationMixer(this.model);
-    for (const [k, c] of Object.entries(people.clips) as [ClipName, THREE.AnimationClip][]) this.actions.set(k, this.mixer.clipAction(c));
+    for (const [k, c] of Object.entries(fitClips(people, name, this.model)) as [ClipName, THREE.AnimationClip][]) this.actions.set(k, this.mixer.clipAction(c));
   }
 
   /** Cross-fade to a clip. `once`: play it a single time and hold the last frame. */

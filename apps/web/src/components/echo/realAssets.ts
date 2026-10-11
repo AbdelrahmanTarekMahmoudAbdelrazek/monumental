@@ -73,8 +73,8 @@ export async function loadRealSounds(ctx: BaseAudioContext): Promise<Partial<Rec
  */
 export const HORROR_GROUPS = {
   child: ["baby_cry_corridor_582341", "ghost_child_crying_216051", "child_scared_172731", "children_crying_203508", "child_giggle_203230", "creepy_girl_laugh_652992"],
-  moan: ["woman_moan_384214", "breathing_heavy_534473", "boy_frightened_260186"],
-  scream: ["woman_scream_219856", "woman_shriek_320740", "woman_fear_319258", "man_scream_221544", "weird_scream_353086"],
+  moan: ["boy_frightened_260186"],
+  scream: ["woman_scream_219856", "woman_shriek_320740", "man_scream_221544", "weird_scream_353086"],
   door: ["door_creak_219499", "door_creak2_219492", "door_creak_long_168650"],
   slam: ["metal_door_slam_48980", "heavy_door_406197", "jail_door_80449", "metal_impact_530486", "body_fall_heavy_504626"],
   rattle: ["chains_370877", "glass_break_141563", "body_fall_417994"],

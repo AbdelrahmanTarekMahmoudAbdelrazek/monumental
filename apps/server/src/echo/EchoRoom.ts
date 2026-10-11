@@ -924,12 +924,13 @@ export class EchoRoom {
         // the friend it is pretending to be turns up: it slips away before anyone sees two of them
         const real = this.practice ? undefined : this.alive().find((m) => m.n === mm.as);
         if (real && this.los(real.x, real.z, mm.x, mm.z, 16)) { this.calm(mm, t); mm.path = echoPath(this.tileOf(mm), this.farTile(10)); break; }
-        if (t - mm.followSince > COPY.PATIENCE_SEC * 1000) { this.calm(mm, t); mm.path = echoPath(this.tileOf(mm), this.farTile(10)); break; }
+        if (!this.practice && t - mm.followSince > COPY.PATIENCE_SEC * 1000) { this.calm(mm, t); mm.path = echoPath(this.tileOf(mm), this.farTile(10)); break; }
         // their back is turned and nobody else is watching: it closes in, quietly
         const away = this.lookAway(target, mm.x, mm.z);
         const witness = this.open().some((m) => m !== target && this.los(m.x, m.z, mm.x, mm.z, 14));
         const ready = t - mm.followSince > COPY.FOLLOW_MIN_SEC * 1000 && !witness;
-        if (ready && away > 1.75) {
+        // practice: you came to be hunted — after a few seconds at your side it goes for you even face to face
+        if (ready && (away > 1.75 || (this.practice && t - mm.followSince > 8000))) {
           if (d < 3.2) { this.reveal(mm, target, t); break; }
           mm.path = [];
           this.stepTo(mm, target.x, target.z, COPY.WALK, dt);

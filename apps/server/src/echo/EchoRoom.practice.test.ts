@@ -108,3 +108,19 @@ describe("v36 name called", () => {
     expect(said).toBe(true);
   });
 });
+
+describe("v37 practice attacks", () => {
+  it("even face to face, the practice Copy goes for you after a few seconds at your side", () => {
+    const x = solo();
+    x.r.act("a", { type: "practice" }); x.r.act("a", { type: "enter" });
+    x.run(20);
+    const d = x.r.debug();
+    const [me] = d.members, mm = d.mimics[0];
+    me.torch = false;
+    // it stands 2 m in front of me and I look straight at it
+    Object.assign(mm, { x: me.x, z: me.z - 2, state: "follow", target: me.n, followSince: x.now(), path: [] });
+    me.yaw = 0;
+    x.run(20);
+    expect(x.events.some((e) => e.type === "taken" || e.type === "reveal")).toBe(true);
+  });
+});

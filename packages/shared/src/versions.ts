@@ -9,6 +9,16 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 38, name: "Feet on the Floor", date: "2026-10",
+    big: "Everyone stands on the floor again: the Copy, your friends and the lobby preview were sunk to the waist — now full height.",
+    more: [
+      "Fixed: animations pushed every real character about a metre into the floor (only chest and face showed)",
+      "The Copy creature is full size, feet on the ground, when it runs at you",
+      "Practice: the Copy now attacks you even face to face after a few seconds at your side, and never gives up and wanders off",
+      "Removed the woman's moaning sounds; the screams stay",
+    ],
+  },
+  {
     v: 37, name: "Real Screams", date: "2026-10",
     big: "The hospital sounds real now: 52 recorded sounds — crying children, screams, moans, doors, whispers behind you and the creature's shriek.",
     more: [
