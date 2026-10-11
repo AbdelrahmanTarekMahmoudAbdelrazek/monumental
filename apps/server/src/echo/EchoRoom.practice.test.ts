@@ -179,3 +179,35 @@ describe("v40 learning from a match", () => {
     expect(copyBrain.stats.matches).toBe(before + 1); // Ann's moves only: Bob opted out
   });
 });
+
+describe("v42 conversation", () => {
+  it("answers, in a friend's voice, when you finish saying something — most of the time", () => {
+    let t = 1_000_000;
+    const events: EchoEvent[] = [];
+    const r = new EchoRoom("TALK", "a", { meta: () => {}, snap: () => {}, event: (e) => events.push(e), onIdle: () => {} }, () => t, mulberry32(21));
+    r.wakeSec = 1;
+    r.join("a", "Ann"); r.join("b", "Bob");
+    r.act("a", { type: "enter" }); r.act("b", { type: "enter" });
+    const step = (n: number) => { for (let i = 0; i < n; i++) { t += 50; r.step(); } };
+    step(40);
+    const d = r.debug();
+    const [ann, bob] = d.members;
+    Object.assign(bob, { x: ann.x + 40 });
+    for (let i = 0; i < 20; i++) r.clip("b", i, 1000 + i * 30, i % 3 ? ["short", "part"] : ["long"]);
+    for (const c of d.clips.values()) c.have.add(1);
+    const mm = d.mimics[0];
+    let answers = 0;
+    for (let k = 0; k < 10; k++) {
+      Object.assign(mm, { as: 2, x: ann.x + 3, z: ann.z, state: "wander", path: [], nextHunt: t + 999_999, nextFetch: t + 999_999, speakingUntil: 0, pendingSay: null });
+      const s = { x: ann.x, y: 0, z: ann.z, yaw: 0, pitch: 0, torch: false, crouch: false };
+      r.state("a", { ...s, talk: true, seq: 2 * k });
+      step(20); // she talks for a second
+      t += 50; r.state("a", { ...s, talk: false, seq: 2 * k + 1 });
+      const before = events.filter((e) => e.type === "say").length;
+      step(40); // two seconds
+      if (events.filter((e) => e.type === "say").length > before) answers++;
+      t += 4000;
+    }
+    expect(answers).toBeGreaterThanOrEqual(5);
+  });
+});

@@ -418,7 +418,7 @@ export interface EchoPeerState {
 export const ECHO_TALK = 8;
 export const ECHO_RADIO = 16;
 /** The mimic speaks on Channel 4 now and then, with a stolen voice. */
-export const RADIO = { FIRST_SEC: 20, GAP_MIN: 22, GAP_MAX: 45 } as const;
+export const RADIO = { FIRST_SEC: 15, GAP_MIN: 12, GAP_MAX: 26 } as const;
 
 export function decodeEchoSnap(s: EchoSnap): EchoPeerState[] {
   return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2, talk: (r[6] & 8) === 8, radio: (r[6] & 16) === 16, hidden: (r[6] & 32) === 32, armed: (r[6] & 64) === 64 }));
@@ -504,7 +504,7 @@ export const COPY = {
 } as const;
 
 /** What a voice piece is about. Text tags need the optional speech-to-text; the others come from the sound itself. */
-export type ClipTag = "short" | "long" | "loud" | "call" | "here" | "found" | "panic" | "question" | "laugh" | `name:${number}`;
+export type ClipTag = "short" | "long" | "loud" | "call" | "here" | "found" | "panic" | "question" | "laugh" | "part" | `name:${number}`;
 
 /** A voice piece as the server knows it: labels only, never audio. */
 export interface ClipInfo {

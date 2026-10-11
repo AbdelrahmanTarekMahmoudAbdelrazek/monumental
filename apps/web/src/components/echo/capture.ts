@@ -7,13 +7,19 @@ export interface Piece {
   ms: number;
   peak: number;
   endedAt: number;
+  /** v42: a phrase cut out of a longer piece at a pause (the Copy stitches these into new sentences). */
+  part?: boolean;
+  /** v42: the pitch rose at the end — probably a question (no speech-to-text needed). */
+  question?: boolean;
+  /** v42: loud before levelling (a call or a shout). */
+  loud?: boolean;
 }
 
 const RATE = MIMIC.RATE;
 const FRAME = RATE / 50; // 20 ms
 const PRE_ROLL = 8; // frames kept from just before speech starts (160 ms: the first consonant survives)
 const HANG = 18; // frames of quiet that end a piece (~360 ms: a short breath doesn't cut a phrase in half)
-const MIN_MS = 800;
+const MIN_MS = 400; // v42: short pieces too — names, "yeah?", "here!" are the best lures
 /** Pieces are levelled to this loudness (RMS), like a voice at talking distance. */
 const TARGET_RMS = 0.11;
 /** At least this share of a piece must be speech (not breath, a click or room noise). */
@@ -46,6 +52,7 @@ export class VoiceCapture {
   private fi = 0;
   private recent: Float32Array[] = [];
   private current: Float32Array[] | null = null;
+  private flags: boolean[] = [];
   private voiced = 0;
   private quiet = 0;
   private loud = 0;
@@ -106,10 +113,11 @@ export class VoiceCapture {
       this.recent.push(f);
       if (this.recent.length > PRE_ROLL) this.recent.shift();
       this.loud = speaking ? this.loud + 1 : 0;
-      if (this.loud >= 2) { this.current = [...this.recent]; this.recent = []; this.quiet = 0; this.voiced = 2; }
+      if (this.loud >= 2) { this.current = [...this.recent]; this.flags = this.recent.map((_, i) => i >= this.recent.length - 2); this.recent = []; this.quiet = 0; this.voiced = 2; }
       return;
     }
     this.current.push(f);
+    this.flags.push(speaking);
     if (speaking) this.voiced++;
     this.quiet = speaking ? 0 : this.quiet + 1;
     const frames = this.current.length;
@@ -117,32 +125,85 @@ export class VoiceCapture {
   }
 
   private finish() {
-    const frames = this.current!;
+    const frames = this.current!, flags = this.flags;
     this.current = null;
+    this.flags = [];
     this.loud = 0;
     // trim the trailing quiet, keep a short tail so it doesn't sound cut off
     const keep = Math.max(1, frames.length - Math.max(0, this.quiet - 4));
-    const used = frames.slice(0, keep);
+    const used = frames.slice(0, keep), uf = flags.slice(0, keep);
     const ms = used.length * 20;
-    if (ms < MIN_MS || this.voiced / used.length < MIN_VOICED) return;
+    const voiced = uf.filter(Boolean).length / Math.max(1, uf.length);
+    if (ms < MIN_MS || voiced < (ms < 800 ? 0.55 : MIN_VOICED)) return;
+    const now = performance.now();
+    const main = this.make(used, false, now);
+    if (!main) return;
+    main.question = risingEnd(used, uf);
+    this.onPiece(main);
+    // v42: phrases inside it, split at pauses of 200 ms or more — more, shorter pieces to answer and stitch with
+    const cuts: [number, number][] = [];
+    let start = 0, run = 0;
+    for (let i = 0; i < uf.length; i++) {
+      if (!uf[i]) run++; else { if (run >= 10 && i - run > start) { cuts.push([start, i - run + 3]); start = Math.max(0, i - 3); } run = 0; }
+    }
+    cuts.push([start, uf.length]);
+    if (cuts.length < 2 || cuts.length > 4) return;
+    for (const [a, b] of cuts) {
+      const seg = used.slice(a, b), sf = uf.slice(a, b);
+      if (seg.length * 20 < MIN_MS || sf.filter(Boolean).length / sf.length < 0.55) continue;
+      const p = this.make(seg, true, now);
+      if (p) { p.question = risingEnd(seg, sf); this.onPiece(p); }
+    }
+  }
+
+  /** Join frames into a levelled, faded piece. */
+  private make(used: Float32Array[], part: boolean, endedAt: number): Piece | null {
     const pcm = new Float32Array(used.length * FRAME);
     used.forEach((fr, i) => pcm.set(fr, i * FRAME));
     let peak = 0, sq = 0;
     for (const v of pcm) { peak = Math.max(peak, Math.abs(v)); sq += v * v; }
-    // level it: quiet mumbles and shouts both come back at talking loudness, never clipped
     const rms = Math.sqrt(sq / pcm.length);
+    const loud = rms > Math.max(0.09, this.floor * 30);
+    // level it: quiet mumbles and shouts both come back at talking loudness, never clipped
     const g = Math.min(4, TARGET_RMS / Math.max(1e-4, rms), 0.95 / Math.max(1e-4, peak));
     for (let i = 0; i < pcm.length; i++) pcm[i] *= g;
     peak *= g;
     // gentle fade in/out against clicks (8 ms)
     const fade = Math.round(RATE * 0.008);
     for (let i = 0; i < fade && i < pcm.length; i++) { pcm[i] *= i / fade; pcm[pcm.length - 1 - i] *= i / fade; }
-    this.onPiece({ id: this.nextId++, pcm, ms, peak, endedAt: performance.now() });
+    return { id: this.nextId++, pcm, ms: used.length * 20, peak, endedAt, part, loud };
   }
 
   stop() {
     try { this.src?.disconnect(); this.node?.disconnect(); this.sink?.disconnect(); } catch { /* already gone */ }
   }
+}
+
+/** Pitch (Hz) of a 40 ms window by autocorrelation at half rate (cheap), or 0 if unvoiced. */
+function pitch(full: Float32Array): number {
+  const R2 = RATE / 2, x = new Float32Array(full.length >> 1);
+  for (let i = 0; i < x.length; i++) x[i] = (full[2 * i] + full[2 * i + 1]) * 0.5;
+  const lo = Math.floor(R2 / 400), hi = Math.floor(R2 / 75);
+  let e0 = 0; for (let i = 0; i < x.length; i++) e0 += x[i] * x[i];
+  if (e0 < 1e-6) return 0;
+  let best = 0, bl = 0;
+  for (let l = lo; l <= hi; l++) { let c = 0; for (let i = 0; i + l < x.length; i++) c += x[i] * x[i + l]; c /= e0; if (c > best) { best = c; bl = l; } }
+  return best > 0.45 ? R2 / bl : 0;
+}
+/** v42: does the voice rise at the end (a question), compared with the rest of the phrase? */
+function risingEnd(frames: Float32Array[], flags: boolean[]): boolean {
+  const f0: number[] = [];
+  const step = Math.max(1, Math.ceil(frames.length / 70)); // at most ~70 windows per piece
+  for (let i = 0; i + 1 < frames.length; i += step) {
+    if (!flags[i] || !flags[i + 1]) { f0.push(0); continue; }
+    const w = new Float32Array(FRAME * 2); w.set(frames[i]); w.set(frames[i + 1], FRAME);
+    f0.push(pitch(w));
+  }
+  const v = f0.map((p, i) => [p, i] as const).filter(([p]) => p > 0);
+  if (v.length < 8) return false;
+  const cut = Math.floor(v.length * 0.75);
+  const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+  return med(v.slice(cut).map(([p]) => p)) > med(v.slice(0, cut).map(([p]) => p)) * 1.12;
 }
 
 type Rec = { lang: string; continuous: boolean; interimResults: boolean; start: () => void; stop: () => void; onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };

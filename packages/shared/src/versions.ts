@@ -9,6 +9,19 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 42, name: "Never Quiet", date: "2026-10",
+    big: "The Copy holds a conversation: when you finish talking it answers in a friend's voice about half a second later — and it makes new sentences out of their words.",
+    more: [
+      "Conversation: it hears every time someone near it stops talking and answers most of the time, at human speed",
+      "It hears questions without speech-to-text: when your voice rises at the end, it answers instead of chatting",
+      "New sentences: your speech is also cut at the pauses into short phrases, and it stitches phrases into things you never said in that order",
+      "Short pieces count now: names, \"yeah?\", \"here!\" (from 0.4 s)",
+      "It never runs out: pieces come back after a minute and a quarter instead of being used up",
+      "It talks 2–3× more often everywhere: calling from the dark, chatting while it walks with you, and on the radio",
+      "Practice: it stays at your side longer (about 14 s) talking with you before it attacks, and comes back for you sooner",
+    ],
+  },
+  {
     v: 41, name: "Smooth 60", date: "2026-10",
     big: "Echo Halls aims for a steady 60 fps: it only draws what you can see and adjusts its own quality to hold the frame rate.",
     more: [

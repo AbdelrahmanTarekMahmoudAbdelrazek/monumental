@@ -19,6 +19,10 @@ interface Member {
   torch: boolean;
   crouch: boolean;
   talk: boolean;
+  /** v42: their last turn of speech (from the talk light): when it started and ended. */
+  turnStart?: number;
+  turnEnd?: number;
+  turnLen?: number;
   radio: boolean;
   look: EchoLook;
   /** Clicked "Enter" (past the lobby). */
@@ -57,6 +61,8 @@ interface Clip extends ClipInfo {
   at: number;
   have: Set<number>;
   used: boolean;
+  /** v42: when it was last played (pieces come back after a while instead of being used up). */
+  usedAt?: number;
   /** v36: who heard this take live (they would recognise it), and how many fuses were in when it was said. */
   heardBy?: Set<number>;
   placedThen?: number;
@@ -103,6 +109,8 @@ interface Mimic {
   gait: number;
   /** v39: the real movement it is replaying (see motion.ts). */
   /** v40: this attempt's choices (from the long memory) and the moves it used, for credit when it ends. */
+  /** v42: the last turn of speech it reacted to. */
+  turnSeen?: number;
   ep?: { arms: Record<Decision, string>; used: number[]; made: { k: "look" | "stop"; yaw: number[]; pitch: number[] } | null; attacked: boolean };
   /** v39: a fuse it is going for (loose on the floor, or one already in the box). */
   fetch?: { fuse: number; box: boolean } | null;
@@ -236,7 +244,7 @@ export class EchoRoom {
     this.nextRadio = t + ((RADIO.GAP_MIN + this.rnd() * (RADIO.GAP_MAX - RADIO.GAP_MIN)) * 1000) / this.fury();
     const others = this.members.length - 1;
     // a piece everyone else already has, preferably a whole phrase, not used before; in the voice of a face it wears if it can
-    const ok = [...this.clips.values()].filter((c) => !c.used && c.have.size >= others && c.ms >= 700 && this.members.some((m) => m.n === c.owner && !m.gone));
+    const ok = [...this.clips.values()].filter((c) => (!c.used || t - (c.usedAt ?? 0) > 75_000) && c.have.size >= others && c.ms >= 700 && this.members.some((m) => m.n === c.owner && !m.gone));
     if (!ok.length) return;
     const faces = new Set(this.mimics.map((mm) => mm.as));
     const worn = ok.filter((c) => faces.has(c.owner));
@@ -244,7 +252,7 @@ export class EchoRoom {
     const long = base.filter((c) => c.ms >= 1300);
     const pool = long.length ? long : base;
     const c = pool[Math.floor(this.rnd() * pool.length)];
-    c.used = true;
+    c.used = true; c.usedAt = t;
     this.voices.set(c.owner, (this.voices.get(c.owner) ?? 0) + 1);
     this.ev.event({ type: "radio", clips: [c.key], as: c.owner });
   }
@@ -598,7 +606,10 @@ export class EchoRoom {
     m.pitch = Math.max(-1.6, Math.min(1.6, s.pitch));
     m.torch = s.torch;
     m.crouch = s.crouch;
+    const wasTalking = m.talk;
     m.talk = !!s.talk;
+    if (m.talk && !wasTalking) m.turnStart = t;
+    if (!m.talk && wasTalking && m.turnStart) { m.turnEnd = t; m.turnLen = t - m.turnStart; }
     m.radio = !!s.radio;
     // inside a locker you can look through the slits, not walk
     if (m.hidden !== null) { m.torch = false; m.at = t; return false; }
@@ -851,6 +862,7 @@ export class EchoRoom {
     }
     if (mm.state !== "flee" && this.torchCheck(mm, dt, t)) return;
     this.listen(mm, t);
+    this.converse(mm, t);
     // a face nobody plays any more: swap it when unseen
     if (!mimicRevealed(mm.state) && (!mm.as || !this.members.some((m) => m.n === mm.as)) && this.canChangeFace(mm)) this.disguise(mm, this.members.find((m) => m.n === mm.target) ?? null);
     // the lift is coming: every Copy goes to stand with the group
@@ -896,9 +908,9 @@ export class EchoRoom {
           break;
         }
         // v39: out of sight but within earshot it talks like a player calling out to the others
-        if (!mm.pendingSay && t > mm.speakingUntil + 14_000 / this.talkK(mm) && this.rnd() < (dt / 5) * this.talkK(mm)) {
-          const ear = this.open().filter((m) => this.other(mm, m) && Math.hypot(m.x - mm.x, m.z - mm.z) < 16 && !this.los(m.x, m.z, mm.x, mm.z, 16)).sort((a, b) => Math.hypot(a.x - mm.x, a.z - mm.z) - Math.hypot(b.x - mm.x, b.z - mm.z))[0];
-          if (ear) this.say(mm, t, this.pick(ear, mm.as, "call", true, mm), 200);
+        if (!mm.pendingSay && t > mm.speakingUntil + 6_000 / this.talkK(mm) && this.rnd() < (dt / 2) * this.talkK(mm)) {
+          const ear = this.open().filter((m) => this.other(mm, m) && Math.hypot(m.x - mm.x, m.z - mm.z) < 15).sort((a, b) => Math.hypot(a.x - mm.x, a.z - mm.z) - Math.hypot(b.x - mm.x, b.z - mm.z))[0];
+          if (ear) this.say(mm, t, this.pick(ear, mm.as, this.rnd() < 0.6 ? "call" : "chat", true, mm), 200);
         }
         // hurries only where nobody can see it
         this.walk(mm, this.watched(mm.x, mm.z, 22) ? COPY.WALK : COPY.HURRY, dt);
@@ -933,7 +945,7 @@ export class EchoRoom {
         // close and in sight: walk up like a friend would
         if (d < 8 && seen) { mm.state = "follow"; mm.followSince = t; mm.path = []; break; }
         // calls out in the stolen voice from around the corner
-        if (!seen && d < 16 && !mm.pendingSay && t > mm.speakingUntil + 5000) this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 300);
+        if (!seen && d < 20 && !mm.pendingSay && t > mm.speakingUntil + 2600) this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 300);
         const goal: [number, number] = [echoTileOf(target.x), echoTileOf(target.z)];
         const last = mm.path[mm.path.length - 1];
         if (!last || last[0] !== goal[0] || last[1] !== goal[1]) mm.path = echoPath(this.tileOf(mm), goal);
@@ -953,7 +965,7 @@ export class EchoRoom {
         const witness = this.open().some((m) => m !== target && this.los(m.x, m.z, mm.x, mm.z, 14));
         const ready = t - mm.followSince > COPY.FOLLOW_MIN_SEC * 1000 && !witness;
         // practice: you came to be hunted — after a few seconds at your side it goes for you even face to face
-        if (ready && (away > 1.75 || (this.practice && t - mm.followSince > 8000))) {
+        if (ready && (away > 1.75 || (this.practice && t - mm.followSince > 14_000))) {
           if (d < Number(mm.ep?.arms.attackAt ?? 3.2)) { this.reveal(mm, target, t); break; }
           mm.path = [];
           this.stepTo(mm, target.x, target.z, COPY.WALK, dt);
@@ -978,13 +990,13 @@ export class EchoRoom {
         if (target.askedAt > t - 1500 && !mm.pendingSay && t > mm.speakingUntil + 1500) {
           this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), (MIMIC.REPLY_MIN + this.rnd() * (MIMIC.REPLY_MAX - MIMIC.REPLY_MIN)) * 1000);
           target.askedAt = 0;
-        } else if ((target.spokeAt ?? 0) > t - 900 && !target.talk && !mm.pendingSay && t > mm.speakingUntil + 4500) {
+        } else if ((target.spokeAt ?? 0) > t - 900 && !target.talk && !mm.pendingSay && t > mm.speakingUntil + 2500) {
           // v36: they said something (no words known): it answers, the way a friend says "yeah" back (decided once per thing said)
-          if (this.rnd() < Math.min(0.95, (this.practice ? 0.75 : 0.6) * this.talkK(mm))) this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), 450 + this.rnd() * 500);
+          if (this.rnd() < Math.min(0.97, (this.practice ? 0.9 : 0.85) * this.talkK(mm))) this.say(mm, t, this.pick(target, mm.as, "chat", true, mm), this.replyDelay());
           target.spokeAt = 0;
-        } else if (!target.talk && !mm.pendingSay && t > mm.speakingUntil + 11_000 / this.talkK(mm) && t - (target.spokeAt || 0) > 2500 && this.rnd() < (dt / 4) * this.talkK(mm)) {
+        } else if (!target.talk && !mm.pendingSay && t > mm.speakingUntil + 5_500 / this.talkK(mm) && t - (target.spokeAt || 0) > 2500 && this.rnd() < (dt / 1.6) * this.talkK(mm)) {
           // v39: a friend walking with you talks now and then on their own ("come on", "this way", your name)
-          this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 200);
+          this.say(mm, t, this.pick(target, mm.as, this.rnd() < 0.5 ? "chat" : "call", true, mm), 200);
         }
         break;
       }
@@ -1181,8 +1193,8 @@ export class EchoRoom {
     }
     this.takeFor(mm, target, t, false);
     this.reward(mm, 1);
-    this.flee(mm, t, 10);
-    mm.nextHunt = t + 25_000;
+    this.flee(mm, t, this.practice ? 5 : 10);
+    mm.nextHunt = t + (this.practice ? 7_000 : 25_000); // practice: it comes back for you soon
     this.pushMeta();
   }
 
@@ -1265,15 +1277,18 @@ export class EchoRoom {
    * Which voice pieces to play at `target`, in `owner`'s voice (the face it wears). Only pieces the target's device holds, never reused.
    * call: their name + "come here" / a call / "found it"; answer: "here" / a short phrase.
    */
-  private pick(target: Member, owner: number, kind: "call" | "answer", commit = true, from?: { x: number; z: number }): string[] {
+  private pick(target: Member, owner: number, kind: "call" | "answer" | "chat", commit = true, from?: { x: number; z: number }): string[] {
     // v36: everyone close enough to hear it must hold the piece — a friend beside the target must not see a mouth move in silence
+    const t0 = this.now();
     const ears = from ? this.open().filter((m) => m === target || Math.hypot(m.x - from.x, m.z - from.z) < ECHO.VOICE_RANGE + 2) : [target];
-    const pool = [...this.clips.values()].filter((c) => (!c.used || this.practice) && c.owner === owner && (this.practice || c.owner !== target.n) && ears.every((e) => c.have.has(e.n)));
+    const pool = [...this.clips.values()].filter((c) => (!c.used || this.practice || t0 - (c.usedAt ?? 0) > 75_000) && c.owner === owner && (this.practice || c.owner !== target.n) && ears.every((e) => c.have.has(e.n)));
     if (!pool.length) return [];
     // v36: score every piece for what it has to do, and stay quiet rather than play a bad one
     const t = this.now();
-    const W: Record<string, number> = kind === "answer" ? { here: 4, short: 2, call: 1, question: -3, panic: -2, laugh: -2 } : { call: 3, found: 2, here: 1, question: 1, panic: -1, laugh: -2 };
-    const ideal = kind === "answer" ? 900 : 1500;
+    const W: Record<string, number> = kind === "answer" ? { here: 4, short: 2, call: 1, question: -3, panic: -2, laugh: -2 }
+      : kind === "chat" ? { part: 1, short: 1, long: 1, call: 0.5, here: 0.5, question: 1, laugh: 0.5, panic: -1 }
+      : { call: 3, found: 2, here: 1, question: 1, panic: -1, laugh: -2 };
+    const ideal = kind === "answer" ? 900 : kind === "chat" ? 1300 : 1500;
     const score = (c: Clip) => {
       let v = 0;
       for (const tag of c.tags) v += W[tag] ?? 0;
@@ -1299,7 +1314,12 @@ export class EchoRoom {
       const call = name ? ranked.find((r) => r.v > 1 && r.c !== name && r.c.tags.includes("call") && Math.abs(r.c.at - name.at) < 20_000 && name.ms + r.c.ms < 4000)?.c : null;
       if (name && call) chosen = [name, call];
     }
-    if (commit) chosen.forEach((c) => { c.used = true; });
+    // v42: new sentences — pieces said within the same minute, stitched into something they never said in that order
+    if (kind === "chat" && chosen.length === 1 && this.rnd() < 0.55 * this.talkKOwner) {
+      const more = ranked.filter((r) => r.c !== best.c && r.v > best.v - 3 && Math.abs(r.c.at - best.c.at) < 60_000 && r.c.ms + best.c.ms < 4200).slice(0, 4);
+      if (more.length) { const x = more[Math.floor(this.rnd() * more.length)].c; chosen = this.rnd() < 0.5 ? [best.c, x] : [x, best.c]; }
+    }
+    if (commit) chosen.forEach((c) => { c.used = true; c.usedAt = this.now(); });
     return chosen.map((c) => c.key);
   }
 
@@ -1348,6 +1368,29 @@ export class EchoRoom {
   /** v40: a new attempt — choose its tricks from what has worked before. */
   private newEpisode(mm: Mimic) {
     mm.ep = { arms: { attackAt: copyBrain.choose("attackAt", this.rnd), fuses: copyBrain.choose("fuses", this.rnd), talk: copyBrain.choose("talk", this.rnd) }, used: [], made: null, attacked: false };
+  }
+  /** v42: how long a person waits before answering (about half a second, human spread) plus a hair. */
+  private replyDelay() {
+    const g = Math.sqrt(-2 * Math.log(Math.max(1e-6, this.rnd()))) * Math.cos(2 * Math.PI * this.rnd());
+    return Math.min(1300, Math.max(300, Math.exp(Math.log(550) + 0.35 * g))) + 200;
+  }
+  private talkKOwner = 1;
+  /**
+   * v42: conversation. Whenever someone near it finishes saying something (their talk light goes out), it may answer
+   * — like a friend in the conversation. A question gets an answer-like piece; anything else gets chat.
+   */
+  private converse(mm: Mimic, t: number) {
+    if (mimicRevealed(mm.state) || mm.state === "dormant" || mm.pendingSay || t < mm.speakingUntil + 1800 || mm.carry !== null) return;
+    for (const m of this.open()) {
+      const end = m.turnEnd ?? 0;
+      if (!end || t - end > 400 || end <= (mm.turnSeen ?? 0) || (m.turnLen ?? 0) < 350) continue;
+      mm.turnSeen = end;
+      if (!this.other(mm, m) || Math.hypot(m.x - mm.x, m.z - mm.z) > ECHO.VOICE_RANGE) continue;
+      const asked = t - m.askedAt < 2500;
+      this.talkKOwner = this.talkK(mm);
+      if (this.rnd() < Math.min(0.95, 0.7 * this.talkK(mm))) this.say(mm, t, this.pick(m, mm.as, asked ? "answer" : "chat", true, mm), this.replyDelay());
+      return;
+    }
   }
   /** How chatty this attempt is. */
   private talkK(mm: Mimic) { const a = mm.ep?.arms.talk; return a === "quiet" ? 0.55 : a === "chatty" ? 1.8 : 1; }

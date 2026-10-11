@@ -363,7 +363,9 @@ export class EchoEngine {
     if (!stream || this.capture) return;
     this.capture = new VoiceCapture(this.sounds.ctx, stream, (p) => {
       const tags: ClipTag[] = [p.ms <= 1200 ? "short" : "long"];
-      if (p.peak > 0.5) tags.push("loud");
+      if (p.loud) tags.push("loud");
+      if (p.part) tags.push("part");
+      if (p.question) tags.push("question");
       this.voice.shareMine(p.id, p.pcm, p.ms, tags);
       this.opts.net.sendClip({ id: p.id, ms: p.ms, tags });
       this.myPieces.push({ id: p.id, endedAt: p.endedAt });
