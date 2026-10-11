@@ -52,7 +52,8 @@
       <li><b>Hold the button (or Space) and say ONE short answer</b>, then let go: «ايوه سامعك» … «انا هنا» … «جاي» … «اه» … «متخافش انا جنبك». One phrase per press.</li>
       <li><b>Then hold and ask</b>: «سامعني؟», «انت فين؟», «تعالى», «انا خايف». It answers with your own recorded phrase.</li>
     </ol>
-    <button id="talk">Hold to talk (or hold Space)</button>
+    <button id="start" style="background:var(--ok)">1 · Start (allow the microphone once)</button>
+    <button id="talk" disabled>Hold to talk (or hold Space)</button>
     <div class="meter"><div id="lvl"></div></div>
     <div class="note">Chrome's free speech-to-text sends what you say to Google to turn it into text. The recordings of your voice stay in this tab and are forgotten when you close it.</div>
   </section>
@@ -128,35 +129,52 @@ function play(buf) {
   const s = ctx.createBufferSource(); s.buffer = buf; s.playbackRate.value = 1 + (Math.random() - 0.5) * 0.02; s.connect(ctx.destination); s.start();
 }
 
-// ── speech-to-text for exactly the time the button is held ──
+// ── speech-to-text: ONE recognition that keeps running (one permission), read per press ──
+let results = [];          // [{ text, final }] in arrival order
+let pressFrom = 0;         // results index when the press started
+let recOn = false, lastResultAt = 0;
 function startRec() {
+  if (recOn) return;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { log("copy", "No speech recognition in this browser — use Chrome or Edge."); return; }
-  finalText = ""; interimText = "";
-  rec = new SR(); rec.lang = $("lang").value; rec.continuous = true; rec.interimResults = true;
-  rec.onresult = (e) => { let f = "", i2 = ""; for (let i = 0; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) f += t + " "; else i2 += t + " "; } finalText = f.trim(); interimText = i2.trim(); };
-  recEnded = new Promise((ok) => { rec.onend = ok; rec.onerror = (e) => { if (e.error === "not-allowed") log("copy", "Microphone/speech blocked — allow it for this site in Chrome."); ok(); }; });
+  rec = new SR(); rec.lang = $("lang").value; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  let base = results.length; // this session's results are appended after the earlier ones
+  rec.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) results[base + i] = { text: e.results[i][0].transcript.trim(), final: e.results[i].isFinal };
+    lastResultAt = performance.now();
+  };
+  rec.onerror = (e) => { if (e.error === "not-allowed" || e.error === "service-not-allowed") { log("copy", "Speech recognition is blocked — open this page from your website (https), not as a file, and allow the microphone."); recOn = false; } };
+  rec.onend = () => { if (recOn) { base = results.length; try { rec.start(); } catch {} } }; // Chrome stops after a while: start again, same permission
+  recOn = true;
   try { rec.start(); } catch {}
 }
+$("lang").onchange = () => { recOn = false; try { rec?.stop(); } catch {} setTimeout(startRec, 300); };
+const textSince = (from) => results.slice(from).filter(Boolean).map((r) => r.text).join(" ").trim();
 
 // ── hold to talk ──
 async function down() {
   if (recording || busy) return;
-  try { await ensureAudio(); } catch (e) { log("copy", "Couldn't use the microphone: " + e.message); return; }
-  frames = []; recording = true; startRec();
+  try { await ensureAudio(); startRec(); } catch (e) { log("copy", "Couldn't use the microphone: " + e.message); return; }
+  frames = []; recording = true; pressFrom = results.length;
   $("talk").classList.add("on"); $("talk").textContent = "Listening… let go when you finish";
 }
 async function up() {
   if (!recording) return;
   recording = false; busy = true;
-  $("talk").classList.remove("on"); $("talk").textContent = "…";
-  await new Promise((r) => setTimeout(r, 250)); // the last syllable
-  try { rec?.stop(); } catch {}
-  await Promise.race([recEnded, new Promise((r) => setTimeout(r, 2500))]);
-  const text = (finalText || interimText).trim();
+  $("talk").classList.remove("on"); $("talk").textContent = "Understanding…";
+  // wait until the words for this press are final (or nothing new arrives for 0.9 s), at most 3 s
+  const t0 = performance.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 120));
+    const mine = results.slice(pressFrom).filter(Boolean);
+    const allFinal = mine.length && mine.every((r) => r.final);
+    if (allFinal || (mine.length && performance.now() - lastResultAt > 900) || performance.now() - t0 > 3000) break;
+  }
+  const text = textSince(pressFrom);
+  pressFrom = results.length;
   const buf = makeClip(frames);
   busy = false; $("talk").textContent = "Hold to talk (or hold Space)";
-  if (!text) { log("you", "(didn't catch that — hold a bit longer and speak clearly)"); return; }
+  if (!text) { log("you", "(didn't catch that — check the green bar moves when you talk, and keep holding until you finish the phrase)"); return; }
   const want = wantOf(text);
   if (want) {
     log("you", text, "question → it wants: " + want[0]);
@@ -164,14 +182,19 @@ async function up() {
     for (const k of want) { const c = clips.filter((x) => x.kind === k); if (c.length) { best = c[Math.floor(Math.random() * c.length)]; break; } }
     if (!best) { log("copy", "(I don't have an answer like that in your voice yet — teach me one, e.g. «ايوه سامعك» or «انا هنا»)"); }
     else { const delay = 300 + Math.random() * 350; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · answered after ${Math.round(delay)} ms`); }
-    // a question can also be learned (the Copy uses questions too)
   }
   if (buf) { const kind = kindOf(text); clips.push({ buf, text, kind }); renderMem(); if (!want) log("you", text, `learned · ${kind} · ${buf.duration.toFixed(1)} s`); }
 }
 $("talk").addEventListener("pointerdown", (e) => { e.preventDefault(); down(); });
 $("talk").addEventListener("pointerup", up); $("talk").addEventListener("pointerleave", up);
-addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat) { e.preventDefault(); down(); } });
+addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat && !$("talk").disabled) { e.preventDefault(); down(); } });
 addEventListener("keyup", (e) => { if (e.code === "Space") { e.preventDefault(); up(); } });
+
+$("start").onclick = async () => {
+  try { await ensureAudio(); startRec(); $("start").disabled = true; $("start").textContent = "Microphone on"; $("talk").disabled = false; }
+  catch (e) { log("copy", "Couldn't use the microphone: " + e.message + (location.protocol === "file:" ? " — open the page from your website (https) instead of the file." : "")); }
+};
+if (location.protocol === "file:") log("copy", "You opened this as a file: Chrome will keep asking for the microphone and speech may not work. Open it from your website instead (…/echo-voice-free.html).");
 
 // ── UI ──
 function log(cls, text, meta) {
