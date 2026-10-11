@@ -38,7 +38,7 @@
 <main>
   <div>
     <h1>The Copy · free prototype</h1>
-    <div class="sub">It learns short phrases in your real voice, then answers your questions with them — like the Copy will with a friend's voice. Free, no key. "Google" uses Chrome's built-in speech-to-text set to Egyptian Arabic (ar-EG) — the most accurate for Egyptian. "Whisper" runs fully inside your browser (private) but is weaker on Egyptian.</div>
+    <div class="sub">It learns short phrases in your real voice, then answers your questions with them. A small meaning AI (runs in your browser) understands what you ask, even new ways of asking — like the Copy will with a friend's voice. Free, no key. "Google" uses Chrome's built-in speech-to-text set to Egyptian Arabic (ar-EG) — the most accurate for Egyptian. "Whisper" runs fully inside your browser (private) but is weaker on Egyptian.</div>
   </div>
 
   <section>
@@ -105,7 +105,7 @@ function hasF(t, ws) {
     return tw.includes(k);
   });
 }
-const isQuestion = (text, t) => /[؟?]/.test(text) || /^(انت|انتي|انتو|هو|هي|فيه|حد|هل|are|is|did|do|have|can)\s/.test(t) || has(t, ["ايه", "مين", "فين", "وين", "ليه", "امتي", "ازاي", "كام", "what", "who", "where", "why", "how", "صح"]);
+const isQuestion = (text, t) => /[؟?]/.test(text) || /ولا (لا|لأ|ايه|ايش|اي)$/.test(t) || /\S ولا \S/.test(t) || /^(انت|انتي|انتو|هو|هي|فيه|حد|هل|are|is|did|do|have|can)\s/.test(t) || has(t, ["ايه", "مين", "فين", "وين", "ليه", "امتي", "ازاي", "كام", "what", "who", "where", "why", "how", "صح"]);
 /**
  * Every question gets its OWN intent, and each intent only accepts answers that fit it.
  * «الو» wants «ايوه سامعك», «انت فين» wants «انا هنا», «عامل ايه» wants «تمام الحمد لله», «الساعه كام» wants a time or «مش عارف».
@@ -113,16 +113,16 @@ const isQuestion = (text, t) => /[؟?]/.test(text) || /^(انت|انتي|انت�
  */
 const INTENTS = [
   // id, label, how to recognise it, answers it accepts (best first), an example answer to teach
-  { id: "scared-q", label: "are you scared?", test: (t, q) => hasF(t, ["انت خايف", "انتي خايفه", "انتو خايفين", "are you scared", "are you afraid"]) || (q && hasF(t, ["خايف", "خايفه"])), want: ["notscared", "no"], teach: "لا مش خايف" },
-  { id: "scared", label: "I'm scared (comfort me)", test: (t) => hasF(t, ["انا خايف", "انا خايفه", "خايف", "الحقني", "الحقوني", "ساعدني", "i'm scared", "help me", "help"]), want: ["calm", "coming", "here"], teach: "متخافش انا جنبك" },
-  { id: "how", label: "how are you?", test: (t) => hasF(t, ["عامل ايه", "عامله ايه", "عاملين ايه", "ازيك", "ازيكم", "اخبارك", "ايه الاخبار", "انت كويس", "انت تمام", "انت بخير", "how are you", "are you ok", "you ok"]), want: ["fine"], teach: "تمام الحمد لله" },
+  { id: "scaredq", label: "are you scared?", test: (t, q) => hasF(t, ["انت خايف", "انتي خايفه", "انتو خايفين", "انت قلقان", "انت مرعوب", "are you scared", "are you afraid"]) || (q && hasF(t, ["خايف", "خايفه"])), want: ["notscared", "no"], teach: "لا مش خايف" },
+  { id: "scared", label: "I'm scared (comfort me)", test: (t) => hasF(t, ["انا خايف", "انا خايفه", "خايف", "مرعوب", "مرعوبه", "حد ورايا", "حاجه ورايا", "الحقني", "الحقوني", "ساعدني", "i'm scared", "help me", "help"]), want: ["calm", "coming", "here"], teach: "متخافش انا جنبك" },
+  { id: "doing", label: "what are you doing?", test: (t) => hasF(t, ["بتعمل ايه", "بتعملي ايه", "بتعملوا ايه", "what are you doing"]), want: ["doing", "dunno"], teach: "بدور على الفيوز" },
+  { id: "how", label: "how are you?", test: (t) => hasF(t, ["عامل ايه", "عامله ايه", "عاملين ايه", "ازيك", "ازيكم", "اخبارك", "ايه الاخبار", "انت كويس", "انت تمام", "انت بخير", "حصلك حاجه", "حصل لك حاجه", "ايه الدنيا", "how are you", "are you ok", "you ok"]), want: ["fine"], teach: "تمام الحمد لله" },
   { id: "time", label: "what time is it?", test: (t) => hasF(t, ["الساعه كام", "كام الساعه", "what time"]), want: ["time", "dunno"], teach: "مش عارف" },
   { id: "name", label: "who are you?", test: (t) => hasF(t, ["انت مين", "مين انت", "اسمك ايه", "مين معايا", "who are you", "your name"]), want: ["me", "name"], teach: "انا …" },
-  { id: "doing", label: "what are you doing?", test: (t) => hasF(t, ["بتعمل ايه", "بتعملي ايه", "بتعملوا ايه", "what are you doing"]), want: ["doing", "dunno"], teach: "بدور على الفيوز" },
-  { id: "here-q", label: "are you here?", test: (t) => hasF(t, ["انت هنا", "انتي هنا", "انت موجود", "حد هنا", "are you here", "anyone here"]), want: ["here", "yes"], teach: "ايوه انا هنا" },
+  { id: "hereq", label: "are you here?", test: (t) => hasF(t, ["انت هنا", "انتي هنا", "انت موجود", "حد هنا", "are you here", "anyone here"]), want: ["here", "yes"], teach: "ايوه انا هنا" },
   { id: "where", label: "where are you?", test: (t) => hasF(t, ["انت فين", "انتي فين", "انتو فين", "فين", "وين", "where are you", "where"]), want: ["here"], teach: "انا هنا في الممر" },
   { id: "hear", label: "can you hear me? / hello", test: (t) => hasF(t, ["سامعني", "سامعيني", "سامعنا", "حد سامع", "انت معايا", "الو", "can you hear", "hear me", "hello"]), want: ["hear-yes", "yes"], teach: "ايوه سامعك" },
-  { id: "coming-q", label: "are you coming?", test: (t) => hasF(t, ["انت جاي", "انتي جايه", "هو جاي", "انتو جايين", "جاي ولا", "are you coming"]), want: ["coming", "yes"], teach: "ايوه جاي" },
+  { id: "comingq", label: "are you coming?", test: (t) => hasF(t, ["انت جاي", "انتي جايه", "هو جاي", "هتيجي", "هتيجو", "انتو جايين", "جاي ولا", "are you coming"]), want: ["coming", "yes"], teach: "ايوه جاي" },
   { id: "come", label: "come here", test: (t) => hasF(t, ["تعالي", "تعالو", "تعالا", "come here", "follow me"]) && !hasF(t, ["من هنا", "this way"]), want: ["coming"], teach: "حاضر جاي" },
   { id: "found", label: "I found something", test: (t) => hasF(t, ["لقيت", "لقيته", "لقيتها", "i found"]), want: ["coming", "yes"], teach: "طب انا جاي" },
   { id: "saw", label: "did you see/hear it?", test: (t, q) => (q || /^(انت|انتي|انتو|حد)\s/.test(t)) && hasF(t, ["شفت", "شوفت", "سمعت", "did you see", "did you hear"]), want: ["no", "dunno", "yes"], teach: "لا مشفتش حاجه" },
@@ -144,7 +144,7 @@ function tagsOf(text) {
   if (hasF(t, ["تعالي", "تعالو", "come here", "this way", "follow me"])) g.add("come");
   if (hasF(t, ["تمام", "كويس", "كويسه", "الحمد لله", "الحمدلله", "فل", "زي الفل", "بخير", "fine", "good", "i'm ok"])) g.add("fine");
   if (/\d/.test(t) || hasF(t, ["الساعه", "واحده", "اتنين", "تلاته", "اربعه", "خمسه", "سته", "سبعه", "تمانيه", "تسعه", "عشره", "اتناشر", "ونص", "وربع", "o'clock"])) g.add("time");
-  if (/^(بدور|بعمل|مستني|بستخبي|ماشي|بجري|بحاول|looking|waiting|hiding)/.test(t) || hasF(t, ["بدور", "بعمل", "مستني", "بستخبي"])) g.add("doing");
+  if (/^(بدور|بعمل|مستني|بستخبي|بستخبى|بجري|بحاول|looking|waiting|hiding)/.test(t) || hasF(t, ["بدور", "بعمل", "مستني", "بستخبي", "بستخبى"])) g.add("doing");
   if (/^انا\s+[^\s]+$/.test(t) && !hasF(t, ["انا هنا", "انا جاي", "انا خايف"]) || hasF(t, ["اسمي", "it's me", "its me", "my name"])) g.add("me");
   if (hasF(t, ["انا هنا", "هنا", "جنبك", "اهو", "i'm here", "im here", "over here", "right here"]) || /^(انا )?(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)\s/.test(t) || hasF(t, ["الدور", "الممر", "الاوضه", "الطرقه", "السلم", "الباب", "in the", "near the", "by the"])) g.add("here");
   if (hasF(t, ["مش عارف", "معرفش", "مش فاكر", "مش متاكد", "i don't know", "dunno"])) g.add("dunno");
@@ -162,6 +162,117 @@ function fit(clip, it) {
 }
 const words = (s) => new Set(norm(s).split(" ").filter((w) => w.length > 1 && !["يا", "اسطي", "انت", "انتي", "انا", "عم", "the", "you", "a", "is", "are"].includes(w)));
 const similar = (a, b) => { let n = 0; for (const w of a) if (b.has(w)) n++; return n / Math.max(1, Math.min(a.size, b.size)); };
+
+// ── meaning by AI (multilingual-e5-small, runs in this browser) ──
+// Compares the MEANING of what you said with example sentences, so new ways of asking work too
+// («يا عم انت روحت فين» ≈ «انت فين؟»). Tested on 44 Egyptian phrasings it never saw: 41 right (keywords alone: 27).
+const BANK = {
+  hear: ["الو", "سامعني؟", "انت سامعني؟", "حد سامعني؟", "حد معايا؟", "انت معايا؟", "يا جماعه حد سامع؟", "الو الو", "سامعني كويس؟", "صوتي واصل؟", "انت سامعني ولا لا؟", "حد سامع؟", "can you hear me?", "hello?"],
+  where: ["انت فين؟", "فين يعني؟", "انت فين دلوقتي؟", "روحت فين؟", "اختفيت فين؟", "انتو فين؟", "انت في انهي اوضه؟", "مكانك فين؟", "انت في الدور الكام؟", "انت فين يا عم؟", "انت واقف فين؟", "where are you?"],
+  hereq: ["انت هنا؟", "انت لسه هنا؟", "حد هنا؟", "انت موجود؟", "انت جنبي؟", "انت قريب مني؟", "are you here?"],
+  how: ["عامل ايه؟", "ازيك؟", "اخبارك ايه؟", "انت كويس؟", "انت تمام؟", "انت بخير؟", "حصلك حاجه؟", "انت سليم؟", "ايه الاخبار؟", "انت عامل ايه دلوقتي؟", "الدنيا عامله ايه؟", "كله تمام؟", "how are you?"],
+  time: ["الساعه كام؟", "كام الساعه دلوقتي؟", "احنا بقالنا قد ايه هنا؟", "فاضل قد ايه؟", "what time is it?"],
+  name: ["انت مين؟", "مين معايا؟", "اسمك ايه؟", "مين ده؟", "مين اللي بيتكلم؟", "who are you?"],
+  doing: ["بتعمل ايه؟", "بتعمل ايه دلوقتي؟", "انت بتدور على ايه؟", "ايه اللي بتعمله؟", "what are you doing?"],
+  comingq: ["انت جاي؟", "هتيجي امتى؟", "انت جاي ولا ايه؟", "هتتاخر؟", "انت جاي ورايا؟", "جايين؟", "انت جاي ولا لا؟", "are you coming?"],
+  scaredq: ["انت خايف؟", "انت مش خايف؟", "انت مرعوب؟", "انت قلقان؟", "انت خايف ولا لا؟", "مش خايف ولا ايه؟", "are you scared?"],
+  scared: ["انا خايف", "انا مرعوب", "الحقني", "الحقوني", "ساعدني", "في حاجه ورايا", "انا لوحدي وخايف", "I'm scared", "help me"],
+  come: ["تعالى", "تعالى هنا", "تعالى بسرعه", "تعالالي", "امشي ورايا", "اتبعني", "come here"],
+  found: ["لقيت فيوز", "لقيت حاجه", "لقيت الفيوز", "لقيتها", "I found it"],
+  saw: ["شفت الوحش؟", "انت شفته؟", "سمعت الصوت ده؟", "شفت حاجه؟", "حد شاف حاجه؟", "انت شفت حاجه؟", "did you see it?"],
+  answer: ["انا هنا", "انا جاي", "ايوه", "لا", "تمام", "الحمد لله", "مش عارف", "انا في الممر", "ايوه سامعك", "متخافش", "اه", "حاضر", "لا مش خايف", "انا بدور على الفيوز", "انا جنبك", "كويس", "ماشي", "ثواني وجاي", "مشفتش حاجه", "انا عند السلم"],
+};
+/** What kinds of answers sound like — so «ماشي الحال» counts as "fine" without a keyword. */
+const ANSWERS = {
+  "hear-yes": ["ايوه سامعك", "سامعك كويس", "اه سامعك", "I can hear you"],
+  here: ["انا هنا", "انا في الممر", "انا جنبك", "انا في الاوضه اللي جنبك", "انا عند السلم", "انا تحت", "I'm here"],
+  fine: ["تمام", "الحمد لله", "كويس", "زي الفل", "ماشي الحال", "بخير", "I'm fine"],
+  time: ["الساعه اتنين", "الساعه تلاته ونص", "الساعه عشره"],
+  doing: ["بدور على الفيوز", "مستني", "بستخبى", "بدور على مخرج"],
+  coming: ["انا جاي", "جاي اهو", "حاضر", "ثواني وجاي", "I'm coming"],
+  notscared: ["لا مش خايف", "مش خايف خالص", "عادي مش خايف"],
+  calm: ["متخافش", "اهدى انا جنبك", "متقلقش", "don't worry"],
+  dunno: ["مش عارف", "معرفش", "مش متاكد", "I don't know"],
+  no: ["لا", "لأ مشفتش", "لا محدش", "no"],
+  yes: ["ايوه", "اه", "اكيد", "yes"],
+};
+let embed = null; // text[] → normalized vectors
+const ex = []; // { k, v } example sentences (the bank, plus every question you teach)
+const ansEx = []; // { k, v }
+const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+async function loadBrain(onProgress) {
+  const { pipeline } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0");
+  const fe = await pipeline("feature-extraction", "Xenova/multilingual-e5-small", { dtype: "q8", device: "wasm", progress_callback: onProgress });
+  embed = async (arr) => (await fe(arr.map((t) => "query: " + t), { pooling: "mean", normalize: true })).tolist();
+  const ks = [], ts = []; for (const [k, v] of Object.entries(BANK)) for (const t of v) { ks.push(k); ts.push(t); }
+  (await embed(ts)).forEach((v, i) => ex.push({ k: ks[i], v }));
+  const ak = [], at = []; for (const [k, v] of Object.entries(ANSWERS)) for (const t of v) { ak.push(k); at.push(t); }
+  (await embed(at)).forEach((v, i) => ansEx.push({ k: ak[i], v }));
+}
+/** Score per class: the mean of its two closest examples. */
+function scores(v, pool) {
+  const by = {}; for (const e of pool) (by[e.k] ||= []).push(dot(v, e.v));
+  const o = {}; for (const [k, a] of Object.entries(by)) { a.sort((x, y) => y - x); o[k] = (a[0] + (a[1] ?? a[0])) / 2; }
+  return o;
+}
+const customIntents = {}; // questions you asked that matched nothing known: they become new kinds of question
+const intentById = (id) => INTENTS.find((x) => x.id === id) || customIntents[id] || null;
+/**
+ * The question (or null for a statement): AI meaning + keywords + a rising voice.
+ * Returns { it, v, how } — v is the sentence's meaning vector (kept to learn from).
+ */
+async function understand(text, rising) {
+  const kw = intentOf(text), t = norm(text);
+  if (!embed) return { it: kw || (rising ? INTENTS.find((x) => x.id === "yesno") : null), v: null, how: kw ? "keywords" : rising ? "rising voice" : "" };
+  const [v] = await embed([text]);
+  const sc = scores(v, ex);
+  if (kw && sc[kw.id] !== undefined) sc[kw.id] += 0.02;
+  const ranked = Object.entries(sc).sort((a, b) => b[1] - a[1]);
+  const q = ranked.filter(([k]) => k !== "answer");
+  const [bk, bs] = ranked[0];
+  const looksQ = rising || isQuestion(text, t);
+  let id = bk;
+  if (bk === "answer" && looksQ && q[0][1] > bs - 0.02) id = q[0][0]; // a rising voice tips a close call to the question
+  if (id !== "answer" && !looksQ && !kw && sc.answer >= sc[id] - 0.03) id = "answer"; // «ده جاي»: no question signs at all
+  if (id === "answer") return { it: null, v, how: `AI: statement ${sc.answer.toFixed(2)}` };
+  // Sure only if it scores high, stands out from the next kind of question, or the keywords agree.
+  // Unknown questions («انت بتحب الكوره») come out as a near-tie between kinds — measured on real phrases.
+  const conf = sc[id], margin = conf - (q.find(([k]) => k !== id)?.[1] ?? 0);
+  const sure = conf >= 0.905 || margin >= 0.015 || (kw && kw.id === id);
+  if (!sure && kw && kw.id !== "yesno" && sc[kw.id] !== undefined && sc[kw.id] >= conf - 0.01) return { it: kw, v, how: `keywords (AI unsure ${conf.toFixed(2)})` };
+  if (!sure) { // nothing like it known: a new kind of question
+    const nid = "q:" + t; customIntents[nid] ||= { id: nid, label: `«${text}»`, want: ["yes", "no", "dunno"], teach: "…", custom: true };
+    return { it: customIntents[nid], v, how: `AI: new question (${conf.toFixed(2)})` };
+  }
+  return { it: intentById(id) || kw, v, how: `AI ${conf.toFixed(2)}${kw && kw.id === id ? " + keywords" : ""}${rising ? " + rising voice" : ""}` };
+}
+/** Answer tags: keywords, plus the AI's closest kind of answer when it's a clear match. */
+async function tagsFor(text) {
+  const g = tagsOf(text);
+  if (!embed) return g;
+  const [v] = await embed([text]);
+  const r = Object.entries(scores(v, ansEx)).sort((a, b) => b[1] - a[1]);
+  if (r[0][1] >= 0.9 && (!g.size || r[0][1] - r[1][1] > 0.02)) g.add(r[0][0]);
+  return g;
+}
+
+// ── does the voice rise at the end? (a question, even with no question words) ──
+function risingEnd(buf) {
+  const sr = buf.sampleRate, d = Math.max(1, Math.round(sr / 12000)), R = sr / d, src = buf.getChannelData(0);
+  const x = new Float32Array(Math.floor(src.length / d)); for (let i = 0; i < x.length; i++) { let s = 0; for (let k = 0; k < d; k++) s += src[i * d + k]; x[i] = s / d; }
+  const W = Math.round(R * 0.04), n = Math.floor(x.length / W), step = Math.max(1, Math.ceil(n / 70)), f0 = [];
+  const lo = Math.floor(R / 400), hi = Math.floor(R / 75);
+  for (let w = 0; w < n; w += step) {
+    const o = w * W; let e0 = 0; for (let i = 0; i < W; i++) e0 += x[o + i] * x[o + i];
+    if (e0 < 1e-4) continue;
+    let best = 0, bl = 0;
+    for (let l = lo; l <= hi; l++) { let c = 0; for (let i = 0; i + l < W; i++) c += x[o + i] * x[o + i + l]; c /= e0; if (c > best) { best = c; bl = l; } }
+    if (best > 0.45) f0.push(R / bl);
+  }
+  if (f0.length < 8) return false;
+  const cut = Math.floor(f0.length * 0.75), med = (a) => { const s = [...a].sort((p, q) => p - q); return s[Math.floor(s.length / 2)]; };
+  return med(f0.slice(cut)) > med(f0.slice(0, cut)) * 1.12;
+}
 
 // ── audio ──
 async function ensureAudio() {
@@ -274,38 +385,40 @@ async function up() {
     }
     // Google may give a few guesses: use the first one that means something
     const text = list.find((x) => intentOf(x) || tagsOf(x).size) || list[0];
-    handle(text, buf, ms, list.length > 1 ? list.filter((x) => x !== text) : []);
+    await handle(text, buf, ms, list.length > 1 ? list.filter((x) => x !== text) : []);
   } catch (e) { log("copy", "Error: " + e.message); }
   finally { busy = false; $("talk").textContent = "Hold to talk (or hold Space)"; }
 }
 let lastAnswer = null;
-function handle(text, buf, ms, others = []) {
-  const it = intentOf(text), tags = tagsOf(text);
-  const c = { buf, text, intent: it, tags };
+async function handle(text, buf, ms, others = []) {
+  const rising = risingEnd(buf);
+  const { it, v, how: why } = await understand(text, rising);
   const extra = others.length ? " · other guesses: " + others.join(" | ") : "";
   if (it) {
-    lastQuestion = { text, it, at: performance.now() };
-    // 1) answers you taught for this exact kind of question (or, for plain yes/no questions, the same words)
-    const w = words(text);
-    let taught = pairs.filter((p) => p.clip !== lastAnswer && (it.id !== "yesno" ? p.intent === it.id : similar(w, p.words) >= 0.5));
-    if (!taught.length) taught = pairs.filter((p) => it.id !== "yesno" ? p.intent === it.id : similar(w, p.words) >= 0.5);
+    lastQuestion = { text, it, v, at: performance.now() };
+    let taught = pairs.filter((p) => p.intent === it.id && p.clip !== lastAnswer);
+    if (!taught.length) taught = pairs.filter((p) => p.intent === it.id);
     let best = null, how = "";
-    if (taught.length) { best = taught[Math.floor(Math.random() * taught.length)].clip; how = "the answer you taught for this question"; }
-    // 2) otherwise the phrase that fits this question best (never the one it just said, if there's another as good)
-    if (!best) {
+    if (taught.length) { best = taught[Math.floor(Math.random() * taught.length)].clip; how = "an answer you taught for this kind of question"; }
+    if (!best && !it.custom) {
       let top = 0, cands = [];
-      for (const x of clips) { if (x.intent) continue; const f = fit(x, it) - (x === lastAnswer ? 0.3 : 0); if (f > top + 1e-6) { top = f; cands = [x]; } else if (f > 0 && Math.abs(f - top) < 1e-6) cands.push(x); }
+      for (const x of clips) { const f = fit(x, it) - (x === lastAnswer ? 0.3 : 0); if (f > top + 1e-6) { top = f; cands = [x]; } else if (f > 0 && Math.abs(f - top) < 1e-6) cands.push(x); }
       if (cands.length) { best = cands[Math.floor(Math.random() * cands.length)]; how = `fits “${it.label}” (${[...best.tags].join(" + ")})`; }
     }
-    log("you", text, `understood in ${ms} ms · question: ${it.label}${extra}`);
-    if (!best) log("copy", `(I don't have an answer to “${it.label}” in your voice yet — say one now, e.g. «${it.teach}»)`);
-    else { lastAnswer = best; const delay = 250 + Math.random() * 300; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · ${how}`); }
-  } else if (lastQuestion && performance.now() - lastQuestion.at < 15_000) {
-    pairs.push({ intent: lastQuestion.it.id, words: words(lastQuestion.text), clip: c });
-    log("you", text, `understood in ${ms} ms · taught as an answer to “${lastQuestion.it.label}” · ${[...tags].join(" + ") || "other"}${extra}`);
-    lastQuestion = null;
-  } else log("you", text, `understood in ${ms} ms · learned · ${[...tags].join(" + ") || "other"}${extra}`);
-  if (!it) { clips.push(c); renderMem(); } // questions aren't answers — don't keep them as phrases
+    log("you", text, `understood in ${ms} ms · question: ${it.label} · ${why}${extra}`);
+    if (!best) log("copy", it.custom ? "(I don't know this question yet — say the answer now and I'll learn it, and questions that mean the same)" : `(I don't have an answer to “${it.label}” in your voice yet — say one now, e.g. «${it.teach}»)`);
+    else { lastAnswer = best; setTimeout(() => play(best.buf), 250 + Math.random() * 300); log("copy", best.text, `your own voice · ${how}`); }
+    return;
+  }
+  const tags = await tagsFor(text);
+  const c = { buf, text, tags };
+  if (lastQuestion && performance.now() - lastQuestion.at < 15_000) {
+    const q = lastQuestion; lastQuestion = null;
+    pairs.push({ intent: q.it.id, clip: c });
+    if (q.v) ex.push({ k: q.it.id, v: q.v }); // learn this way of asking, too
+    log("you", text, `understood in ${ms} ms · taught as an answer to “${q.it.label}” · ${[...tags].join(" + ") || "other"} · ${why}${extra}`);
+  } else log("you", text, `understood in ${ms} ms · learned · ${[...tags].join(" + ") || "other"} · ${why}${extra}`);
+  clips.push(c); renderMem();
 }
 
 $("engine").onchange = () => { $("model").hidden = $("engine").value !== "whisper"; };
@@ -314,8 +427,14 @@ $("start").onclick = async () => {
   for (const id of ["start", "model", "engine", "lang"]) $(id).disabled = true;
   try {
     await ensureAudio();
-    if (useGoogle()) { $("status").textContent = `Ready · Google speech-to-text · ${$("lang").value === "arabic" ? "ar-EG (Egyptian)" : "en-US"}`; $("dl").style.width = "100%"; }
-    else await loadModel();
+    if (!useGoogle()) await loadModel();
+    $("status").textContent = "Downloading the meaning AI (≈120 MB, only the first time)…";
+    const seen = {};
+    try {
+      await loadBrain((p) => { if (p.status === "progress" && p.total) { seen[p.file] = [p.loaded, p.total]; const v = Object.values(seen); const l = v.reduce((a, x) => a + x[0], 0), t = v.reduce((a, x) => a + x[1], 0); $("dl").style.width = (100 * l / t).toFixed(0) + "%"; $("status").textContent = `Downloading the meaning AI… ${(l / 1e6).toFixed(0)} / ${(t / 1e6).toFixed(0)} MB`; } });
+      $("status").textContent = `Ready · ${useGoogle() ? "Google speech-to-text " + ($("lang").value === "arabic" ? "ar-EG" : "en-US") : "Whisper"} · meaning AI on`;
+    } catch (e) { $("status").textContent = "Ready · keywords only (meaning AI didn't load: " + e.message + ")"; }
+    $("dl").style.width = "100%";
     $("talk").disabled = false; $("start").textContent = "Ready";
   } catch (e) { $("status").textContent = "Couldn't start: " + e.message; for (const id of ["start", "model", "engine", "lang"]) $(id).disabled = false; }
 };
