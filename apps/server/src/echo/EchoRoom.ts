@@ -1,4 +1,5 @@
 import { MotionStyle, defaultLook, defaultStop, MOTION_HZ, type LookSnippet, type StopSnippet } from "./motion";
+import { copyBrain, type Decision } from "./brain";
 import {
   COPY, ECHO, ECHO_ARMED, ECHO_COLORS, ECHO_HIDDEN, ECHO_LOCKERS, ECHO_RADIO, ECHO_ROOMS, GOAL, HIDE, RADIO, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, PERK, TEEN_LOOKS, cleanLook,
   lockerFront, echoFree, echoPassable, echoPath, echoSpawns, echoTile, echoTileOf, echoWallsBetween, mimicOpen, mimicRevealed,
@@ -31,6 +32,8 @@ interface Member {
   heard: { n: number; at: number } | null;
   /** When this player last asked a question ("where are you?"). */
   askedAt: number;
+  /** v40: may the Copy's long memory learn from how they move (anonymous)? */
+  learn?: boolean;
   /** v36: when their last voice piece ended (the server hears no words without speech-to-text, only that they spoke). */
   spokeAt?: number;
   /** Sam has used his one escape this match. */
@@ -99,6 +102,8 @@ interface Mimic {
   /** This walk's pace (people don't all walk at exactly the same speed). */
   gait: number;
   /** v39: the real movement it is replaying (see motion.ts). */
+  /** v40: this attempt's choices (from the long memory) and the moves it used, for credit when it ends. */
+  ep?: { arms: Record<Decision, string>; used: number[]; made: { k: "look" | "stop"; yaw: number[]; pitch: number[] } | null; attacked: boolean };
   /** v39: a fuse it is going for (loose on the floor, or one already in the box). */
   fetch?: { fuse: number; box: boolean } | null;
   nextFetch?: number;
@@ -300,6 +305,7 @@ export class EchoRoom {
       this.restart(t);
       return { ok: true };
     }
+    if (a.type === "learn") { m.learn = !!a.on; return { ok: true }; }
     if (a.type === "practice") {
       if (this.members.length !== 1) return { ok: false, error: "Practice is for one player alone" };
       if (g.startedAt) return { ok: false, error: "The match has already started" };
@@ -430,6 +436,7 @@ export class EchoRoom {
     if (h?.copy) {
       const mm = h.copy, revealed = mimicRevealed(mm.state);
       this.ev.event({ ...base, hit: { copy: mm.id } });
+      this.reward(mm, 0);
       this.exposed++;
       if (!revealed) this.ev.event({ type: "reveal", mimic: mm.id, as: mm.as });
       this.moment(t, revealed ? `${m.name} shot the creature in ${the(roomName(mm.x, mm.z))}. It ran.` : `${m.name} shot "${this.nameOf(mm.as)}" in ${the(roomName(mm.x, mm.z))}. It wasn't ${this.nameOf(mm.as)}. Its face came apart and it ran.`, 3);
@@ -518,6 +525,14 @@ export class EchoRoom {
     g.pry = [];
     for (const mm of this.mimics) if (mm.carry !== null) { const f = g.fuses[mm.carry]; f.by = null; mm.carry = null; }
     this.mimics = [];
+    // v40: the long memory keeps how everyone moved (anonymous: view angles and speeds only), unless they opted out
+    let counted = false;
+    for (const m of this.members) {
+      const st = this.styles.get(m.n);
+      if (!st || m.learn === false || st.size < 100) continue;
+      copyBrain.learnMatch(st.harvest(t, this.rnd), this.rnd, !counted);
+      counted = true;
+    }
     if (result === "lose") this.moment(t, t >= g.endsAt ? "The emergency lights died. Nobody got out." : "Nobody was left.", 3);
     g.summary = this.summary(t);
     this.ev.event({ type: "end", result });
@@ -709,6 +724,7 @@ export class EchoRoom {
         saw: new Set(),
       };
       this.mimics.push(mm);
+      this.newEpisode(mm);
       this.disguise(mm, null);
     }
     this.ev.event({ type: "wake" });
@@ -788,6 +804,7 @@ export class EchoRoom {
 
   /** It shows what it is and lunges. */
   private reveal(mm: Mimic, target: Member, t: number) {
+    if (mm.ep) mm.ep.attacked = true;
     this.dropCopyFuse(mm);
     mm.state = "chase";
     mm.target = target.n;
@@ -870,6 +887,7 @@ export class EchoRoom {
               mm.carry = null;
               this.stolen++;
               this.moved.add(f.id);
+              if (mm.ep && !this.practice) copyBrain.score("fuses", mm.ep.arms.fuses, 1);
               this.moment(t, `The Copy, wearing ${this.nameOf(mm.as)}'s face, carried a fuse out of ${the(from)} and hid it in ${the(roomName(f.x, f.z))}.`, 2);
               this.pushMeta();
             } else this.dropCopyFuse(mm);
@@ -878,7 +896,7 @@ export class EchoRoom {
           break;
         }
         // v39: out of sight but within earshot it talks like a player calling out to the others
-        if (!mm.pendingSay && t > mm.speakingUntil + 14_000 && this.rnd() < dt / 5) {
+        if (!mm.pendingSay && t > mm.speakingUntil + 14_000 / this.talkK(mm) && this.rnd() < (dt / 5) * this.talkK(mm)) {
           const ear = this.open().filter((m) => this.other(mm, m) && Math.hypot(m.x - mm.x, m.z - mm.z) < 16 && !this.los(m.x, m.z, mm.x, mm.z, 16)).sort((a, b) => Math.hypot(a.x - mm.x, a.z - mm.z) - Math.hypot(b.x - mm.x, b.z - mm.z))[0];
           if (ear) this.say(mm, t, this.pick(ear, mm.as, "call", true, mm), 200);
         }
@@ -936,7 +954,7 @@ export class EchoRoom {
         const ready = t - mm.followSince > COPY.FOLLOW_MIN_SEC * 1000 && !witness;
         // practice: you came to be hunted — after a few seconds at your side it goes for you even face to face
         if (ready && (away > 1.75 || (this.practice && t - mm.followSince > 8000))) {
-          if (d < 3.2) { this.reveal(mm, target, t); break; }
+          if (d < Number(mm.ep?.arms.attackAt ?? 3.2)) { this.reveal(mm, target, t); break; }
           mm.path = [];
           this.stepTo(mm, target.x, target.z, COPY.WALK, dt);
           crouchTo(target.crouch);
@@ -962,9 +980,9 @@ export class EchoRoom {
           target.askedAt = 0;
         } else if ((target.spokeAt ?? 0) > t - 900 && !target.talk && !mm.pendingSay && t > mm.speakingUntil + 4500) {
           // v36: they said something (no words known): it answers, the way a friend says "yeah" back (decided once per thing said)
-          if (this.rnd() < (this.practice ? 0.75 : 0.6)) this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), 450 + this.rnd() * 500);
+          if (this.rnd() < Math.min(0.95, (this.practice ? 0.75 : 0.6) * this.talkK(mm))) this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), 450 + this.rnd() * 500);
           target.spokeAt = 0;
-        } else if (!target.talk && !mm.pendingSay && t > mm.speakingUntil + 11_000 && t - (target.spokeAt || 0) > 2500 && this.rnd() < dt / 4) {
+        } else if (!target.talk && !mm.pendingSay && t > mm.speakingUntil + 11_000 / this.talkK(mm) && t - (target.spokeAt || 0) > 2500 && this.rnd() < (dt / 4) * this.talkK(mm)) {
           // v39: a friend walking with you talks now and then on their own ("come on", "this way", your name)
           this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 200);
         }
@@ -995,7 +1013,7 @@ export class EchoRoom {
         const d = Math.hypot(target.x - mm.x, target.z - mm.z);
         if (t < mm.windUp) { this.face(mm, Math.atan2(-(target.x - mm.x), -(target.z - mm.z)), dt, 12); mm.speed = 0; break; }
         if (d < MIMIC.CATCH) { this.take(mm, target, t); break; }
-        if (t > mm.until || d > 20) { this.flee(mm, t, 8); break; }
+        if (t > mm.until || d > 20) { this.reward(mm, 0); this.flee(mm, t, 8); break; }
         if (this.los(mm.x, mm.z, target.x, target.z, 6)) { mm.path = []; this.stepTo(mm, target.x, target.z, COPY.LUNGE * this.fury(), dt); }
         else {
           const goal: [number, number] = [echoTileOf(target.x), echoTileOf(target.z)];
@@ -1091,13 +1109,13 @@ export class EchoRoom {
     const g = this.goal;
     if (mm.carry !== null || mm.stealTo || !g.startedAt || this.stolen >= COPY.STEALS) { mm.fetch = null; return false; }
     if (!mm.fetch) {
-      if (t < (mm.nextFetch ?? 0)) return false;
+      if (t < (mm.nextFetch ?? 0) || mm.ep?.arms.fuses === "hunt") return false;
       mm.nextFetch = t + 6000 + this.rnd() * 6000;
       const near = (x: number, z: number, r: number) => this.open().some((m) => Math.hypot(m.x - x, m.z - z) < r);
       const loose = g.fuses.filter((f) => !f.placed && f.by === null && !g.pry.some((p) => p[1] === f.id) && !near(f.x, f.z, 7));
       const boxed = !g.power && !near(GOAL.BOX.x, GOAL.BOX.z, 12) && !this.watched(GOAL.BOX.x, GOAL.BOX.z, 16) ? g.fuses.filter((f) => f.placed) : [];
       const pick = [...loose.map((f) => ({ f, box: false })), ...boxed.map((f) => ({ f, box: true }))]
-        .map((o) => ({ ...o, d: Math.hypot(o.f.x - mm.x, o.f.z - mm.z) + (o.box ? -15 : 0) })) // the box is the cruellest place to take one from
+        .map((o) => ({ ...o, d: Math.hypot(o.f.x - mm.x, o.f.z - mm.z) + (o.box ? (mm.ep?.arms.fuses === "loose" ? 10 : -15) : 0) })) // the box is the cruellest place to take one from
         .filter((o) => o.d < 45).sort((a, b) => a.d - b.d)[0];
       if (!pick || this.rnd() < 0.35) return false;
       mm.fetch = { fuse: pick.f.id, box: pick.box };
@@ -1155,12 +1173,14 @@ export class EchoRoom {
       target.freed = true;
       this.ev.event({ type: "free", n: target.n, mimic: mm.id });
       this.moment(t, `${target.name} cut free of the Copy with the bolt cutters in ${the(roomName(target.x, target.z))}.`, 2);
+      this.reward(mm, 0);
       this.flee(mm, t, PERK.SAM_STUN_SEC);
       mm.nextHunt = t + PERK.SAM_STUN_SEC * 1000 + 8000;
       this.pushMeta();
       return;
     }
     this.takeFor(mm, target, t, false);
+    this.reward(mm, 1);
     this.flee(mm, t, 10);
     mm.nextHunt = t + 25_000;
     this.pushMeta();
@@ -1203,6 +1223,7 @@ export class EchoRoom {
       if (v >= (revealed ? COPY.EXPOSE_REVEALED : COPY.EXPOSE_SEC)) {
         this.exposed++;
         this.ev.event({ type: "exposed", mimic: mm.id, by: m.n });
+        this.reward(mm, 0);
         this.moment(t, mm.as && !revealed ? `${m.name} held the torch on "${this.nameOf(mm.as)}" in ${the(roomName(mm.x, mm.z))} until its face slid off. The Copy ran.` : `${m.name}'s torch drove the creature back in ${the(roomName(mm.x, mm.z))}.`, 2);
         if (!revealed) this.ev.event({ type: "reveal", mimic: mm.id, as: mm.as });
         this.dropCopyFuse(mm);
@@ -1304,10 +1325,42 @@ export class EchoRoom {
   /** v39: the movement it replays — the face it wears decides whose habits. */
   private mirrorOf(mm: Mimic, t: number) {
     const st = this.styles.get(mm.as);
-    if (!mm.mirror) mm.mirror = { look: st?.look(t, this.rnd) ?? defaultLook(this.rnd), li: 0, pace: 0, paceUntil: 0, stop: null, si: 0, stopYaw: 0 };
+    if (!mm.mirror) mm.mirror = { look: this.nextLook(mm, t), li: 0, pace: 0, paceUntil: 0, stop: null, si: 0, stopYaw: 0 };
     const mr = mm.mirror;
-    if (t >= mr.paceUntil) { mr.pace = Math.max(1.1, Math.min(3, st?.speed(t, this.rnd) ?? 1.7 + this.rnd() * 0.8)); mr.paceUntil = t + 2500 + this.rnd() * 4000; }
+    if (t >= mr.paceUntil) { mr.pace = Math.max(1.1, Math.min(3, st?.speed(t, this.rnd) ?? copyBrain.speed(this.rnd) ?? 1.7 + this.rnd() * 0.8)); mr.paceUntil = t + 2500 + this.rnd() * 4000; }
     return mr;
+  }
+  /** v40: a move to replay — the worn friend's own, or one from the long memory (often a brand-new variation). */
+  private nextMove(mm: Mimic, t: number, k: "look" | "stop"): LookSnippet | null {
+    const st = this.styles.get(mm.as);
+    const own = k === "look" ? st?.look(t, this.rnd) : st?.stop(t, this.rnd);
+    if (own && this.rnd() < 0.55) return own;
+    const m = copyBrain.move(k, this.rnd);
+    if (m) {
+      if (mm.ep) { mm.ep.used.push(...m.ids); if (mm.ep.used.length > 40) mm.ep.used.splice(0, mm.ep.used.length - 40); if (m.ids.length > 1) mm.ep.made = { k, yaw: m.yaw, pitch: m.pitch }; }
+      return { yaw: m.yaw, pitch: m.pitch };
+    }
+    return own ?? null;
+  }
+  private nextLook(mm: Mimic, t: number) { return this.nextMove(mm, t, "look") ?? defaultLook(this.rnd); }
+  private nextStop(mm: Mimic, t: number) { return this.nextMove(mm, t, "stop") ?? defaultStop(this.rnd); }
+
+  /** v40: a new attempt — choose its tricks from what has worked before. */
+  private newEpisode(mm: Mimic) {
+    mm.ep = { arms: { attackAt: copyBrain.choose("attackAt", this.rnd), fuses: copyBrain.choose("fuses", this.rnd), talk: copyBrain.choose("talk", this.rnd) }, used: [], made: null, attacked: false };
+  }
+  /** How chatty this attempt is. */
+  private talkK(mm: Mimic) { const a = mm.ep?.arms.talk; return a === "quiet" ? 0.55 : a === "chatty" ? 1.8 : 1; }
+  /** v40: the attempt ended — tell the long memory how it went (not in practice: you asked to be hunted). */
+  private reward(mm: Mimic, win: number) {
+    const ep = mm.ep;
+    if (ep && !this.practice) {
+      if (ep.attacked) copyBrain.score("attackAt", ep.arms.attackAt, win);
+      copyBrain.score("fuses", ep.arms.fuses, win);
+      copyBrain.score("talk", ep.arms.talk, win);
+      if (ep.used.length) copyBrain.credit([...new Set(ep.used)], win > 0.5 ? 1 : -0.5, ep.made, this.rnd);
+    }
+    this.newEpisode(mm);
   }
 
   /** Follow the path like a person: cut corners when the way is clear, glide through doors, ease into the last step. */
@@ -1337,12 +1390,12 @@ export class EchoRoom {
     if (mr) {
       // the view wanders off the heading like a real player's mouse (less of it when hurrying)
       const i = Math.floor(mr.li), k = speed > COPY.WALK * 1.2 ? 0.35 : 1;
-      if (i >= mr.look.yaw.length) { mr.look = this.styles.get(mm.as)?.look(t, this.rnd) ?? defaultLook(this.rnd); mr.li = 0; }
+      if (i >= mr.look.yaw.length) { mr.look = this.nextLook(mm, t); mr.li = 0; }
       else { mm.yaw = Math.atan2(Math.sin(mm.head + mr.look.yaw[i] * k), Math.cos(mm.head + mr.look.yaw[i] * k)); mm.pitch = mr.look.pitch[i] * k; mr.li += dt * MOTION_HZ; }
       // and now and then it stops to look around, as often as that friend stops
       if ((mm.state === "wander" || mm.state === "search") && mm.carry === null) {
-        const rate = this.styles.get(mm.as)?.stopRate(t) ?? 1 / 22;
-        if (this.rnd() < Math.min(0.2, rate * mm.speed * dt)) { mr.stop = this.styles.get(mm.as)?.stop(t, this.rnd) ?? defaultStop(this.rnd); mr.si = 0; mr.stopYaw = mm.yaw; }
+        const rate = this.styles.get(mm.as)?.stopRate(t) ?? copyBrain.stopRate() ?? 1 / 22;
+        if (this.rnd() < Math.min(0.2, rate * mm.speed * dt)) { mr.stop = this.nextStop(mm, t); mr.si = 0; mr.stopYaw = mm.yaw; }
       }
     }
   }
@@ -1414,6 +1467,7 @@ export class EchoRoom {
       night: { awake: this.awake, wakeAt: this.wakeAt, exposed: this.exposed, taken: this.takenCount },
       goal: this.goal,
       practice: this.practice || undefined,
+      brain: copyBrain.stats,
     };
   }
 

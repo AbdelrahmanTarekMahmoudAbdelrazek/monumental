@@ -359,7 +359,9 @@ export type EchoAct =
   | { type: "enter" } | { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | { type: "restart" }
   | { type: "hide"; locker: number } | { type: "unhide" } | { type: "gun" } | { type: "shoot"; yaw: number; pitch: number }
   /** Host alone, before the match: practice against a Copy of yourself. */
-  | { type: "practice" };
+  | { type: "practice" }
+  /** v40: may the Copy learn from how I move (anonymous)? */
+  | { type: "learn"; on: boolean };
 
 export interface EchoMeta {
   code: string;
@@ -371,6 +373,8 @@ export interface EchoMeta {
   night?: { awake: boolean; wakeAt: number; exposed: number; taken: number };
   /** Practice alone: the Copy wears your face, the pistol never runs dry. */
   practice?: boolean;
+  /** v40: how much the Copy has learned so far. */
+  brain?: { matches: number; moves: number };
 }
 
 /** What a client sends about itself (positions in metres, angles in radians). */

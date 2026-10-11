@@ -33,6 +33,8 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   const [copied, setCopied] = useState(false);
   const [consent, setConsent] = useState(false);
   const [smart, setSmart] = useState<string>("off");
+  // v40: may the Copy learn from how I move (anonymous)
+  const [learn, setLearn] = useState(() => { try { return localStorage.getItem("eh:learn") !== "0"; } catch { return true; } });
   const [toasts, setToasts] = useState<{ id: number; text: string; bad: boolean }[]>([]);
   const [clockOff, setClockOff] = useState(0);
   const [, setTick] = useState(0);
@@ -241,6 +243,8 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
     // the server rate-limits actions (120 ms): straight after "practice" the enter can bounce, so it retries
     const sendEnter = (tries: number) => getSocket().emit("eh_act", { type: "enter" }, (r: { ok: boolean; error?: string }) => { if (!r?.ok && tries > 0) setTimeout(() => sendEnter(tries - 1), 250); });
     sendEnter(4);
+    try { localStorage.setItem("eh:learn", learn ? "1" : "0"); } catch { /* private mode */ }
+    setTimeout(() => getSocket().emit("eh_act", { type: "learn", on: learn }, () => {}), 600);
     if (mobile) document.documentElement.requestFullscreen?.().catch(() => {});
   };
 
@@ -316,6 +320,11 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
                 <div className="font-semibold text-[#F1C9C4]">This game uses your voice against you</div>
                 <p className="mt-1 text-sm leading-relaxed text-[#C7A7A2]">While you play, short pieces of what you say are cut on your device and sent straight to the other players. The Copy wears your face and replays them in your voice to trick your friends. Pieces live only in this match and are deleted when you leave. On networks that block direct links they pass through an encrypted relay that cannot listen in or keep them. They never go to our server and are never used to train anything.</p>
                 <label className="mt-3 flex items-center gap-3 text-sm text-[#F1C9C4]"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="h-5 w-5 accent-[#D9463B]" data-testid="eh-consent" /> I understand and agree</label>
+              </div>
+              <div className="rounded-xl border border-[#2A312C] bg-black/30 p-4 text-sm text-[#9FA89F]">
+                <div className="font-semibold text-[#D9DED8]">The Copy learns</div>
+                <p className="mt-1 leading-relaxed">It remembers how players move — walking speed, where they look, when they stop — and which of its tricks worked, so it gets better the more people play. Only movement: no voice, no names, nothing that points to you.{meta?.brain ? ` So far: ${meta.brain.matches} matches, ${meta.brain.moves} moves.` : ""}</p>
+                <label className="mt-2 flex items-center gap-3"><input type="checkbox" checked={learn} onChange={(e) => setLearn(e.target.checked)} className="h-5 w-5 accent-[#D9463B]" data-testid="eh-learn" /> Let it learn from how I move</label>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-sm">
                 <label htmlFor="eh-smart" className="text-[#9FA89F]">Smart Copy (understands words)</label>

@@ -91,6 +91,17 @@ export class MotionStyle {
     return null;
   }
 
+  /** v40: what this player teaches the Copy's long memory at the end of a match. */
+  harvest(now: number, rnd: () => number) {
+    const a = this.analyse(now);
+    const looks: LookSnippet[] = [], stops: StopSnippet[] = [];
+    for (let i = 0; i < 25; i++) { const l = this.look(now, rnd); if (l) looks.push(l); }
+    const seen = new Set<number>();
+    for (const [from, to] of a.stops) { if (stops.length >= 12 || seen.has(from)) continue; seen.add(from); const s = this.s; const base = s[from].yaw; stops.push({ yaw: s.slice(from, to).map((x) => wrap(x.yaw - base)), pitch: s.slice(from, to).map((x) => x.pitch) }); }
+    const speeds = a.speeds.length > 300 ? Array.from({ length: 300 }, () => a.speeds[Math.floor(rnd() * a.speeds.length)]) : a.speeds;
+    return { looks, stops, speeds, stopCount: a.stops.length, meters: a.meters };
+  }
+
   /** One real stop: how their view turned (relative to where they stopped) and pitched, 10 per second. */
   stop(now: number, rnd: () => number): StopSnippet | null {
     const a = this.analyse(now), s = this.s;

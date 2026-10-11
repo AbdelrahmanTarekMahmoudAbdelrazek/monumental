@@ -17,6 +17,7 @@ import { SmuggleManager } from "./smuggle/SmuggleManager.js";
 import { NeonManager } from "./neon/NeonManager.js";
 import { SquadManager } from "./squad/SquadManager.js";
 import { EchoManager } from "./echo/EchoManager.js";
+import { copyBrain } from "./echo/brain.js";
 import { LEVELS } from "@monumental/shared";
 
 export async function createServer() {
@@ -43,6 +44,10 @@ export async function createServer() {
   }
 
   const db = await initPersistence();
+  // v40: the Copy's long memory (learns across matches)
+  await copyBrain.load(db);
+  // Render stops the server with SIGTERM on every deploy: write down what the Copy learned first
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => { void copyBrain.save().finally(() => process.exit(0)); setTimeout(() => process.exit(0), 4000).unref(); });
   await refreshCatalog();
   setInterval(() => void refreshCatalog(), 3 * 60 * 1000).unref();
 

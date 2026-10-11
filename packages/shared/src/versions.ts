@@ -9,6 +9,17 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 40, name: "It Learns", date: "2026-10",
+    big: "The Copy now learns across matches: the more people play, the more real ways of moving it knows, the new moves it invents, and the tricks it keeps because they worked.",
+    more: [
+      "A long memory that survives between matches: real walking, looking-around and stopping moves from every match (movement only — no voice, no names)",
+      "It invents new moves: mirrored, faster or slower, or two real moves stitched together; the ones that fool people are kept",
+      "Moves it was using when it fooled someone are used more; moves it was using when it got caught fade",
+      "It learns its tricks: how close to let you get before attacking, whether to steal fuses or keep hunting, how much to talk — what works gets chosen more",
+      "The lobby shows how much it has learned, and you can switch off learning from your own movement",
+    ],
+  },
+  {
     v: 39, name: "Motion Mirror", date: "2026-10",
     big: "The Copy learns to move from you: it replays the real walking, pausing and looking-around of the friend whose face it wears — and it steals fuses, even out of the box.",
     more: [

@@ -152,3 +152,30 @@ describe("v39 fuses", () => {
     expect(g.fuses[0].placed).toBe(false);
   });
 });
+
+import { copyBrain } from "./brain";
+describe("v40 learning from a match", () => {
+  it("at the end of a match it keeps how the players moved (unless they opted out)", () => {
+    let t = 1_000_000;
+    const r = new EchoRoom("LRN", "a", { meta: () => {}, snap: () => {}, event: () => {}, onIdle: () => {} }, () => t, mulberry32(4));
+    r.matchSec = 40;
+    r.join("a", "Ann"); r.join("b", "Bob");
+    r.act("a", { type: "enter" }); r.act("b", { type: "enter" });
+    r.act("b", { type: "learn", on: false });
+    const [ann] = r.debug().members;
+    let x = ann.x, z = ann.z, yaw = 0;
+    const before = copyBrain.stats.matches;
+    for (let i = 0; i < 300; i++) {
+      t += 100;
+      // walk back and forth along the spawn room, looking around a bit
+      const dir = Math.floor(i / 40) % 2 ? -1 : 1;
+      const nx = x + dir * 0.18;
+      yaw = Math.sin(i / 7) * 0.6 + (dir > 0 ? -Math.PI / 2 : Math.PI / 2);
+      if (r.state("a", { x: nx, y: 0, z, yaw, pitch: -0.1, torch: true, crouch: false, seq: i })) x = nx;
+      r.step();
+    }
+    t += 60_000; r.step();
+    expect(r.goal.result).toBe("lose");
+    expect(copyBrain.stats.matches).toBe(before + 1); // Ann's moves only: Bob opted out
+  });
+});

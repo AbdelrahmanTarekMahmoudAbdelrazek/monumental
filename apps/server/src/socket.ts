@@ -532,6 +532,7 @@ export function registerSocketHandlers(io: IO, rooms: RoomManager, store: LiveSt
       if (type === "enter" || type === "install" || type === "restart" || type === "call" || type === "practice") return ack(r.act(me, { type }));
       if (type === "pickup" && Number.isInteger(p?.fuse)) return ack(r.act(me, { type, fuse: p!.fuse as number }));
       if (type === "unhide" || type === "gun") return ack(r.act(me, { type }));
+      if (type === "learn") return ack(r.act(me, { type, on: !!(raw as { on?: unknown }).on }));
       const q = raw as { locker?: unknown; yaw?: unknown; pitch?: unknown } | null;
       if (type === "hide" && Number.isInteger(q?.locker)) return ack(r.act(me, { type, locker: q!.locker as number }));
       if (type === "shoot" && typeof q?.yaw === "number" && typeof q?.pitch === "number") return ack(r.act(me, { type, yaw: q.yaw, pitch: q.pitch }));
