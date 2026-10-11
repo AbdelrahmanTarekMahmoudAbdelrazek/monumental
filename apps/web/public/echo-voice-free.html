@@ -74,27 +74,43 @@ const clips = []; // { buf, text, kind }
 // ── meaning ──
 const norm = (s) => s.toLowerCase().replace(/[؟?!.,،]/g, " ").replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه");
 const has = (t, ws) => ws.some((w) => new RegExp(`(^|[^\\p{L}])${w}($|[^\\p{L}])`, "u").test(t));
+// Egyptian questions often have no "?" from speech-to-text: "انت خايف", "انت شفت الوحش", "انت جاي" are questions
+const isQuestion = (text, t) => /[؟?]/.test(text) || /^(انت|انتي|انتو|هو|هي|في|فيه|حد|هل|are|is|did|do|have|can)\s/.test(t) || has(t, ["ايه", "مين", "فين", "ليه", "امتي", "ازاي", "كام", "what", "who", "where", "why", "how", "صح"]);
 function wantOf(text) {
-  const t = norm(text);
+  const t = norm(text).trim();
+  if (has(t, ["مش خايف", "مش خايفه", "not scared"]) && !/^(انت|انتي)\s/.test(t)) return null; // "I'm not scared" is an answer
   if (has(t, ["سامعني", "سامعيني", "سامعين", "حد سامع", "الو", "can you hear", "hear me", "hello"])) return ["hear-yes", "yes", "here"];
   if (has(t, ["فين", "وين", "where are you", "where"])) return ["here", "come"];
+  if (has(t, ["انت خايف", "انتي خايفه", "خايف؟", "are you scared", "are you afraid"]) || (isQuestion(text, t) && has(t, ["خايف", "خايفه", "scared"]))) return ["notscared", "no", "calm"];
   if (has(t, ["خايف", "خايفه", "الحق", "ساعدني", "scared", "help"])) return ["calm", "here", "come"];
+  if (has(t, ["انت جاي", "جاي؟", "are you coming"])) return ["coming", "yes"];
   if (has(t, ["لقيت", "found"])) return ["coming", "yes"];
   if (has(t, ["تعالي", "تعالو", "come here", "come", "follow me"]) && !has(t, ["من هنا", "this way"])) return ["coming", "yes"];
-  if (/[؟?]/.test(text) || has(t, ["ايه", "مين", "what", "who", "صح"])) return ["yes", "dunno"];
+  if (has(t, ["شفت", "شوفت", "سمعت", "did you see", "did you hear", "saw"])) return ["no", "dunno", "yes"];
+  if (isQuestion(text, t)) return ["yes", "no", "dunno"];
   return null;
 }
 function kindOf(text) {
-  const t = norm(text);
+  const t = norm(text).trim();
+  if (wantOf(text)) return "question"; // a question is never used as an answer
   if (has(t, ["سامعك", "سامعاك", "سامعكم", "i can hear you", "hear you", "loud and clear"])) return "hear-yes";
+  if (has(t, ["مش خايف", "مش خايفه", "لا مش خايف", "not scared", "i'm not scared"])) return "notscared";
   if (has(t, ["متخافش", "متخافيش", "ما تخافش", "اهدي", "it's ok", "its ok", "don't worry", "calm down"])) return "calm";
   if (has(t, ["جاي", "جايه", "جايين", "حاضر", "coming", "on my way"])) return "coming";
   if (has(t, ["تعالي", "تعالو", "come here", "this way", "follow me"])) return "come";
   if (has(t, ["انا هنا", "هنا", "جنبك", "i'm here", "im here", "over here", "right here"])) return "here";
-  if (has(t, ["ايوه", "اه", "ايوا", "نعم", "yes", "yeah", "yep"])) return "yes";
-  if (has(t, ["مش عارف", "معرفش", "i don't know", "dunno"])) return "dunno";
+  if (has(t, ["مش عارف", "معرفش", "مش فاكر", "i don't know", "dunno"])) return "dunno";
+  if (/^(لا|لأ|لاء|no|nope)(\s|$)/.test(t) || has(t, ["مشفتش", "مسمعتش", "محدش"])) return "no";
+  if (has(t, ["ايوه", "اه", "ايوا", "نعم", "yes", "yeah", "yep", "شفته", "شفتها"])) return "yes";
   return "other";
 }
+
+// ── dialogue memory: a question followed by an answer is remembered as a pair, and the answer is reused for
+//    similar questions later (in the game: friends asking and answering each other) ──
+const pairs = []; // { words: Set, clip }
+const words = (s) => new Set(norm(s).split(/\s+/).filter((w) => w.length > 1 && !["يا", "اسطي", "انت", "انتي", "انا", "عم", "the", "you", "a"].includes(w)));
+function similar(a, b) { let n = 0; for (const w of a) if (b.has(w)) n++; return n / Math.max(1, Math.min(a.size, b.size)); }
+let lastQuestion = null; // { text, at }
 
 // ── audio ──
 async function ensureAudio() {
@@ -176,14 +192,28 @@ async function up() {
   busy = false; $("talk").textContent = "Hold to talk (or hold Space)";
   if (!text) { log("you", "(didn't catch that — check the green bar moves when you talk, and keep holding until you finish the phrase)"); return; }
   const want = wantOf(text);
+  const kind = kindOf(text);
   if (want) {
-    log("you", text, "question → it wants: " + want[0]);
-    let best = null;
-    for (const k of want) { const c = clips.filter((x) => x.kind === k); if (c.length) { best = c[Math.floor(Math.random() * c.length)]; break; } }
-    if (!best) { log("copy", "(I don't have an answer like that in your voice yet — teach me one, e.g. «ايوه سامعك» or «انا هنا»)"); }
-    else { const delay = 300 + Math.random() * 350; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · answered after ${Math.round(delay)} ms`); }
+    lastQuestion = { text, at: performance.now() };
+    // 1) an answer someone gave to a question like this one before
+    const w = words(text);
+    let best = null, how = "";
+    let top = 0; for (const p of pairs) { const sc = similar(w, p.words); if (sc > top) { top = sc; best = p.clip; } }
+    if (best && top >= 0.5) how = `remembered answer (${Math.round(top * 100)}% same question)`; else best = null;
+    // 2) an answer of the right kind
+    if (!best) for (const k of want) { const c = clips.filter((x) => x.kind === k); if (c.length) { best = c[Math.floor(Math.random() * c.length)]; how = "kind: " + k; break; } }
+    log("you", text, "question → wants: " + want.join(" / "));
+    if (!best) { log("copy", "(no answer like that in your voice yet — say the answer now and I'll remember it for this question)"); }
+    else { const delay = 300 + Math.random() * 350; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · ${how} · after ${Math.round(delay)} ms`); }
   }
-  if (buf) { const kind = kindOf(text); clips.push({ buf, text, kind }); renderMem(); if (!want) log("you", text, `learned · ${kind} · ${buf.duration.toFixed(1)} s`); }
+  if (buf) {
+    const c = { buf, text, kind }; clips.push(c); renderMem();
+    if (!want) {
+      // said right after a question: this is how that question is answered
+      if (lastQuestion && performance.now() - lastQuestion.at < 10_000) { pairs.push({ words: words(lastQuestion.text), clip: c }); log("you", text, `learned as the answer to «${lastQuestion.text}» · ${kind}`); lastQuestion = null; }
+      else log("you", text, `learned · ${kind} · ${buf.duration.toFixed(1)} s`);
+    }
+  }
 }
 $("talk").addEventListener("pointerdown", (e) => { e.preventDefault(); down(); });
 $("talk").addEventListener("pointerup", up); $("talk").addEventListener("pointerleave", up);
