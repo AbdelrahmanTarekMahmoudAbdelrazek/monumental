@@ -59,7 +59,7 @@
     <ol>
       <li><b>Hold the button (or Space), wait until it turns red and says “Speak now”, say ONE short answer</b>, then let go: «ايوه سامعك» · «انا هنا» · «انا في الممر» · «جاي» · «اه» · «لا» · «مش عارف» · «متخافش انا جنبك» · «لا مش خايف».</li>
       <li><b>Hold and ask</b>: «الو» «انت فين؟» «انت هنا؟» «عامل ايه؟» «الساعه كام؟» «انت خايف؟» «تعالى». Each question only gets an answer that fits it.</li>
-      <li>No fitting answer yet? It tells you — <b>say the answer in the next press</b> and it remembers it for that kind of question. Teach a few answers to the same question and it varies between them.</li>
+      <li>No fitting answer yet? It tells you — <b>say the answer in the next press</b> and it remembers it for that kind of question. Wrong answer? Press <b>✗ wrong answer</b> under it, then say the right one.</li>
     </ol>
     <button id="talk" disabled>Hold to talk (or hold Space)</button>
     <div class="meter"><div id="lvl"></div></div>
@@ -145,8 +145,8 @@ function tagsOf(text) {
   if (hasF(t, ["تمام", "كويس", "كويسه", "الحمد لله", "الحمدلله", "فل", "زي الفل", "بخير", "fine", "good", "i'm ok"])) g.add("fine");
   if (/\d/.test(t) || hasF(t, ["الساعه", "واحده", "اتنين", "تلاته", "اربعه", "خمسه", "سته", "سبعه", "تمانيه", "تسعه", "عشره", "اتناشر", "ونص", "وربع", "o'clock"])) g.add("time");
   if (/^(بدور|بعمل|مستني|بستخبي|بستخبى|بجري|بحاول|looking|waiting|hiding)/.test(t) || hasF(t, ["بدور", "بعمل", "مستني", "بستخبي", "بستخبى"])) g.add("doing");
-  if (/^انا\s+[^\s]+$/.test(t) && !hasF(t, ["انا هنا", "انا جاي", "انا خايف"]) || hasF(t, ["اسمي", "it's me", "its me", "my name"])) g.add("me");
-  if (hasF(t, ["انا هنا", "هنا", "جنبك", "اهو", "i'm here", "im here", "over here", "right here"]) || /^(انا )?(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)\s/.test(t) || hasF(t, ["الدور", "الممر", "الاوضه", "الطرقه", "السلم", "الباب", "in the", "near the", "by the"])) g.add("here");
+  if (/^انا\s+[^\s]+$/.test(t) && !/^انا (هنا|جاي|جايه|خايف|خايفه|فوق|تحت|جوه|بره|ورا|قدام|تمام|كويس|مستني)$/.test(t) || hasF(t, ["اسمي", "it's me", "its me", "my name"])) g.add("me");
+  if (hasF(t, ["انا هنا", "هنا", "جنبك", "اهو", "i'm here", "im here", "over here", "right here"]) || /^(انا )?(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)(\s|$)/.test(t) || hasF(t, ["الدور", "الممر", "الاوضه", "الطرقه", "السلم", "الباب", "in the", "near the", "by the"])) g.add("here");
   if (hasF(t, ["مش عارف", "معرفش", "مش فاكر", "مش متاكد", "i don't know", "dunno"])) g.add("dunno");
   if (/^(لا|لأ|لاء|no|nope)(\s|$)/.test(t) || hasF(t, ["مشفتش", "مسمعتش", "محدش", "لا"])) g.add("no");
   if (hasF(t, ["ايوه", "اه", "ايوا", "نعم", "اكيد", "طبعا", "yes", "yeah", "yep", "sure", "شفته", "شفتها"])) g.add("yes");
@@ -360,13 +360,15 @@ async function stopGoogle() {
 // ── hold to talk ──
 async function down() {
   if (recording || busy || (!asr && !useGoogle())) return;
-  frames = []; recording = true;
+  frames = []; recording = true; releasing = false;
   $("talk").classList.add("on");
   if (useGoogle()) { $("talk").textContent = "Wait…"; startGoogle(); }
   else $("talk").textContent = "Speak now… let go when you finish";
 }
+let releasing = false;
 async function up() {
-  if (!recording) return;
+  if (!recording || releasing) return; // let-go and pointer-leave both fire: handle each press once
+  releasing = true;
   await new Promise((r) => setTimeout(r, 300)); // the last syllable
   recording = false; busy = true;
   $("talk").classList.remove("on"); $("talk").textContent = "Understanding…";
@@ -390,35 +392,53 @@ async function up() {
   finally { busy = false; $("talk").textContent = "Hold to talk (or hold Space)"; }
 }
 let lastAnswer = null;
+const bad = new Set(); // "question kind|phrase" you marked as a wrong answer
+/** A phrase can answer this kind of question only if it fits it (or it's a new question you taught it for). */
+const canAnswer = (clip, it) => !bad.has(it.id + "|" + clip.id) && (it.custom || !clip.tags.size || fit(clip, it) > 0);
 async function handle(text, buf, ms, others = []) {
   const rising = risingEnd(buf);
   const { it, v, how: why } = await understand(text, rising);
   const extra = others.length ? " · other guesses: " + others.join(" | ") : "";
   if (it) {
-    lastQuestion = { text, it, v, at: performance.now() };
-    let taught = pairs.filter((p) => p.intent === it.id && p.clip !== lastAnswer);
-    if (!taught.length) taught = pairs.filter((p) => p.intent === it.id);
+    lastQuestion = null;
+    const ok = pairs.filter((p) => p.intent === it.id && (p.forced ? !bad.has(it.id + "|" + p.clip.id) : canAnswer(p.clip, it)));
+    let taught = ok.filter((p) => p.clip !== lastAnswer); if (!taught.length) taught = ok;
     let best = null, how = "";
     if (taught.length) { best = taught[Math.floor(Math.random() * taught.length)].clip; how = "an answer you taught for this kind of question"; }
     if (!best && !it.custom) {
       let top = 0, cands = [];
-      for (const x of clips) { const f = fit(x, it) - (x === lastAnswer ? 0.3 : 0); if (f > top + 1e-6) { top = f; cands = [x]; } else if (f > 0 && Math.abs(f - top) < 1e-6) cands.push(x); }
+      for (const x of clips) { if (!canAnswer(x, it)) continue; const f = fit(x, it) - (x === lastAnswer ? 0.3 : 0); if (f > top + 1e-6) { top = f; cands = [x]; } else if (f > 0 && Math.abs(f - top) < 1e-6) cands.push(x); }
       if (cands.length) { best = cands[Math.floor(Math.random() * cands.length)]; how = `fits “${it.label}” (${[...best.tags].join(" + ")})`; }
     }
     log("you", text, `understood in ${ms} ms · question: ${it.label} · ${why}${extra}`);
-    if (!best) log("copy", it.custom ? "(I don't know this question yet — say the answer now and I'll learn it, and questions that mean the same)" : `(I don't have an answer to “${it.label}” in your voice yet — say one now, e.g. «${it.teach}»)`);
-    else { lastAnswer = best; setTimeout(() => play(best.buf), 250 + Math.random() * 300); log("copy", best.text, `your own voice · ${how}`); }
+    if (!best) {
+      lastQuestion = { text, it, v, at: performance.now() }; // only now is the next press taken as the answer
+      log("copy", it.custom ? "(I don't know this question yet — say the answer now and I'll learn it, and questions that mean the same)" : `(I don't have an answer to “${it.label}” in your voice yet — say one now, e.g. «${it.teach}»)`);
+    } else {
+      lastAnswer = best; setTimeout(() => play(best.buf), 250 + Math.random() * 300);
+      const q = { text, it, v };
+      log("copy", best.text, `your own voice · ${how}`, () => {
+        bad.add(it.id + "|" + best.id);
+        for (let i = pairs.length - 1; i >= 0; i--) if (pairs[i].intent === it.id && pairs[i].clip === best) pairs.splice(i, 1);
+        lastQuestion = { ...q, at: performance.now(), forced: true };
+        log("copy", `(OK — «${best.text}» won't answer “${it.label}” again. Say the right answer now.)`);
+      });
+    }
     return;
   }
   const tags = await tagsFor(text);
-  const c = { buf, text, tags };
-  if (lastQuestion && performance.now() - lastQuestion.at < 15_000) {
-    const q = lastQuestion; lastQuestion = null;
-    pairs.push({ intent: q.it.id, clip: c });
-    if (q.v) ex.push({ k: q.it.id, v: q.v }); // learn this way of asking, too
-    log("you", text, `understood in ${ms} ms · taught as an answer to “${q.it.label}” · ${[...tags].join(" + ") || "other"} · ${why}${extra}`);
+  const c = { id: clips.length + Math.random(), buf, text, tags };
+  clips.push(c);
+  const q = lastQuestion;
+  if (q && performance.now() - q.at < 15_000) {
+    lastQuestion = null;
+    if (q.forced || q.it.custom || !tags.size || fit(c, q.it) > 0) {
+      pairs.push({ intent: q.it.id, clip: c, forced: !!q.forced });
+      if (q.v) ex.push({ k: q.it.id, v: q.v }); // learn this way of asking, too
+      log("you", text, `understood in ${ms} ms · taught as an answer to “${q.it.label}” · ${[...tags].join(" + ") || "other"} · ${why}${extra}`);
+    } else log("you", text, `understood in ${ms} ms · learned · ${[...tags].join(" + ")} — kept as a phrase, it doesn't answer “${q.it.label}” · ${why}${extra}`);
   } else log("you", text, `understood in ${ms} ms · learned · ${[...tags].join(" + ") || "other"} · ${why}${extra}`);
-  clips.push(c); renderMem();
+  renderMem();
 }
 
 $("engine").onchange = () => { $("model").hidden = $("engine").value !== "whisper"; };
@@ -444,9 +464,10 @@ addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat && !$("
 addEventListener("keyup", (e) => { if (e.code === "Space") { e.preventDefault(); up(); } });
 
 // ── UI ──
-function log(cls, text, meta) {
+function log(cls, text, meta, onWrong) {
   const d = document.createElement("div"); d.className = "msg " + cls; d.textContent = text;
   if (meta) { const s = document.createElement("small"); s.textContent = meta; d.appendChild(s); }
+  if (onWrong) { const w = document.createElement("button"); w.className = "ghost"; w.style.cssText = "padding:4px 10px;font-size:12px;margin-top:6px"; w.textContent = "✗ wrong answer"; w.onclick = () => { w.disabled = true; w.textContent = "marked wrong"; onWrong(); }; d.appendChild(w); }
   $("log").prepend(d);
 }
 function renderMem() {
