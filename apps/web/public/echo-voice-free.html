@@ -97,7 +97,11 @@ function hasF(t, ws) {
     const parts = w.split(" "), k = parts.map(sk).join("");
     if (k.length < 2) return has(t, [w]);
     if (parts.length > 1) {
-      if (k.length >= 4) return all.includes(k); // «انتفين» ≈ «انت فين»
+      if (k.length >= 4) { // «انتفين» ≈ «انت فين» — but only on word edges («انت جنبي» is not «انتو جايين»)
+        const edges = new Set([0]); let n = 0; for (const x of tw) { n += x.length; edges.add(n); }
+        for (let at = all.indexOf(k); at >= 0; at = all.indexOf(k, at + 1)) if (edges.has(at) && edges.has(at + k.length)) return true;
+        return false;
+      }
       const ps = parts.map(sk); // short phrases: the same words in a row
       for (let i = 0; i + ps.length <= tw.length; i++) if (ps.every((x, j) => x === tw[i + j] || (x.length < 2 && norm(parts[j]) === t.split(" ")[i + j]))) return true;
       return false;
@@ -114,18 +118,20 @@ const isQuestion = (text, t) => /[؟?]/.test(text) || /ولا (لا|لأ|ايه|
 const INTENTS = [
   // id, label, how to recognise it, answers it accepts (best first), an example answer to teach
   { id: "scaredq", label: "are you scared?", test: (t, q) => hasF(t, ["انت خايف", "انتي خايفه", "انتو خايفين", "انت قلقان", "انت مرعوب", "are you scared", "are you afraid"]) || (q && hasF(t, ["خايف", "خايفه"])), want: ["notscared", "no"], teach: "لا مش خايف" },
-  { id: "scared", label: "I'm scared (comfort me)", test: (t) => hasF(t, ["انا خايف", "انا خايفه", "خايف", "مرعوب", "مرعوبه", "حد ورايا", "حاجه ورايا", "الحقني", "الحقوني", "ساعدني", "i'm scared", "help me", "help"]), want: ["calm", "coming", "here"], teach: "متخافش انا جنبك" },
-  { id: "doing", label: "what are you doing?", test: (t) => hasF(t, ["بتعمل ايه", "بتعملي ايه", "بتعملوا ايه", "what are you doing"]), want: ["doing", "dunno"], teach: "بدور على الفيوز" },
+  { id: "scared", label: "I'm scared (comfort me)", test: (t) => hasF(t, ["انا خايف", "انا خايفه", "خايف", "مرعوب", "مرعوبه", "حد ورايا", "حاجه ورايا", "الوحش ورايا", "بيجري ورايا", "ماشي ورايا", "الحقني", "الحقوني", "ساعدني", "i'm scared", "help me", "help"]), want: ["calm", "coming", "here"], teach: "متخافش انا جنبك" },
+  { id: "doing", label: "what are you doing?", test: (t) => hasF(t, ["بتعمل ايه", "بتعملي ايه", "بتعملوا ايه", "بتهبب ايه", "what are you doing"]), want: ["doing", "dunno"], teach: "بدور على الفيوز" },
   { id: "how", label: "how are you?", test: (t) => hasF(t, ["عامل ايه", "عامله ايه", "عاملين ايه", "ازيك", "ازيكم", "اخبارك", "ايه الاخبار", "انت كويس", "انت تمام", "انت بخير", "حصلك حاجه", "حصل لك حاجه", "ايه الدنيا", "how are you", "are you ok", "you ok"]), want: ["fine"], teach: "تمام الحمد لله" },
-  { id: "time", label: "what time is it?", test: (t) => hasF(t, ["الساعه كام", "كام الساعه", "what time"]), want: ["time", "dunno"], teach: "مش عارف" },
+  { id: "time", label: "what time is it?", test: (t) => hasF(t, ["الساعه كام", "كام الساعه", "معاك ساعه", "what time"]), want: ["time", "dunno"], teach: "مش عارف" },
   { id: "name", label: "who are you?", test: (t) => hasF(t, ["انت مين", "مين انت", "اسمك ايه", "مين معايا", "who are you", "your name"]), want: ["me", "name"], teach: "انا …" },
+  { id: "fuse", label: "where's the fuse / where does it go?", test: (t) => hasF(t, ["نحط الفيوز", "احط الفيوز", "نحطه فين", "احطه فين", "نحطها فين", "الصندوق فين", "العلبه فين", "اللوحه فين", "where does the fuse go", "where's the fuse"]) || (hasF(t, ["الفيوز", "فيوز", "الفيوزات", "الصندوق"]) && (has(t, ["فين", "وين"]) || hasF(t, ["اعمل بيه ايه", "اعمل فيه ايه", "نعمل بيه ايه", "نعمل فيه ايه", "اوديه فين"]))), want: ["place", "dunno"], teach: "في الصندوق اللي عند السلم" },
+  { id: "fusehave", label: "got a fuse?", test: (t, q) => (q || /^(معاك|معاكو|حد معاه|حد لقي)\s/.test(t)) && hasF(t, ["فيوز", "الفيوز", "فيوزات"]) && (hasF(t, ["معاك", "معاكو", "لقيت", "لقيتو", "حد لقي", "do you have"]) || has(t, ["معاه", "معاهم"])), want: ["yes", "no", "dunno"], teach: "لا لسه" },
+  { id: "saw", label: "did you see/hear it?", test: (t, q) => (q || /^(انت|انتي|انتو|حد)\s/.test(t)) && (hasF(t, ["شفت", "شوفت", "سمعت", "did you see", "did you hear"]) || has(t, ["شاف", "سمع", "حد شاف", "حد سمع"])), want: ["no", "dunno", "yes"], teach: "لا مشفتش حاجه" },
+  { id: "hear", label: "can you hear me? / hello", test: (t) => hasF(t, ["سامعني", "سامعيني", "سامعنا", "حد سامع", "انت سامع", "انتو سامعين", "حد يرد", "صوتي واصل", "صوتي جايلك", "انت معايا", "الو", "can you hear", "hear me", "hello"]), want: ["hear-yes", "yes"], teach: "ايوه سامعك" },
   { id: "hereq", label: "are you here?", test: (t) => hasF(t, ["انت هنا", "انتي هنا", "انت موجود", "حد هنا", "are you here", "anyone here"]), want: ["here", "yes"], teach: "ايوه انا هنا" },
-  { id: "where", label: "where are you?", test: (t) => hasF(t, ["انت فين", "انتي فين", "انتو فين", "فين", "وين", "where are you", "where"]), want: ["here"], teach: "انا هنا في الممر" },
-  { id: "hear", label: "can you hear me? / hello", test: (t) => hasF(t, ["سامعني", "سامعيني", "سامعنا", "حد سامع", "انت معايا", "الو", "can you hear", "hear me", "hello"]), want: ["hear-yes", "yes"], teach: "ايوه سامعك" },
-  { id: "comingq", label: "are you coming?", test: (t) => hasF(t, ["انت جاي", "انتي جايه", "هو جاي", "هتيجي", "هتيجو", "انتو جايين", "جاي ولا", "are you coming"]), want: ["coming", "yes"], teach: "ايوه جاي" },
+  { id: "where", label: "where are you?", test: (t) => hasF(t, ["انت فين", "انتي فين", "انتو فين", "where are you", "where"]) || has(t, ["فين", "وين"]) || hasF(t, ["في انهي", "انهي اوضه", "انهي حته", "انهي دور", "انهي مكان"]), want: ["here"], teach: "انا هنا في الممر" },
+  { id: "comingq", label: "are you coming?", test: (t) => hasF(t, ["انت جاي", "انتي جايه", "هو جاي", "هتيجي", "هتيجو", "هتتاخر", "هتتأخر", "انتو جايين", "جاي ولا", "are you coming"]), want: ["coming", "yes"], teach: "ايوه جاي" },
   { id: "come", label: "come here", test: (t) => hasF(t, ["تعالي", "تعالو", "تعالا", "come here", "follow me"]) && !hasF(t, ["من هنا", "this way"]), want: ["coming"], teach: "حاضر جاي" },
   { id: "found", label: "I found something", test: (t) => hasF(t, ["لقيت", "لقيته", "لقيتها", "i found"]), want: ["coming", "yes"], teach: "طب انا جاي" },
-  { id: "saw", label: "did you see/hear it?", test: (t, q) => (q || /^(انت|انتي|انتو|حد)\s/.test(t)) && hasF(t, ["شفت", "شوفت", "سمعت", "did you see", "did you hear"]), want: ["no", "dunno", "yes"], teach: "لا مشفتش حاجه" },
   { id: "yesno", label: "yes/no question", test: (t, q) => q, want: ["yes", "no", "dunno"], teach: "ايوه" },
 ];
 function intentOf(text) {
@@ -146,6 +152,7 @@ function tagsOf(text) {
   if (/\d/.test(t) || hasF(t, ["الساعه", "واحده", "اتنين", "تلاته", "اربعه", "خمسه", "سته", "سبعه", "تمانيه", "تسعه", "عشره", "اتناشر", "ونص", "وربع", "o'clock"])) g.add("time");
   if (/^(بدور|بعمل|مستني|بستخبي|بستخبى|بجري|بحاول|looking|waiting|hiding)/.test(t) || hasF(t, ["بدور", "بعمل", "مستني", "بستخبي", "بستخبى"])) g.add("doing");
   if (/^انا\s+[^\s]+$/.test(t) && !/^انا (هنا|جاي|جايه|خايف|خايفه|فوق|تحت|جوه|بره|ورا|قدام|تمام|كويس|مستني)$/.test(t) || hasF(t, ["اسمي", "it's me", "its me", "my name"])) g.add("me");
+  if (/^(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)(\s|$)/.test(t) || hasF(t, ["الصندوق", "العلبه", "اللوحه", "in the box"])) g.add("place");
   if (hasF(t, ["انا هنا", "هنا", "جنبك", "اهو", "i'm here", "im here", "over here", "right here"]) || /^(انا )?(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)(\s|$)/.test(t) || hasF(t, ["الدور", "الممر", "الاوضه", "الطرقه", "السلم", "الباب", "in the", "near the", "by the"])) g.add("here");
   if (hasF(t, ["مش عارف", "معرفش", "مش فاكر", "مش متاكد", "i don't know", "dunno"])) g.add("dunno");
   if (/^(لا|لأ|لاء|no|nope)(\s|$)/.test(t) || hasF(t, ["مشفتش", "مسمعتش", "محدش", "لا"])) g.add("no");
@@ -157,7 +164,7 @@ function fit(clip, it) {
   let s = 0;
   it.want.forEach((k, i) => { if (clip.tags.has(k)) s += it.want.length - i; });
   if (s === 0) return 0;
-  for (const k of clip.tags) if (!it.want.includes(k)) s -= 0.5;
+  for (const k of clip.tags) if (!it.want.includes(k)) s -= 1; // «ايوه سامعك» is not an answer to «انت جاي؟»
   return s;
 }
 const words = (s) => new Set(norm(s).split(" ").filter((w) => w.length > 1 && !["يا", "اسطي", "انت", "انتي", "انا", "عم", "the", "you", "a", "is", "are"].includes(w)));
@@ -167,20 +174,22 @@ const similar = (a, b) => { let n = 0; for (const w of a) if (b.has(w)) n++; ret
 // Compares the MEANING of what you said with example sentences, so new ways of asking work too
 // («يا عم انت روحت فين» ≈ «انت فين؟»). Tested on 44 Egyptian phrasings it never saw: 41 right (keywords alone: 27).
 const BANK = {
-  hear: ["الو", "سامعني؟", "انت سامعني؟", "حد سامعني؟", "حد معايا؟", "انت معايا؟", "يا جماعه حد سامع؟", "الو الو", "سامعني كويس؟", "صوتي واصل؟", "انت سامعني ولا لا؟", "حد سامع؟", "can you hear me?", "hello?"],
-  where: ["انت فين؟", "فين يعني؟", "انت فين دلوقتي؟", "روحت فين؟", "اختفيت فين؟", "انتو فين؟", "انت في انهي اوضه؟", "مكانك فين؟", "انت في الدور الكام؟", "انت فين يا عم؟", "انت واقف فين؟", "where are you?"],
-  hereq: ["انت هنا؟", "انت لسه هنا؟", "حد هنا؟", "انت موجود؟", "انت جنبي؟", "انت قريب مني؟", "are you here?"],
-  how: ["عامل ايه؟", "ازيك؟", "اخبارك ايه؟", "انت كويس؟", "انت تمام؟", "انت بخير؟", "حصلك حاجه؟", "انت سليم؟", "ايه الاخبار؟", "انت عامل ايه دلوقتي؟", "الدنيا عامله ايه؟", "كله تمام؟", "how are you?"],
-  time: ["الساعه كام؟", "كام الساعه دلوقتي؟", "احنا بقالنا قد ايه هنا؟", "فاضل قد ايه؟", "what time is it?"],
-  name: ["انت مين؟", "مين معايا؟", "اسمك ايه؟", "مين ده؟", "مين اللي بيتكلم؟", "who are you?"],
-  doing: ["بتعمل ايه؟", "بتعمل ايه دلوقتي؟", "انت بتدور على ايه؟", "ايه اللي بتعمله؟", "what are you doing?"],
-  comingq: ["انت جاي؟", "هتيجي امتى؟", "انت جاي ولا ايه؟", "هتتاخر؟", "انت جاي ورايا؟", "جايين؟", "انت جاي ولا لا؟", "are you coming?"],
-  scaredq: ["انت خايف؟", "انت مش خايف؟", "انت مرعوب؟", "انت قلقان؟", "انت خايف ولا لا؟", "مش خايف ولا ايه؟", "are you scared?"],
-  scared: ["انا خايف", "انا مرعوب", "الحقني", "الحقوني", "ساعدني", "في حاجه ورايا", "انا لوحدي وخايف", "I'm scared", "help me"],
-  come: ["تعالى", "تعالى هنا", "تعالى بسرعه", "تعالالي", "امشي ورايا", "اتبعني", "come here"],
-  found: ["لقيت فيوز", "لقيت حاجه", "لقيت الفيوز", "لقيتها", "I found it"],
-  saw: ["شفت الوحش؟", "انت شفته؟", "سمعت الصوت ده؟", "شفت حاجه؟", "حد شاف حاجه؟", "انت شفت حاجه؟", "did you see it?"],
-  answer: ["انا هنا", "انا جاي", "ايوه", "لا", "تمام", "الحمد لله", "مش عارف", "انا في الممر", "ايوه سامعك", "متخافش", "اه", "حاضر", "لا مش خايف", "انا بدور على الفيوز", "انا جنبك", "كويس", "ماشي", "ثواني وجاي", "مشفتش حاجه", "انا عند السلم"],
+  hear: ["الو", "سامعني؟", "انت سامعني؟", "حد سامعني؟", "حد معايا؟", "انت معايا؟", "يا جماعه حد سامع؟", "الو الو", "سامعني كويس؟", "صوتي واصل؟", "انت سامعني ولا لا؟", "حد سامع؟", "can you hear me?", "hello?", "حد سامع صوتي؟", "سامعين يا جماعه؟", "انت سامع؟", "محدش بيرد ليه؟", "الو انت معايا؟"],
+  where: ["انت فين؟", "فين يعني؟", "انت فين دلوقتي؟", "روحت فين؟", "اختفيت فين؟", "انتو فين؟", "انت في انهي اوضه؟", "مكانك فين؟", "انت في الدور الكام؟", "انت فين يا عم؟", "انت واقف فين؟", "where are you?", "انت روحت فين؟", "انت فين بالظبط؟", "انت في انهي مكان؟", "قولي مكانك", "انتو فين يا شباب؟"],
+  hereq: ["انت هنا؟", "انت لسه هنا؟", "حد هنا؟", "انت موجود؟", "انت جنبي؟", "انت قريب مني؟", "are you here?", "حد معايا هنا؟", "انت لسه موجود؟", "فيه حد؟", "انت ورايا؟"],
+  how: ["عامل ايه؟", "ازيك؟", "اخبارك ايه؟", "انت كويس؟", "انت تمام؟", "انت بخير؟", "حصلك حاجه؟", "انت سليم؟", "ايه الاخبار؟", "انت عامل ايه دلوقتي؟", "الدنيا عامله ايه؟", "كله تمام؟", "how are you?", "انت كويس يا صاحبي؟", "ايه الاخبار يا معلم؟", "انت اتعورت؟", "انت سليم ولا حصلك حاجه؟"],
+  time: ["الساعه كام؟", "كام الساعه دلوقتي؟", "احنا بقالنا قد ايه هنا؟", "فاضل قد ايه؟", "what time is it?", "الساعه بقت كام؟", "فاضل كام دقيقه؟", "بقالنا قد ايه؟", "الوقت فات؟"],
+  name: ["انت مين؟", "مين معايا؟", "اسمك ايه؟", "مين ده؟", "مين اللي بيتكلم؟", "who are you?", "مين انت؟", "مين اللي بيتكلم ده؟", "انت مين فيكم؟"],
+  doing: ["بتعمل ايه؟", "بتعمل ايه دلوقتي؟", "انت بتدور على ايه؟", "ايه اللي بتعمله؟", "what are you doing?", "بتعمل ايه عندك؟", "بتعمل ايه هناك؟", "انت بتدور على حاجه؟", "بتعمل ايه يا ابني؟"],
+  comingq: ["انت جاي؟", "هتيجي امتى؟", "انت جاي ولا ايه؟", "هتتاخر؟", "انت جاي ورايا؟", "جايين؟", "انت جاي ولا لا؟", "are you coming?", "هتيجي ولا لا؟", "انت هتيجي؟", "جاي امتى؟", "هتتأخر كتير؟"],
+  scaredq: ["انت خايف؟", "انت مش خايف؟", "انت مرعوب؟", "انت قلقان؟", "انت خايف ولا لا؟", "مش خايف ولا ايه؟", "are you scared?", "خايف ولا ايه؟", "انت قلقان ولا ايه؟", "مش خايف يا عم؟"],
+  scared: ["انا خايف", "انا مرعوب", "الحقني", "الحقوني", "ساعدني", "في حاجه ورايا", "انا لوحدي وخايف", "I'm scared", "help me", "انا مرعوب بجد", "في حد ورايا", "الوحش جاي عليا", "الحقوني يا جماعه", "انا خايف قوي"],
+  come: ["تعالى", "تعالى هنا", "تعالى بسرعه", "تعالالي", "امشي ورايا", "اتبعني", "come here", "تعالى بسرعه يلا", "تعالوا ورايا", "تعالى شوف ده", "يلا تعالى هنا"],
+  fuse: ["نحط الفيوز فين؟", "احط الفيوز فين؟", "الفيوز بيتحط فين؟", "الصندوق فين؟", "فين الفيوز؟", "الفيوزات فين؟", "حد عارف الفيوز فين؟", "where does the fuse go?", "الصندوق بتاع الفيوز فين؟", "نودي الفيوز فين؟", "اعمل ايه بالفيوز ده؟", "الفيوزات بتتحط فين؟"],
+  fusehave: ["معاك فيوز؟", "لقيت فيوز؟", "حد لقى فيوز؟", "معاك كام فيوز؟", "do you have a fuse?", "معاك فيوزات؟", "حد معاه فيوز؟", "لقيت حاجه؟", "انت لقيت فيوز؟"],
+  found: ["لقيت فيوز", "لقيت حاجه", "لقيت الفيوز", "لقيتها", "I found it", "لقيت فيوز هناك", "انا لقيت الفيوز", "لقيت واحد", "فيه فيوز هنا"],
+  saw: ["شفت الوحش؟", "انت شفته؟", "سمعت الصوت ده؟", "شفت حاجه؟", "حد شاف حاجه؟", "انت شفت حاجه؟", "did you see it?", "انت شفت اللي حصل؟", "حد سمع حاجه؟", "شفته؟"],
+  answer: ["انا هنا", "انا جاي", "ايوه", "لا", "تمام", "الحمد لله", "مش عارف", "انا في الممر", "ايوه سامعك", "متخافش", "اه", "حاضر", "لا مش خايف", "انا بدور على الفيوز", "انا جنبك", "كويس", "ماشي", "ثواني وجاي", "مشفتش حاجه", "انا عند السلم", "جاي", "جاي اهو", "هنا", "اهو", "انا فوق", "في الصندوق", "عند الباب", "انا كويس", "ايوه انا معاك", "جاي حالا", "انا في الاوضه", "مشفتش", "معرفش والله", "انا بدور على فيوز", "اه انا هنا", "لا لسه", "ماشي يلا"],
 };
 /** What kinds of answers sound like — so «ماشي الحال» counts as "fine" without a keyword. */
 const ANSWERS = {
@@ -192,6 +201,7 @@ const ANSWERS = {
   coming: ["انا جاي", "جاي اهو", "حاضر", "ثواني وجاي", "I'm coming"],
   notscared: ["لا مش خايف", "مش خايف خالص", "عادي مش خايف"],
   calm: ["متخافش", "اهدى انا جنبك", "متقلقش", "don't worry"],
+  place: ["في الصندوق", "عند الباب", "في الاوضه اللي جنب السلم", "جنب السلم", "في اللوحه اللي في الممر"],
   dunno: ["مش عارف", "معرفش", "مش متاكد", "I don't know"],
   no: ["لا", "لأ مشفتش", "لا محدش", "no"],
   yes: ["ايوه", "اه", "اكيد", "yes"],
@@ -210,11 +220,14 @@ async function loadBrain(onProgress) {
   (await embed(at)).forEach((v, i) => ansEx.push({ k: ak[i], v }));
 }
 /** Score per class: the mean of its two closest examples. */
-function scores(v, pool) {
+function scores(v, pool, top1 = false) {
   const by = {}; for (const e of pool) (by[e.k] ||= []).push(dot(v, e.v));
-  const o = {}; for (const [k, a] of Object.entries(by)) { a.sort((x, y) => y - x); o[k] = (a[0] + (a[1] ?? a[0])) / 2; }
+  const o = {}; for (const [k, a] of Object.entries(by)) { a.sort((x, y) => y - x); o[k] = top1 ? a[0] : (a[0] + (a[1] ?? a[0])) / 2; }
   return o;
 }
+// Tuned overnight on 145 Egyptian phrases (half to tune, half to check): closest example, keyword boost 0.042,
+// sure when ≥ 0.938 or 0.011 ahead of the next kind. Held-out: 63/72 (was 60/72).
+const TUNE = { boost: 0.042, conf: 0.938, margin: 0.0113, tipRising: 0.02 };
 const customIntents = {}; // questions you asked that matched nothing known: they become new kinds of question
 const intentById = (id) => INTENTS.find((x) => x.id === id) || customIntents[id] || null;
 /**
@@ -225,20 +238,20 @@ async function understand(text, rising) {
   const kw = intentOf(text), t = norm(text);
   if (!embed) return { it: kw || (rising ? INTENTS.find((x) => x.id === "yesno") : null), v: null, how: kw ? "keywords" : rising ? "rising voice" : "" };
   const [v] = await embed([text]);
-  const sc = scores(v, ex);
-  if (kw && sc[kw.id] !== undefined) sc[kw.id] += 0.02;
+  const sc = scores(v, ex, true);
+  if (kw && sc[kw.id] !== undefined) sc[kw.id] += kw.id === "yesno" ? 0 : TUNE.boost; // specific keywords win close calls
   const ranked = Object.entries(sc).sort((a, b) => b[1] - a[1]);
   const q = ranked.filter(([k]) => k !== "answer");
   const [bk, bs] = ranked[0];
   const looksQ = rising || isQuestion(text, t);
   let id = bk;
-  if (bk === "answer" && looksQ && q[0][1] > bs - 0.02) id = q[0][0]; // a rising voice tips a close call to the question
-  if (id !== "answer" && !looksQ && !kw && sc.answer >= sc[id] - 0.03) id = "answer"; // «ده جاي»: no question signs at all
+  if (bk === "answer" && rising && q[0][1] > bs - TUNE.tipRising) id = q[0][0]; // a rising voice tips a close call to the question
+  if (id !== "answer" && !looksQ && !kw && (sc.answer >= sc[id] || !/\s/.test(t))) id = "answer"; // «ده جاي», «جاي»: no question signs // «ده جاي»: no question signs at all
   if (id === "answer") return { it: null, v, how: `AI: statement ${sc.answer.toFixed(2)}` };
   // Sure only if it scores high, stands out from the next kind of question, or the keywords agree.
   // Unknown questions («انت بتحب الكوره») come out as a near-tie between kinds — measured on real phrases.
   const conf = sc[id], margin = conf - (q.find(([k]) => k !== id)?.[1] ?? 0);
-  const sure = conf >= 0.905 || margin >= 0.015 || (kw && kw.id === id);
+  const sure = conf >= TUNE.conf || margin >= TUNE.margin || (kw && kw.id === id);
   if (!sure && kw && kw.id !== "yesno" && sc[kw.id] !== undefined && sc[kw.id] >= conf - 0.01) return { it: kw, v, how: `keywords (AI unsure ${conf.toFixed(2)})` };
   if (!sure) { // nothing like it known: a new kind of question
     const nid = "q:" + t; customIntents[nid] ||= { id: nid, label: `«${text}»`, want: ["yes", "no", "dunno"], teach: "…", custom: true };
