@@ -38,13 +38,17 @@
 <main>
   <div>
     <h1>The Copy · free prototype</h1>
-    <div class="sub">It learns short phrases in your real voice, then answers your questions with them — like the Copy will with a friend's voice. Free, no key. The speech AI (Whisper) runs inside your browser: your voice never leaves this computer.</div>
+    <div class="sub">It learns short phrases in your real voice, then answers your questions with them — like the Copy will with a friend's voice. Free, no key. "Google" uses Chrome's built-in speech-to-text set to Egyptian Arabic (ar-EG) — the most accurate for Egyptian. "Whisper" runs fully inside your browser (private) but is weaker on Egyptian.</div>
   </div>
 
   <section>
     <div class="row">
       <select id="lang"><option value="arabic">العربية</option><option value="english">English</option></select>
-      <select id="model">
+      <select id="engine">
+        <option value="google">Google · Egyptian Arabic (best)</option>
+        <option value="whisper">Whisper · private, in browser</option>
+      </select>
+      <select id="model" hidden>
         <option value="onnx-community/whisper-small">Accurate (≈250 MB, once)</option>
         <option value="onnx-community/whisper-base">Fast (≈80 MB, once)</option>
       </select>
@@ -53,7 +57,7 @@
     </div>
     <div class="bar"><div id="dl"></div></div>
     <ol>
-      <li><b>Hold the button (or Space) and say ONE short answer</b>, then let go: «ايوه سامعك» · «انا هنا» · «انا في الممر» · «جاي» · «اه» · «لا» · «مش عارف» · «متخافش انا جنبك» · «لا مش خايف».</li>
+      <li><b>Hold the button (or Space), wait until it turns red and says “Speak now”, say ONE short answer</b>, then let go: «ايوه سامعك» · «انا هنا» · «انا في الممر» · «جاي» · «اه» · «لا» · «مش عارف» · «متخافش انا جنبك» · «لا مش خايف».</li>
       <li><b>Hold and ask</b>: «سامعني؟» «انت فين؟» «تعالى» «انت خايف؟» «انت شفت الوحش؟». It answers with your recorded phrase.</li>
       <li>No good answer yet? <b>Say the answer in the next press</b> — it remembers it for that question.</li>
     </ol>
@@ -83,34 +87,47 @@ let lastQuestion = null;
 // ── meaning ──
 const norm = (s) => s.toLowerCase().replace(/[؟?!.,،:;"'«»]/g, " ").replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه").replace(/\s+/g, " ").trim();
 const has = (t, ws) => ws.some((w) => new RegExp(`(^|[^\\p{L}])${w}($|[^\\p{L}])`, "u").test(t));
+/** Sound skeleton of Arabic: letters speech-to-text mixes up are merged and vowels dropped, so «أنا حينة» ≈ «انا هنا», «انتفين» ≈ «انت فين». */
+const AR = /[\u0600-\u06FF]/;
+const sk = (w) => { let x = w.replace(/[\u064B-\u0652\u0640]/g, "").replace(/[حة]/g, "ه").replace(/ث/g, "س").replace(/ذ/g, "ز").replace(/ظ/g, "ض").replace(/ق/g, "ء").replace(/[اويءئؤ]/g, ""); if (x.length > 2 && x.endsWith("ه")) x = x.slice(0, -1); return x; };
+function hasF(t, ws) {
+  const tw = t.split(" ").map(sk), all = tw.join("");
+  return ws.some((w) => {
+    if (!AR.test(w)) return has(t, [w]);
+    const parts = w.split(" "), k = parts.map(sk).join("");
+    if (k.length < 2) return has(t, [w]);
+    if (parts.length > 1) return all.includes(k);
+    return tw.includes(k);
+  });
+}
 const isQuestion = (text, t) => /[؟?]/.test(text) || /^(انت|انتي|انتو|هو|هي|فيه|حد|هل|are|is|did|do|have|can)\s/.test(t) || has(t, ["ايه", "مين", "فين", "وين", "ليه", "امتي", "ازاي", "كام", "what", "who", "where", "why", "how", "صح"]);
 function wantOf(text) {
   const t = norm(text);
-  if (has(t, ["مش خايف", "مش خايفه", "not scared"]) && !/^(انت|انتي)\s/.test(t)) return null;
-  if (has(t, ["سامعني", "سامعيني", "سامعين", "حد سامع", "الو", "can you hear", "hear me", "hello"])) return ["hear-yes", "yes", "here"];
-  if (has(t, ["فين", "وين", "where are you", "where"])) return ["here", "come"];
-  if (has(t, ["انت خايف", "انتي خايفه", "are you scared", "are you afraid"]) || (isQuestion(text, t) && has(t, ["خايف", "خايفه", "scared"]))) return ["notscared", "no", "calm"];
-  if (has(t, ["خايف", "خايفه", "الحق", "ساعدني", "scared", "help"])) return ["calm", "here", "come"];
-  if (has(t, ["انت جاي", "are you coming"])) return ["coming", "yes"];
-  if (has(t, ["لقيت", "found"])) return ["coming", "yes"];
-  if (has(t, ["تعالي", "تعالو", "come here", "come", "follow me"]) && !has(t, ["من هنا", "this way"])) return ["coming", "yes"];
-  if (has(t, ["شفت", "شوفت", "سمعت", "did you see", "did you hear", "saw"])) return ["no", "dunno", "yes"];
+  if (hasF(t, ["مش خايف", "مش خايفه", "not scared"]) && !/^(انت|انتي)\s/.test(t)) return null;
+  if (hasF(t, ["سامعني", "سامعيني", "سامعين", "حد سامع", "الو", "can you hear", "hear me", "hello"])) return ["hear-yes", "yes", "here"];
+  if (hasF(t, ["فين", "وين", "انت فين", "انتي فين", "انتو فين", "where are you", "where"])) return ["here", "come"];
+  if (hasF(t, ["انت خايف", "انتي خايفه", "are you scared", "are you afraid"]) || (isQuestion(text, t) && hasF(t, ["خايف", "خايفه", "scared"]))) return ["notscared", "no", "calm"];
+  if (hasF(t, ["خايف", "خايفه", "الحق", "ساعدني", "scared", "help"])) return ["calm", "here", "come"];
+  if (hasF(t, ["انت جاي", "are you coming"])) return ["coming", "yes"];
+  if (hasF(t, ["لقيت", "found"])) return ["coming", "yes"];
+  if (hasF(t, ["تعالي", "تعالو", "come here", "come", "follow me"]) && !hasF(t, ["من هنا", "this way"])) return ["coming", "yes"];
+  if ((isQuestion(text, t) || /^(انت|انتي|انتو|حد)\s/.test(t)) && hasF(t, ["شفت", "شوفت", "سمعت", "did you see", "did you hear", "saw"])) return ["no", "dunno", "yes"];
   if (isQuestion(text, t)) return ["yes", "no", "dunno"];
   return null;
 }
 function kindOf(text) {
   const t = norm(text);
   if (wantOf(text)) return "question";
-  if (has(t, ["سامعك", "سامعاك", "سامعكم", "i can hear you", "hear you", "loud and clear"])) return "hear-yes";
-  if (has(t, ["مش خايف", "مش خايفه", "not scared", "i'm not scared"])) return "notscared";
-  if (has(t, ["متخافش", "متخافيش", "ما تخافش", "اهدي", "it's ok", "its ok", "don't worry", "calm down"])) return "calm";
-  if (has(t, ["جاي", "جايه", "جايين", "حاضر", "coming", "on my way"])) return "coming";
-  if (has(t, ["تعالي", "تعالو", "come here", "this way", "follow me"])) return "come";
+  if (hasF(t, ["سامعك", "سامعاك", "سامعكم", "i can hear you", "hear you", "loud and clear"])) return "hear-yes";
+  if (hasF(t, ["مش خايف", "مش خايفه", "not scared", "i'm not scared"])) return "notscared";
+  if (hasF(t, ["متخافش", "متخافيش", "ما تخافش", "اهدي", "it's ok", "its ok", "don't worry", "calm down"])) return "calm";
+  if (hasF(t, ["جاي", "جايه", "جايين", "حاضر", "coming", "on my way"])) return "coming";
+  if (hasF(t, ["تعالي", "تعالو", "come here", "this way", "follow me"])) return "come";
   // where I am: «انا هنا», «انا في الممر», «عند الباب», «جنب السلم», «في الدور التاني»…
-  if (has(t, ["انا هنا", "هنا", "جنبك", "i'm here", "im here", "over here", "right here"]) || /^(انا )?(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)\s/.test(t) || has(t, ["الدور", "الممر", "الاوضه", "الطرقه", "السلم", "الباب", "in the", "near the", "by the"])) return "here";
-  if (has(t, ["مش عارف", "معرفش", "مش فاكر", "i don't know", "dunno"])) return "dunno";
-  if (/^(لا|لأ|لاء|no|nope)(\s|$)/.test(t) || has(t, ["مشفتش", "مسمعتش", "محدش"])) return "no";
-  if (has(t, ["ايوه", "اه", "ايوا", "نعم", "yes", "yeah", "yep", "شفته", "شفتها"])) return "yes";
+  if (hasF(t, ["انا هنا", "هنا", "جنبك", "i'm here", "im here", "over here", "right here"]) || /^(انا )?(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)\s/.test(t) || hasF(t, ["الدور", "الممر", "الاوضه", "الطرقه", "السلم", "الباب", "in the", "near the", "by the"])) return "here";
+  if (hasF(t, ["مش عارف", "معرفش", "مش فاكر", "i don't know", "dunno"])) return "dunno";
+  if (/^(لا|لأ|لاء|no|nope)(\s|$)/.test(t) || hasF(t, ["مشفتش", "مسمعتش", "محدش"])) return "no";
+  if (hasF(t, ["ايوه", "اه", "ايوا", "نعم", "yes", "yeah", "yep", "شفته", "شفتها"])) return "yes";
   return "other";
 }
 const words = (s) => new Set(norm(s).split(" ").filter((w) => w.length > 1 && !["يا", "اسطي", "انت", "انتي", "انا", "عم", "the", "you", "a", "is", "are"].includes(w)));
@@ -169,30 +186,69 @@ async function loadModel() {
   $("status").textContent = `Ready · ${gpu ? "graphics card (fast)" : "processor"} · ${id.split("/")[1]}`;
 }
 
+// ── Google (Chrome's speech-to-text, Egyptian Arabic) ──
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, heard = null;
+const useGoogle = () => $("engine").value === "google" && !!SR;
+function startGoogle() {
+  heard = { finals: [], alts: [], interim: "", err: "", started: false };
+  const h = heard;
+  rec = new SR();
+  rec.lang = $("lang").value === "arabic" ? "ar-EG" : "en-US";
+  rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 5;
+  rec.onaudiostart = () => { h.started = true; if (recording) $("talk").textContent = "Speak now… let go when you finish"; };
+  rec.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) { h.finals.push(r[0].transcript); for (let k = 1; k < r.length; k++) h.alts.push(r[k].transcript); h.interim = ""; }
+      else h.interim = r[0].transcript;
+    }
+  };
+  rec.onerror = (e) => { h.err = e.error; };
+  h.ended = new Promise((res) => { rec.onend = res; });
+  try { rec.start(); } catch (e) { h.err = e.message; }
+}
+async function stopGoogle() {
+  const h = heard;
+  try { rec.stop(); } catch {}
+  await Promise.race([h.ended, new Promise((r) => setTimeout(r, 3000))]);
+  const main = (h.finals.join(" ") || h.interim).trim();
+  return { list: [main, ...h.alts].map((x) => x.trim()).filter(Boolean), err: h.err };
+}
+
 // ── hold to talk ──
 async function down() {
-  if (recording || busy || !asr) return;
+  if (recording || busy || (!asr && !useGoogle())) return;
   frames = []; recording = true;
-  $("talk").classList.add("on"); $("talk").textContent = "Listening… let go when you finish";
+  $("talk").classList.add("on");
+  if (useGoogle()) { $("talk").textContent = "Wait…"; startGoogle(); }
+  else $("talk").textContent = "Speak now… let go when you finish";
 }
 async function up() {
   if (!recording) return;
-  await new Promise((r) => setTimeout(r, 200)); // the last syllable
+  await new Promise((r) => setTimeout(r, 300)); // the last syllable
   recording = false; busy = true;
   $("talk").classList.remove("on"); $("talk").textContent = "Understanding…";
   try {
     const buf = makeClip(frames);
-    if (!buf) { log("you", "(nothing heard — is the green bar moving when you talk?)"); return; }
     const t0 = performance.now();
-    const out = await asr(await to16k(buf), { language: $("lang").value, task: "transcribe" });
-    const text = (out.text || "").trim().replace(/^[\s.،,]+|[\s.،,]+$/g, "");
+    let list = [], err = "";
+    if (useGoogle()) ({ list, err } = await stopGoogle());
+    if (!buf) { log("you", "(nothing heard — is the green bar moving when you talk?)"); return; }
+    if (!list.length && asr) { const out = await asr(await to16k(buf), { language: $("lang").value, task: "transcribe" }); list = [(out.text || "").trim()]; }
+    list = list.map((x) => x.replace(/^[\s.،,]+|[\s.،,]+$/g, "")).filter((x) => x && !/^\[.*\]$|^\(.*\)$/.test(x));
     const ms = Math.round(performance.now() - t0);
-    if (!text || /^\[.*\]$|^\(.*\)$/.test(text)) { log("you", "(couldn't make out the words — try again a bit closer to the mic)", `${ms} ms`); return; }
-    handle(text, buf, ms);
+    if (!list.length) {
+      const why = err === "network" ? "Google speech needs internet" : err === "not-allowed" ? "the microphone is blocked for speech — allow it in the address bar" : "start talking only after the button says “Speak now”, and hold a moment after you finish";
+      log("you", `(couldn't make out the words — ${why})`, `${ms} ms${err ? " · " + err : ""}`); return;
+    }
+    // Google may give a few guesses: use the first one that means something
+    const text = list.find((x) => kindOf(x) !== "other") || list[0];
+    handle(text, buf, ms, list.length > 1 ? list.filter((x) => x !== text) : []);
   } catch (e) { log("copy", "Error: " + e.message); }
   finally { busy = false; $("talk").textContent = "Hold to talk (or hold Space)"; }
 }
-function handle(text, buf, ms) {
+function handle(text, buf, ms, others = []) {
   const want = wantOf(text), kind = kindOf(text);
   const c = { buf, text, kind };
   if (want) {
@@ -202,7 +258,7 @@ function handle(text, buf, ms) {
     for (const p of pairs) { const sc = similar(w, p.words); if (sc > top) { top = sc; best = p.clip; } }
     if (best && top >= 0.5) how = `remembered answer (${Math.round(top * 100)}% same question)`; else best = null;
     if (!best) for (const k of want) { const pool = clips.filter((x) => x.kind === k); if (pool.length) { best = pool[Math.floor(Math.random() * pool.length)]; how = "kind: " + k; break; } }
-    log("you", text, `understood in ${ms} ms · question → wants: ${want.join(" / ")}`);
+    log("you", text, `understood in ${ms} ms · question → wants: ${want.join(" / ")}${others.length ? " · other guesses: " + others.join(" | ") : ""}`);
     if (!best) log("copy", "(no answer like that in your voice yet — say the answer in your next press and I'll remember it)");
     else { const delay = 250 + Math.random() * 300; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · ${how}`); }
   } else if (lastQuestion && performance.now() - lastQuestion.at < 12_000) {
@@ -213,10 +269,16 @@ function handle(text, buf, ms) {
   clips.push(c); renderMem();
 }
 
+$("engine").onchange = () => { $("model").hidden = $("engine").value !== "whisper"; };
+if (!SR) { $("engine").value = "whisper"; $("engine").options[0].disabled = true; $("model").hidden = false; }
 $("start").onclick = async () => {
-  $("start").disabled = true; $("model").disabled = true;
-  try { await ensureAudio(); await loadModel(); $("talk").disabled = false; $("start").textContent = "Ready"; }
-  catch (e) { $("status").textContent = "Couldn't start: " + e.message; $("start").disabled = false; $("model").disabled = false; }
+  for (const id of ["start", "model", "engine", "lang"]) $(id).disabled = true;
+  try {
+    await ensureAudio();
+    if (useGoogle()) { $("status").textContent = `Ready · Google speech-to-text · ${$("lang").value === "arabic" ? "ar-EG (Egyptian)" : "en-US"}`; $("dl").style.width = "100%"; }
+    else await loadModel();
+    $("talk").disabled = false; $("start").textContent = "Ready";
+  } catch (e) { $("status").textContent = "Couldn't start: " + e.message; for (const id of ["start", "model", "engine", "lang"]) $(id).disabled = false; }
 };
 $("talk").addEventListener("pointerdown", (e) => { e.preventDefault(); down(); });
 $("talk").addEventListener("pointerup", up); $("talk").addEventListener("pointerleave", up);
