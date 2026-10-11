@@ -8,7 +8,7 @@
   :root { --bg:#0b0d0c; --panel:#121614; --line:#2a312c; --ink:#e9e4d6; --quiet:#9fa89f; --accent:#d9463b; --ok:#5fbf8a; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 820px; margin: 0 auto; padding: 28px 18px 60px; display:grid; gap:18px; }
+  main { max-width: 860px; margin: 0 auto; padding: 28px 18px 60px; display:grid; gap:18px; }
   h1 { font: 600 28px/1.2 Georgia, serif; margin: 0; }
   .sub { color: var(--quiet); margin-top: 4px; }
   section { background: var(--panel); border:1px solid var(--line); border-radius: 14px; padding: 18px; display:grid; gap:12px; }
@@ -16,13 +16,15 @@
   .row { display:flex; gap:10px; flex-wrap: wrap; align-items:center; }
   button { font: 600 15px system-ui, sans-serif; border:0; border-radius:12px; padding: 12px 18px; cursor:pointer; background: var(--ink); color:#000; }
   button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  button.go { background: var(--ok); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   #talk { width:100%; padding: 30px 16px; font-size: 20px; user-select:none; touch-action:none; }
   #talk.on { background: var(--accent); color:#fff; }
   select { background:#0a0c0b; color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font: inherit; }
   .meter { height:10px; background:#1d2320; border-radius:5px; overflow:hidden; } .meter > div { height:100%; width:0; background: var(--ok); }
+  .bar { height:6px; background:#1d2320; border-radius:3px; overflow:hidden; } .bar > div { height:100%; width:0; background: var(--accent); transition: width .2s; }
   .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
-  .log, .mem { display:grid; gap:8px; max-height: 380px; overflow:auto; align-content:start; }
+  .log, .mem { display:grid; gap:8px; max-height: 420px; overflow:auto; align-content:start; }
   .msg { padding: 9px 12px; border-radius: 10px; border:1px solid var(--line); direction:auto; }
   .msg.you { background:#141a17; } .msg.copy { background:#1e1212; border-color:#5a2621; }
   .msg small { color: var(--quiet); display:block; font-size: 12px; direction:ltr; }
@@ -36,26 +38,28 @@
 <main>
   <div>
     <h1>The Copy · free prototype</h1>
-    <div class="sub">It learns short phrases in your real voice, then answers your questions with them — like the Copy will with a friend's voice. Free, no key.</div>
+    <div class="sub">It learns short phrases in your real voice, then answers your questions with them — like the Copy will with a friend's voice. Free, no key. The speech AI (Whisper) runs inside your browser: your voice never leaves this computer.</div>
   </div>
 
   <section>
     <div class="row">
-      <select id="lang">
-        <option value="ar-EG">العربية (مصر)</option>
-        <option value="ar-SA">العربية (السعودية)</option>
-        <option value="en-US">English</option>
+      <select id="lang"><option value="arabic">العربية</option><option value="english">English</option></select>
+      <select id="model">
+        <option value="onnx-community/whisper-small">Accurate (≈250 MB, once)</option>
+        <option value="onnx-community/whisper-base">Fast (≈80 MB, once)</option>
       </select>
-      <span class="note">Headphones recommended. Chrome or Edge on a computer.</span>
+      <button id="start" class="go">1 · Start</button>
+      <span id="status" class="note">Not started.</span>
     </div>
+    <div class="bar"><div id="dl"></div></div>
     <ol>
-      <li><b>Hold the button (or Space) and say ONE short answer</b>, then let go: «ايوه سامعك» … «انا هنا» … «جاي» … «اه» … «متخافش انا جنبك». One phrase per press.</li>
-      <li><b>Then hold and ask</b>: «سامعني؟», «انت فين؟», «تعالى», «انا خايف». It answers with your own recorded phrase.</li>
+      <li><b>Hold the button (or Space) and say ONE short answer</b>, then let go: «ايوه سامعك» · «انا هنا» · «انا في الممر» · «جاي» · «اه» · «لا» · «مش عارف» · «متخافش انا جنبك» · «لا مش خايف».</li>
+      <li><b>Hold and ask</b>: «سامعني؟» «انت فين؟» «تعالى» «انت خايف؟» «انت شفت الوحش؟». It answers with your recorded phrase.</li>
+      <li>No good answer yet? <b>Say the answer in the next press</b> — it remembers it for that question.</li>
     </ol>
-    <button id="start" style="background:var(--ok)">1 · Start (allow the microphone once)</button>
     <button id="talk" disabled>Hold to talk (or hold Space)</button>
     <div class="meter"><div id="lvl"></div></div>
-    <div class="note">Chrome's free speech-to-text sends what you say to Google to turn it into text. The recordings of your voice stay in this tab and are forgotten when you close it.</div>
+    <div class="note">The first Start downloads the speech model once (then it's cached). Headphones recommended. Chrome or Edge on a computer.</div>
   </section>
 
   <div class="grid">
@@ -64,26 +68,30 @@
   </div>
 </main>
 
-<script>
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0";
+env.allowLocalModels = false;
+
 const $ = (id) => document.getElementById(id);
 const AC = window.AudioContext || window.webkitAudioContext;
-let ctx = null, stream = null, proc = null, rec = null;
-let recording = false, frames = [], busy = false, finalText = "", interimText = "", recEnded = null;
+let ctx = null, stream = null, proc = null, asr = null;
+let recording = false, frames = [], busy = false;
 const clips = []; // { buf, text, kind }
+const pairs = []; // { words: Set, clip }
+let lastQuestion = null;
 
 // ── meaning ──
-const norm = (s) => s.toLowerCase().replace(/[؟?!.,،]/g, " ").replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه");
+const norm = (s) => s.toLowerCase().replace(/[؟?!.,،:;"'«»]/g, " ").replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه").replace(/\s+/g, " ").trim();
 const has = (t, ws) => ws.some((w) => new RegExp(`(^|[^\\p{L}])${w}($|[^\\p{L}])`, "u").test(t));
-// Egyptian questions often have no "?" from speech-to-text: "انت خايف", "انت شفت الوحش", "انت جاي" are questions
-const isQuestion = (text, t) => /[؟?]/.test(text) || /^(انت|انتي|انتو|هو|هي|في|فيه|حد|هل|are|is|did|do|have|can)\s/.test(t) || has(t, ["ايه", "مين", "فين", "ليه", "امتي", "ازاي", "كام", "what", "who", "where", "why", "how", "صح"]);
+const isQuestion = (text, t) => /[؟?]/.test(text) || /^(انت|انتي|انتو|هو|هي|فيه|حد|هل|are|is|did|do|have|can)\s/.test(t) || has(t, ["ايه", "مين", "فين", "وين", "ليه", "امتي", "ازاي", "كام", "what", "who", "where", "why", "how", "صح"]);
 function wantOf(text) {
-  const t = norm(text).trim();
-  if (has(t, ["مش خايف", "مش خايفه", "not scared"]) && !/^(انت|انتي)\s/.test(t)) return null; // "I'm not scared" is an answer
+  const t = norm(text);
+  if (has(t, ["مش خايف", "مش خايفه", "not scared"]) && !/^(انت|انتي)\s/.test(t)) return null;
   if (has(t, ["سامعني", "سامعيني", "سامعين", "حد سامع", "الو", "can you hear", "hear me", "hello"])) return ["hear-yes", "yes", "here"];
   if (has(t, ["فين", "وين", "where are you", "where"])) return ["here", "come"];
-  if (has(t, ["انت خايف", "انتي خايفه", "خايف؟", "are you scared", "are you afraid"]) || (isQuestion(text, t) && has(t, ["خايف", "خايفه", "scared"]))) return ["notscared", "no", "calm"];
+  if (has(t, ["انت خايف", "انتي خايفه", "are you scared", "are you afraid"]) || (isQuestion(text, t) && has(t, ["خايف", "خايفه", "scared"]))) return ["notscared", "no", "calm"];
   if (has(t, ["خايف", "خايفه", "الحق", "ساعدني", "scared", "help"])) return ["calm", "here", "come"];
-  if (has(t, ["انت جاي", "جاي؟", "are you coming"])) return ["coming", "yes"];
+  if (has(t, ["انت جاي", "are you coming"])) return ["coming", "yes"];
   if (has(t, ["لقيت", "found"])) return ["coming", "yes"];
   if (has(t, ["تعالي", "تعالو", "come here", "come", "follow me"]) && !has(t, ["من هنا", "this way"])) return ["coming", "yes"];
   if (has(t, ["شفت", "شوفت", "سمعت", "did you see", "did you hear", "saw"])) return ["no", "dunno", "yes"];
@@ -91,26 +99,22 @@ function wantOf(text) {
   return null;
 }
 function kindOf(text) {
-  const t = norm(text).trim();
-  if (wantOf(text)) return "question"; // a question is never used as an answer
+  const t = norm(text);
+  if (wantOf(text)) return "question";
   if (has(t, ["سامعك", "سامعاك", "سامعكم", "i can hear you", "hear you", "loud and clear"])) return "hear-yes";
-  if (has(t, ["مش خايف", "مش خايفه", "لا مش خايف", "not scared", "i'm not scared"])) return "notscared";
+  if (has(t, ["مش خايف", "مش خايفه", "not scared", "i'm not scared"])) return "notscared";
   if (has(t, ["متخافش", "متخافيش", "ما تخافش", "اهدي", "it's ok", "its ok", "don't worry", "calm down"])) return "calm";
   if (has(t, ["جاي", "جايه", "جايين", "حاضر", "coming", "on my way"])) return "coming";
   if (has(t, ["تعالي", "تعالو", "come here", "this way", "follow me"])) return "come";
-  if (has(t, ["انا هنا", "هنا", "جنبك", "i'm here", "im here", "over here", "right here"])) return "here";
+  // where I am: «انا هنا», «انا في الممر», «عند الباب», «جنب السلم», «في الدور التاني»…
+  if (has(t, ["انا هنا", "هنا", "جنبك", "i'm here", "im here", "over here", "right here"]) || /^(انا )?(في|عند|جنب|ورا|قدام|فوق|تحت|جوه|بره)\s/.test(t) || has(t, ["الدور", "الممر", "الاوضه", "الطرقه", "السلم", "الباب", "in the", "near the", "by the"])) return "here";
   if (has(t, ["مش عارف", "معرفش", "مش فاكر", "i don't know", "dunno"])) return "dunno";
   if (/^(لا|لأ|لاء|no|nope)(\s|$)/.test(t) || has(t, ["مشفتش", "مسمعتش", "محدش"])) return "no";
   if (has(t, ["ايوه", "اه", "ايوا", "نعم", "yes", "yeah", "yep", "شفته", "شفتها"])) return "yes";
   return "other";
 }
-
-// ── dialogue memory: a question followed by an answer is remembered as a pair, and the answer is reused for
-//    similar questions later (in the game: friends asking and answering each other) ──
-const pairs = []; // { words: Set, clip }
-const words = (s) => new Set(norm(s).split(/\s+/).filter((w) => w.length > 1 && !["يا", "اسطي", "انت", "انتي", "انا", "عم", "the", "you", "a"].includes(w)));
-function similar(a, b) { let n = 0; for (const w of a) if (b.has(w)) n++; return n / Math.max(1, Math.min(a.size, b.size)); }
-let lastQuestion = null; // { text, at }
+const words = (s) => new Set(norm(s).split(" ").filter((w) => w.length > 1 && !["يا", "اسطي", "انت", "انتي", "انا", "عم", "the", "you", "a", "is", "are"].includes(w)));
+const similar = (a, b) => { let n = 0; for (const w of a) if (b.has(w)) n++; return n / Math.max(1, Math.min(a.size, b.size)); };
 
 // ── audio ──
 async function ensureAudio() {
@@ -126,105 +130,98 @@ async function ensureAudio() {
   };
   const mute = ctx.createGain(); mute.gain.value = 0; src.connect(proc).connect(mute).connect(ctx.destination);
 }
-/** The recording, with the silence at both ends trimmed and the level evened out. */
+/** The press, silence trimmed at both ends, level evened. */
 function makeClip(fr) {
   const n = fr.reduce((a, f) => a + f.length, 0), d = new Float32Array(n); let o = 0; for (const f of fr) { d.set(f, o); o += f.length; }
   const win = Math.round(ctx.sampleRate * 0.02), rmsAt = (i) => { let s = 0; for (let k = i; k < Math.min(n, i + win); k++) s += d[k] * d[k]; return Math.sqrt(s / win); };
   let peakRms = 0; for (let i = 0; i < n; i += win) peakRms = Math.max(peakRms, rmsAt(i));
-  const th = Math.max(0.01, peakRms * 0.12);
+  if (peakRms < 0.004) return null;
+  const th = Math.max(0.006, peakRms * 0.1);
   let a = 0; while (a < n && rmsAt(a) < th) a += win; let b = n; while (b > a && rmsAt(b - win) < th) b -= win;
-  a = Math.max(0, a - win * 6); b = Math.min(n, b + win * 8);
+  a = Math.max(0, a - win * 8); b = Math.min(n, b + win * 10);
   if (b - a < ctx.sampleRate * 0.25) return null;
   const buf = ctx.createBuffer(1, b - a, ctx.sampleRate), c = buf.getChannelData(0); c.set(d.subarray(a, b));
   let pk = 0, sq = 0; for (const v of c) { pk = Math.max(pk, Math.abs(v)); sq += v * v; }
-  const g = Math.min(5, 0.12 / Math.max(1e-4, Math.sqrt(sq / c.length)), 0.95 / Math.max(1e-4, pk)); for (let i = 0; i < c.length; i++) c[i] *= g;
+  const g = Math.min(6, 0.12 / Math.max(1e-4, Math.sqrt(sq / c.length)), 0.95 / Math.max(1e-4, pk)); for (let i = 0; i < c.length; i++) c[i] *= g;
   const fade = Math.round(ctx.sampleRate * 0.01); for (let i = 0; i < fade && i < c.length; i++) { c[i] *= i / fade; c[c.length - 1 - i] *= i / fade; }
   return buf;
 }
-function play(buf) {
-  const s = ctx.createBufferSource(); s.buffer = buf; s.playbackRate.value = 1 + (Math.random() - 0.5) * 0.02; s.connect(ctx.destination); s.start();
+async function to16k(buf) {
+  const off = new OfflineAudioContext(1, Math.ceil(buf.duration * 16000), 16000);
+  const s = off.createBufferSource(); s.buffer = buf; s.connect(off.destination); s.start();
+  return (await off.startRendering()).getChannelData(0);
 }
+function play(buf) { const s = ctx.createBufferSource(); s.buffer = buf; s.playbackRate.value = 1 + (Math.random() - 0.5) * 0.02; s.connect(ctx.destination); s.start(); }
 
-// ── speech-to-text: ONE recognition that keeps running (one permission), read per press ──
-let results = [];          // [{ text, final }] in arrival order
-let pressFrom = 0;         // results index when the press started
-let recOn = false, lastResultAt = 0;
-function startRec() {
-  if (recOn) return;
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { log("copy", "No speech recognition in this browser — use Chrome or Edge."); return; }
-  rec = new SR(); rec.lang = $("lang").value; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
-  let base = results.length; // this session's results are appended after the earlier ones
-  rec.onresult = (e) => {
-    for (let i = e.resultIndex; i < e.results.length; i++) results[base + i] = { text: e.results[i][0].transcript.trim(), final: e.results[i].isFinal };
-    lastResultAt = performance.now();
-  };
-  rec.onerror = (e) => { if (e.error === "not-allowed" || e.error === "service-not-allowed") { log("copy", "Speech recognition is blocked — open this page from your website (https), not as a file, and allow the microphone."); recOn = false; } };
-  rec.onend = () => { if (recOn) { base = results.length; try { rec.start(); } catch {} } }; // Chrome stops after a while: start again, same permission
-  recOn = true;
-  try { rec.start(); } catch {}
+// ── the speech model (Whisper, in this browser) ──
+async function loadModel() {
+  const id = $("model").value, gpu = !!navigator.gpu;
+  $("status").textContent = "Downloading the speech model (only the first time)…";
+  const seen = {};
+  asr = await pipeline("automatic-speech-recognition", id, {
+    device: gpu ? "webgpu" : "wasm",
+    dtype: gpu ? { encoder_model: "fp32", decoder_model_merged: "q4" } : "q8",
+    progress_callback: (p) => { if (p.status === "progress" && p.total) { seen[p.file] = [p.loaded, p.total]; const v = Object.values(seen); const l = v.reduce((a, x) => a + x[0], 0), t = v.reduce((a, x) => a + x[1], 0); $("dl").style.width = (100 * l / t).toFixed(0) + "%"; $("status").textContent = `Downloading the speech model… ${(l / 1e6).toFixed(0)} / ${(t / 1e6).toFixed(0)} MB`; } },
+  });
+  $("dl").style.width = "100%";
+  // warm it up so the first real answer isn't slow
+  await asr(new Float32Array(16000), { language: $("lang").value, task: "transcribe" });
+  $("status").textContent = `Ready · ${gpu ? "graphics card (fast)" : "processor"} · ${id.split("/")[1]}`;
 }
-$("lang").onchange = () => { recOn = false; try { rec?.stop(); } catch {} setTimeout(startRec, 300); };
-const textSince = (from) => results.slice(from).filter(Boolean).map((r) => r.text).join(" ").trim();
 
 // ── hold to talk ──
 async function down() {
-  if (recording || busy) return;
-  try { await ensureAudio(); startRec(); } catch (e) { log("copy", "Couldn't use the microphone: " + e.message); return; }
-  frames = []; recording = true; pressFrom = results.length;
+  if (recording || busy || !asr) return;
+  frames = []; recording = true;
   $("talk").classList.add("on"); $("talk").textContent = "Listening… let go when you finish";
 }
 async function up() {
   if (!recording) return;
+  await new Promise((r) => setTimeout(r, 200)); // the last syllable
   recording = false; busy = true;
   $("talk").classList.remove("on"); $("talk").textContent = "Understanding…";
-  // wait until the words for this press are final (or nothing new arrives for 0.9 s), at most 3 s
-  const t0 = performance.now();
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 120));
-    const mine = results.slice(pressFrom).filter(Boolean);
-    const allFinal = mine.length && mine.every((r) => r.final);
-    if (allFinal || (mine.length && performance.now() - lastResultAt > 900) || performance.now() - t0 > 3000) break;
-  }
-  const text = textSince(pressFrom);
-  pressFrom = results.length;
-  const buf = makeClip(frames);
-  busy = false; $("talk").textContent = "Hold to talk (or hold Space)";
-  if (!text) { log("you", "(didn't catch that — check the green bar moves when you talk, and keep holding until you finish the phrase)"); return; }
-  const want = wantOf(text);
-  const kind = kindOf(text);
+  try {
+    const buf = makeClip(frames);
+    if (!buf) { log("you", "(nothing heard — is the green bar moving when you talk?)"); return; }
+    const t0 = performance.now();
+    const out = await asr(await to16k(buf), { language: $("lang").value, task: "transcribe" });
+    const text = (out.text || "").trim().replace(/^[\s.،,]+|[\s.،,]+$/g, "");
+    const ms = Math.round(performance.now() - t0);
+    if (!text || /^\[.*\]$|^\(.*\)$/.test(text)) { log("you", "(couldn't make out the words — try again a bit closer to the mic)", `${ms} ms`); return; }
+    handle(text, buf, ms);
+  } catch (e) { log("copy", "Error: " + e.message); }
+  finally { busy = false; $("talk").textContent = "Hold to talk (or hold Space)"; }
+}
+function handle(text, buf, ms) {
+  const want = wantOf(text), kind = kindOf(text);
+  const c = { buf, text, kind };
   if (want) {
     lastQuestion = { text, at: performance.now() };
-    // 1) an answer someone gave to a question like this one before
     const w = words(text);
-    let best = null, how = "";
-    let top = 0; for (const p of pairs) { const sc = similar(w, p.words); if (sc > top) { top = sc; best = p.clip; } }
+    let best = null, how = "", top = 0;
+    for (const p of pairs) { const sc = similar(w, p.words); if (sc > top) { top = sc; best = p.clip; } }
     if (best && top >= 0.5) how = `remembered answer (${Math.round(top * 100)}% same question)`; else best = null;
-    // 2) an answer of the right kind
-    if (!best) for (const k of want) { const c = clips.filter((x) => x.kind === k); if (c.length) { best = c[Math.floor(Math.random() * c.length)]; how = "kind: " + k; break; } }
-    log("you", text, "question → wants: " + want.join(" / "));
-    if (!best) { log("copy", "(no answer like that in your voice yet — say the answer now and I'll remember it for this question)"); }
-    else { const delay = 300 + Math.random() * 350; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · ${how} · after ${Math.round(delay)} ms`); }
-  }
-  if (buf) {
-    const c = { buf, text, kind }; clips.push(c); renderMem();
-    if (!want) {
-      // said right after a question: this is how that question is answered
-      if (lastQuestion && performance.now() - lastQuestion.at < 10_000) { pairs.push({ words: words(lastQuestion.text), clip: c }); log("you", text, `learned as the answer to «${lastQuestion.text}» · ${kind}`); lastQuestion = null; }
-      else log("you", text, `learned · ${kind} · ${buf.duration.toFixed(1)} s`);
-    }
-  }
+    if (!best) for (const k of want) { const pool = clips.filter((x) => x.kind === k); if (pool.length) { best = pool[Math.floor(Math.random() * pool.length)]; how = "kind: " + k; break; } }
+    log("you", text, `understood in ${ms} ms · question → wants: ${want.join(" / ")}`);
+    if (!best) log("copy", "(no answer like that in your voice yet — say the answer in your next press and I'll remember it)");
+    else { const delay = 250 + Math.random() * 300; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · ${how}`); }
+  } else if (lastQuestion && performance.now() - lastQuestion.at < 12_000) {
+    pairs.push({ words: words(lastQuestion.text), clip: c });
+    log("you", text, `understood in ${ms} ms · remembered as the answer to «${lastQuestion.text}» · ${kind}`);
+    lastQuestion = null;
+  } else log("you", text, `understood in ${ms} ms · learned · ${kind}`);
+  clips.push(c); renderMem();
 }
+
+$("start").onclick = async () => {
+  $("start").disabled = true; $("model").disabled = true;
+  try { await ensureAudio(); await loadModel(); $("talk").disabled = false; $("start").textContent = "Ready"; }
+  catch (e) { $("status").textContent = "Couldn't start: " + e.message; $("start").disabled = false; $("model").disabled = false; }
+};
 $("talk").addEventListener("pointerdown", (e) => { e.preventDefault(); down(); });
 $("talk").addEventListener("pointerup", up); $("talk").addEventListener("pointerleave", up);
 addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat && !$("talk").disabled) { e.preventDefault(); down(); } });
 addEventListener("keyup", (e) => { if (e.code === "Space") { e.preventDefault(); up(); } });
-
-$("start").onclick = async () => {
-  try { await ensureAudio(); startRec(); $("start").disabled = true; $("start").textContent = "Microphone on"; $("talk").disabled = false; }
-  catch (e) { log("copy", "Couldn't use the microphone: " + e.message + (location.protocol === "file:" ? " — open the page from your website (https) instead of the file." : "")); }
-};
-if (location.protocol === "file:") log("copy", "You opened this as a file: Chrome will keep asking for the microphone and speech may not work. Open it from your website instead (…/echo-voice-free.html).");
 
 // ── UI ──
 function log(cls, text, meta) {
@@ -239,7 +236,7 @@ function renderMem() {
     const t = document.createElement("span"); t.textContent = c.text;
     const b = document.createElement("b"); b.textContent = c.kind;
     const p = document.createElement("button"); p.className = "ghost"; p.textContent = "▶"; p.onclick = () => play(c.buf);
-    const x = document.createElement("button"); x.className = "ghost"; x.textContent = "✕"; x.onclick = () => { clips.splice(clips.indexOf(c), 1); renderMem(); };
+    const x = document.createElement("button"); x.className = "ghost"; x.textContent = "✕"; x.onclick = () => { clips.splice(clips.indexOf(c), 1); for (let i = pairs.length - 1; i >= 0; i--) if (pairs[i].clip === c) pairs.splice(i, 1); renderMem(); };
     const r = document.createElement("span"); r.className = "row"; r.style.gap = "6px"; r.append(b, p, x);
     d.append(t, r); m.append(d);
   }
