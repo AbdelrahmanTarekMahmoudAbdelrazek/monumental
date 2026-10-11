@@ -15,26 +15,28 @@
   h2 { margin:0; font-size: 16px; }
   .row { display:flex; gap:10px; flex-wrap: wrap; align-items:center; }
   button { font: 600 15px system-ui, sans-serif; border:0; border-radius:12px; padding: 12px 18px; cursor:pointer; background: var(--ink); color:#000; }
-  button.red { background: var(--accent); color:#fff; } button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); }
   button:disabled { opacity:.45; cursor:not-allowed; }
+  #talk { width:100%; padding: 30px 16px; font-size: 20px; user-select:none; touch-action:none; }
+  #talk.on { background: var(--accent); color:#fff; }
   select { background:#0a0c0b; color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font: inherit; }
   .meter { height:10px; background:#1d2320; border-radius:5px; overflow:hidden; } .meter > div { height:100%; width:0; background: var(--ok); }
-  .state { font-weight:600; } .state.listen { color: var(--ok); } .state.speak { color: var(--accent); }
   .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
   .log, .mem { display:grid; gap:8px; max-height: 380px; overflow:auto; align-content:start; }
   .msg { padding: 9px 12px; border-radius: 10px; border:1px solid var(--line); direction:auto; }
   .msg.you { background:#141a17; } .msg.copy { background:#1e1212; border-color:#5a2621; }
   .msg small { color: var(--quiet); display:block; font-size: 12px; direction:ltr; }
   .chip { display:flex; justify-content:space-between; gap:8px; align-items:center; padding:7px 10px; border:1px solid var(--line); border-radius:10px; direction:auto; }
-  .chip b { font-size:12px; color: var(--accent); direction:ltr; } .chip button { padding:6px 10px; font-size:13px; }
+  .chip b { font-size:12px; color: var(--accent); direction:ltr; white-space:nowrap; } .chip button { padding:6px 10px; font-size:13px; }
   .note { color: var(--quiet); font-size: 13px; }
+  ol { margin: 0; padding-inline-start: 20px; color: var(--quiet); } ol b { color: var(--ink); }
 </style>
 </head>
 <body>
 <main>
   <div>
     <h1>The Copy · free prototype</h1>
-    <div class="sub">Talk normally. It learns your phrases in your own real voice — then when you ask «سامعني؟» it answers «ايوه سامعك» with your own recorded voice, like the Copy will with a friend's. 100% free, no key.</div>
+    <div class="sub">It learns short phrases in your real voice, then answers your questions with them — like the Copy will with a friend's voice. Free, no key.</div>
   </div>
 
   <section>
@@ -44,117 +46,132 @@
         <option value="ar-SA">العربية (السعودية)</option>
         <option value="en-US">English</option>
       </select>
-      <button id="go" class="red">Start</button>
-      <button id="stop" class="ghost" disabled>Stop</button>
-      <span id="state" class="state">Off</span>
+      <span class="note">Headphones recommended. Chrome or Edge on a computer.</span>
     </div>
+    <ol>
+      <li><b>Hold the button (or Space) and say ONE short answer</b>, then let go: «ايوه سامعك» … «انا هنا» … «جاي» … «اه» … «متخافش انا جنبك». One phrase per press.</li>
+      <li><b>Then hold and ask</b>: «سامعني؟», «انت فين؟», «تعالى», «انا خايف». It answers with your own recorded phrase.</li>
+    </ol>
+    <button id="talk">Hold to talk (or hold Space)</button>
     <div class="meter"><div id="lvl"></div></div>
-    <div class="note">Use headphones (otherwise it hears itself). Chrome or Edge on a computer. Chrome's free speech-to-text understands the words (Chrome sends that audio to Google to transcribe); your voice pieces themselves stay in this tab.</div>
-    <div class="note"><b>Try:</b> first say a few answers naturally — «ايوه سامعك», «انا هنا», «جاي», «اه», «متخافش انا جنبك», «تعالى من هنا». Then ask: «سامعني؟», «انت فين؟», «تعالى», «انا خايف»… and it answers in your voice.</div>
+    <div class="note">Chrome's free speech-to-text sends what you say to Google to turn it into text. The recordings of your voice stay in this tab and are forgotten when you close it.</div>
   </section>
 
   <div class="grid">
     <section><h2>Conversation</h2><div id="log" class="log"></div></section>
-    <section><h2>What it learned (your voice)</h2><div id="mem" class="mem"><div class="note">Nothing yet — talk.</div></div></section>
+    <section><h2>Phrases it learned (your voice)</h2><div id="mem" class="mem"><div class="note">Nothing yet.</div></div></section>
   </div>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const AC = window.AudioContext || window.webkitAudioContext;
-let ctx, stream, src, proc, rec, running = false, speakingUntil = 0;
-const RATE_NOTE = "";
-/** clips: { buf: AudioBuffer, ms, text, kind, end } */
-const clips = [];
+let ctx = null, stream = null, proc = null, rec = null;
+let recording = false, frames = [], busy = false, finalText = "", interimText = "", recEnded = null;
+const clips = []; // { buf, text, kind }
 
-// ── what a phrase IS (so we know what it can answer with) and what a question WANTS ──
-const has = (t, ws) => ws.some((w) => new RegExp(`(^|[^\\p{L}])${w}($|[^\\p{L}])`, "u").test(t));
+// ── meaning ──
 const norm = (s) => s.toLowerCase().replace(/[؟?!.,،]/g, " ").replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه");
-function kindOf(text) {
-  const t = norm(text);
-  if (has(t, ["سامعك", "سامعاك", "سامعكم", "i can hear you", "hear you", "loud and clear"])) return "hear-yes";
-  if (has(t, ["انا هنا", "هنا", "جنبك", "i'm here", "im here", "over here", "right here"])) return "here";
-  if (has(t, ["جاي", "جايه", "جايين", "حاضر", "coming", "on my way"])) return "coming";
-  if (has(t, ["متخافش", "متخافيش", "اهدي", "اهدى", "it's ok", "its ok", "don't worry", "calm down"])) return "calm";
-  if (has(t, ["تعالي", "تعالو", "come here", "this way", "follow me"])) return "come";
-  if (has(t, ["ايوه", "اه", "ايوا", "نعم", "yes", "yeah", "yep"])) return "yes";
-  if (has(t, ["مش عارف", "معرفش", "i don't know", "dunno"])) return "dunno";
-  return "other";
-}
+const has = (t, ws) => ws.some((w) => new RegExp(`(^|[^\\p{L}])${w}($|[^\\p{L}])`, "u").test(t));
 function wantOf(text) {
   const t = norm(text);
   if (has(t, ["سامعني", "سامعيني", "سامعين", "حد سامع", "الو", "can you hear", "hear me", "hello"])) return ["hear-yes", "yes", "here"];
   if (has(t, ["فين", "وين", "where are you", "where"])) return ["here", "come"];
-  if (has(t, ["تعالي", "تعالو", "come here", "come", "follow me"])) return ["coming", "yes"];
   if (has(t, ["خايف", "خايفه", "الحق", "ساعدني", "scared", "help"])) return ["calm", "here", "come"];
   if (has(t, ["لقيت", "found"])) return ["coming", "yes"];
-  if (/[؟?]/.test(text) || has(t, ["ايه", "مين", "what", "who", "صح", "right"])) return ["yes", "dunno"];
+  if (has(t, ["تعالي", "تعالو", "come here", "come", "follow me"]) && !has(t, ["من هنا", "this way"])) return ["coming", "yes"];
+  if (/[؟?]/.test(text) || has(t, ["ايه", "مين", "what", "who", "صح"])) return ["yes", "dunno"];
   return null;
 }
-
-// ── capture: cut my speech into pieces at the pauses (like the game) ──
-const FRAME = 960; // 20 ms at 48k (adjusted below)
-let frameSize = FRAME, floor = 0.004, current = null, quiet = 0, loudRun = 0, recent = [];
-function onSamples(x) {
-  for (let i = 0; i < x.length; i += frameSize) {
-    const f = x.subarray(i, i + frameSize); if (f.length < frameSize) break;
-    let s = 0; for (const v of f) s += v * v; const rms = Math.sqrt(s / f.length);
-    $("lvl").style.width = Math.min(100, rms * 900) + "%";
-    if (!current) floor = rms < floor ? floor * 0.9 + rms * 0.1 : floor * 0.998 + rms * 0.002;
-    const speaking = rms > Math.max(0.012, floor * 3.5) && performance.now() > speakingUntil;
-    if (!current) { recent.push(f.slice()); if (recent.length > 8) recent.shift(); loudRun = speaking ? loudRun + 1 : 0; if (loudRun >= 2) { current = recent.splice(0); quiet = 0; } continue; }
-    current.push(f.slice()); quiet = speaking ? 0 : quiet + 1;
-    if (quiet >= 18 || current.length * 20 > 4000) finish();
-  }
-}
-function finish() {
-  const fr = current; current = null; loudRun = 0;
-  const keep = Math.max(1, fr.length - Math.max(0, quiet - 4)), used = fr.slice(0, keep), ms = used.length * 20;
-  if (ms < 350) return;
-  const b = ctx.createBuffer(1, used.length * frameSize, ctx.sampleRate), d = b.getChannelData(0);
-  used.forEach((f, i) => d.set(f, i * frameSize));
-  let pk = 0, sq = 0; for (const v of d) { pk = Math.max(pk, Math.abs(v)); sq += v * v; }
-  const g = Math.min(4, 0.11 / Math.max(1e-4, Math.sqrt(sq / d.length)), 0.95 / Math.max(1e-4, pk)); for (let i = 0; i < d.length; i++) d[i] *= g;
-  const fade = Math.round(ctx.sampleRate * 0.008); for (let i = 0; i < fade; i++) { d[i] *= i / fade; d[d.length - 1 - i] *= i / fade; }
-  clips.push({ buf: b, ms, text: null, kind: null, end: performance.now() });
-  if (clips.length > 120) clips.shift();
+function kindOf(text) {
+  const t = norm(text);
+  if (has(t, ["سامعك", "سامعاك", "سامعكم", "i can hear you", "hear you", "loud and clear"])) return "hear-yes";
+  if (has(t, ["متخافش", "متخافيش", "ما تخافش", "اهدي", "it's ok", "its ok", "don't worry", "calm down"])) return "calm";
+  if (has(t, ["جاي", "جايه", "جايين", "حاضر", "coming", "on my way"])) return "coming";
+  if (has(t, ["تعالي", "تعالو", "come here", "this way", "follow me"])) return "come";
+  if (has(t, ["انا هنا", "هنا", "جنبك", "i'm here", "im here", "over here", "right here"])) return "here";
+  if (has(t, ["ايوه", "اه", "ايوا", "نعم", "yes", "yeah", "yep"])) return "yes";
+  if (has(t, ["مش عارف", "معرفش", "i don't know", "dunno"])) return "dunno";
+  return "other";
 }
 
-// ── understanding (Chrome's free speech-to-text) ──
+// ── audio ──
+async function ensureAudio() {
+  if (ctx) return;
+  ctx = new AC(); await ctx.resume();
+  stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  const src = ctx.createMediaStreamSource(stream);
+  proc = ctx.createScriptProcessor(2048, 1, 1);
+  proc.onaudioprocess = (e) => {
+    const x = e.inputBuffer.getChannelData(0); let s = 0; for (const v of x) s += v * v;
+    $("lvl").style.width = Math.min(100, Math.sqrt(s / x.length) * 900) + "%";
+    if (recording) frames.push(x.slice());
+  };
+  const mute = ctx.createGain(); mute.gain.value = 0; src.connect(proc).connect(mute).connect(ctx.destination);
+}
+/** The recording, with the silence at both ends trimmed and the level evened out. */
+function makeClip(fr) {
+  const n = fr.reduce((a, f) => a + f.length, 0), d = new Float32Array(n); let o = 0; for (const f of fr) { d.set(f, o); o += f.length; }
+  const win = Math.round(ctx.sampleRate * 0.02), rmsAt = (i) => { let s = 0; for (let k = i; k < Math.min(n, i + win); k++) s += d[k] * d[k]; return Math.sqrt(s / win); };
+  let peakRms = 0; for (let i = 0; i < n; i += win) peakRms = Math.max(peakRms, rmsAt(i));
+  const th = Math.max(0.01, peakRms * 0.12);
+  let a = 0; while (a < n && rmsAt(a) < th) a += win; let b = n; while (b > a && rmsAt(b - win) < th) b -= win;
+  a = Math.max(0, a - win * 6); b = Math.min(n, b + win * 8);
+  if (b - a < ctx.sampleRate * 0.25) return null;
+  const buf = ctx.createBuffer(1, b - a, ctx.sampleRate), c = buf.getChannelData(0); c.set(d.subarray(a, b));
+  let pk = 0, sq = 0; for (const v of c) { pk = Math.max(pk, Math.abs(v)); sq += v * v; }
+  const g = Math.min(5, 0.12 / Math.max(1e-4, Math.sqrt(sq / c.length)), 0.95 / Math.max(1e-4, pk)); for (let i = 0; i < c.length; i++) c[i] *= g;
+  const fade = Math.round(ctx.sampleRate * 0.01); for (let i = 0; i < fade && i < c.length; i++) { c[i] *= i / fade; c[c.length - 1 - i] *= i / fade; }
+  return buf;
+}
+function play(buf) {
+  const s = ctx.createBufferSource(); s.buffer = buf; s.playbackRate.value = 1 + (Math.random() - 0.5) * 0.02; s.connect(ctx.destination); s.start();
+}
+
+// ── speech-to-text for exactly the time the button is held ──
 function startRec() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { log("copy", "This browser has no speech recognition — use Chrome or Edge."); return; }
-  rec = new SR(); rec.lang = $("lang").value; rec.continuous = true; rec.interimResults = false;
-  rec.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) heard(e.results[i][0].transcript.trim()); };
-  rec.onend = () => { if (running) try { rec.start(); } catch {} };
-  rec.onerror = (e) => { if (e.error === "not-allowed") log("copy", "Microphone/speech blocked — allow it in Chrome."); };
-  rec.start();
+  if (!SR) { log("copy", "No speech recognition in this browser — use Chrome or Edge."); return; }
+  finalText = ""; interimText = "";
+  rec = new SR(); rec.lang = $("lang").value; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = (e) => { let f = "", i2 = ""; for (let i = 0; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) f += t + " "; else i2 += t + " "; } finalText = f.trim(); interimText = i2.trim(); };
+  recEnded = new Promise((ok) => { rec.onend = ok; rec.onerror = (e) => { if (e.error === "not-allowed") log("copy", "Microphone/speech blocked — allow it for this site in Chrome."); ok(); }; });
+  try { rec.start(); } catch {}
 }
-function heard(text) {
-  if (!text || performance.now() < speakingUntil) return;
-  // the words belong to the piece that just ended
-  const now = performance.now();
-  const c = [...clips].reverse().find((x) => !x.text && now - x.end < 3500);
-  if (c) { c.text = text; c.kind = kindOf(text); renderMem(); }
+
+// ── hold to talk ──
+async function down() {
+  if (recording || busy) return;
+  try { await ensureAudio(); } catch (e) { log("copy", "Couldn't use the microphone: " + e.message); return; }
+  frames = []; recording = true; startRec();
+  $("talk").classList.add("on"); $("talk").textContent = "Listening… let go when you finish";
+}
+async function up() {
+  if (!recording) return;
+  recording = false; busy = true;
+  $("talk").classList.remove("on"); $("talk").textContent = "…";
+  await new Promise((r) => setTimeout(r, 250)); // the last syllable
+  try { rec?.stop(); } catch {}
+  await Promise.race([recEnded, new Promise((r) => setTimeout(r, 2500))]);
+  const text = (finalText || interimText).trim();
+  const buf = makeClip(frames);
+  busy = false; $("talk").textContent = "Hold to talk (or hold Space)";
+  if (!text) { log("you", "(didn't catch that — hold a bit longer and speak clearly)"); return; }
   const want = wantOf(text);
-  log("you", text, c ? `piece ${(c.ms / 1000).toFixed(1)} s · ${c.kind}` : "no piece matched");
-  if (want) answer(want, c);
+  if (want) {
+    log("you", text, "question → it wants: " + want[0]);
+    let best = null;
+    for (const k of want) { const c = clips.filter((x) => x.kind === k); if (c.length) { best = c[Math.floor(Math.random() * c.length)]; break; } }
+    if (!best) { log("copy", "(I don't have an answer like that in your voice yet — teach me one, e.g. «ايوه سامعك» or «انا هنا»)"); }
+    else { const delay = 300 + Math.random() * 350; setTimeout(() => play(best.buf), delay); log("copy", best.text, `your own voice · answered after ${Math.round(delay)} ms`); }
+    // a question can also be learned (the Copy uses questions too)
+  }
+  if (buf) { const kind = kindOf(text); clips.push({ buf, text, kind }); renderMem(); if (!want) log("you", text, `learned · ${kind} · ${buf.duration.toFixed(1)} s`); }
 }
-function answer(want, notThis) {
-  // best piece of my voice whose meaning fits, not the one just said, freshest first among equals
-  let best = null;
-  for (const k of want) { const cand = clips.filter((x) => x.kind === k && x !== notThis && x.buf.duration < 3.6); if (cand.length) { best = cand[Math.floor(Math.random() * cand.length)]; break; } }
-  if (!best) { log("copy", "(no matching phrase of yours yet — say one first, e.g. «ايوه سامعك» or «انا هنا»)"); return; }
-  const delay = 350 + Math.random() * 400; // a person's pause before answering
-  setTimeout(() => play(best), delay);
-  log("copy", best.text, `answered with your own voice · after ${Math.round(delay)} ms`);
-}
-function play(c) {
-  const s = ctx.createBufferSource(); s.buffer = c.buf; s.playbackRate.value = 1 + (Math.random() - 0.5) * 0.02;
-  const g = ctx.createGain(); g.gain.value = 1; s.connect(g).connect(ctx.destination); s.start();
-  speakingUntil = performance.now() + c.buf.duration * 1000 + 400; $("state").textContent = "Speaking"; $("state").className = "state speak";
-  setTimeout(() => { if (running) { $("state").textContent = "Listening"; $("state").className = "state listen"; } }, c.buf.duration * 1000 + 400);
-}
+$("talk").addEventListener("pointerdown", (e) => { e.preventDefault(); down(); });
+$("talk").addEventListener("pointerup", up); $("talk").addEventListener("pointerleave", up);
+addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat) { e.preventDefault(); down(); } });
+addEventListener("keyup", (e) => { if (e.code === "Space") { e.preventDefault(); up(); } });
 
 // ── UI ──
 function log(cls, text, meta) {
@@ -164,33 +181,17 @@ function log(cls, text, meta) {
 }
 function renderMem() {
   const m = $("mem"); m.innerHTML = "";
-  const known = clips.filter((c) => c.text).slice().reverse();
-  if (!known.length) { m.innerHTML = '<div class="note">Nothing yet — talk.</div>'; return; }
-  for (const c of known) {
+  for (const c of clips.slice().reverse()) {
     const d = document.createElement("div"); d.className = "chip";
     const t = document.createElement("span"); t.textContent = c.text;
     const b = document.createElement("b"); b.textContent = c.kind;
-    const p = document.createElement("button"); p.className = "ghost"; p.textContent = "▶"; p.onclick = () => play(c);
-    d.append(t, b, p); m.append(d);
+    const p = document.createElement("button"); p.className = "ghost"; p.textContent = "▶"; p.onclick = () => play(c.buf);
+    const x = document.createElement("button"); x.className = "ghost"; x.textContent = "✕"; x.onclick = () => { clips.splice(clips.indexOf(c), 1); renderMem(); };
+    const r = document.createElement("span"); r.className = "row"; r.style.gap = "6px"; r.append(b, p, x);
+    d.append(t, r); m.append(d);
   }
+  if (!clips.length) m.innerHTML = '<div class="note">Nothing yet.</div>';
 }
-$("go").onclick = async () => {
-  try {
-    ctx = new AC(); await ctx.resume();
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    frameSize = Math.round(ctx.sampleRate / 50);
-    src = ctx.createMediaStreamSource(stream);
-    proc = ctx.createScriptProcessor(4096, 1, 1); proc.onaudioprocess = (e) => onSamples(e.inputBuffer.getChannelData(0));
-    const mute = ctx.createGain(); mute.gain.value = 0; src.connect(proc).connect(mute).connect(ctx.destination);
-    running = true; startRec();
-    $("go").disabled = true; $("stop").disabled = false; $("lang").disabled = true;
-    $("state").textContent = "Listening"; $("state").className = "state listen";
-  } catch (e) { log("copy", "Couldn't start: " + e.message); }
-};
-$("stop").onclick = () => {
-  running = false; try { rec.stop(); } catch {} stream?.getTracks().forEach((t) => t.stop()); ctx?.close();
-  $("go").disabled = false; $("stop").disabled = true; $("lang").disabled = false; $("state").textContent = "Off"; $("state").className = "state";
-};
 </script>
 </body>
 </html>
