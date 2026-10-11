@@ -9,6 +9,18 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 37, name: "Real Screams", date: "2026-10",
+    big: "The hospital sounds real now: 52 recorded sounds — crying children, screams, moans, doors, whispers behind you and the creature's shriek.",
+    more: [
+      "Real children crying and laughing where there are no children",
+      "Real screams far away, people moaning in pain, breathing right behind you",
+      "Doors creaking and slamming, chains, glass, bodies falling",
+      "The Copy shrieks and roars with a real creature's voice when it shows itself",
+      "A real music box, radio static, a distant siren and a dead heart monitor",
+      "Real room tone and wind under everything; the pistol racks when you pick it up",
+    ],
+  },
+  {
     v: 36, name: "Practice Alone", date: "2026-10",
     big: "Practice alone: a Copy of you, with your face, your name and your own voice, hunts you — and your pistol never runs out.",
     more: [

@@ -82,7 +82,7 @@ export const HORROR_GROUPS = {
   music: ["music_box_creepy_274379", "music_box_338986"],
   radio: ["radio_static_17804", "radio_noise_50750"],
   creature: ["monster_screech_565024", "zombie_attack_213509", "monster_roar_398908", "growl_20208"],
-  bed: ["room_tone_144046", "terror_ambience_155142", "wind_graveyard_159509", "horror_inside_42203"],
+  bed: ["room_tone_144046", "terror_ambience_155142", "wind_graveyard_159509", "wind_525292", "horror_inside_42203"],
   buzz: ["faulty_fluorescent_125064", "fluorescent_119910"],
   flicker: ["lights_flicker_on_232447", "neon_flicker_500693"],
   gun: ["reload_1911_396331", "pistol_cock_405538", "shell_bounce_210102", "bullet_flesh_423301"],
