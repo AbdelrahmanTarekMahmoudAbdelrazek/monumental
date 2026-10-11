@@ -9,6 +9,17 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 39, name: "Motion Mirror", date: "2026-10",
+    big: "The Copy learns to move from you: it replays the real walking, pausing and looking-around of the friend whose face it wears — and it steals fuses, even out of the box.",
+    more: [
+      "Motion Mirror: every player's own movement is studied during the match (speed, how they look around, when they stop) and the Copy moves with those habits",
+      "In practice it copies YOUR way of moving",
+      "It goes for loose fuses nobody is guarding, and pulls fuses back out of the fuse box when nobody is near it, then hides them",
+      "Shoot it while it carries a fuse and it drops it right there",
+      "It talks a lot more: calls out from the dark, chats while walking with you, answers when you speak, and the radio crackles twice as often",
+    ],
+  },
+  {
     v: 38, name: "Feet on the Floor", date: "2026-10",
     big: "Everyone stands on the floor again: the Copy, your friends and the lobby preview were sunk to the waist — now full height.",
     more: [

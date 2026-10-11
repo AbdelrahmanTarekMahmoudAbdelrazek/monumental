@@ -414,7 +414,7 @@ export interface EchoPeerState {
 export const ECHO_TALK = 8;
 export const ECHO_RADIO = 16;
 /** The mimic speaks on Channel 4 now and then, with a stolen voice. */
-export const RADIO = { FIRST_SEC: 25, GAP_MIN: 35, GAP_MAX: 70 } as const;
+export const RADIO = { FIRST_SEC: 20, GAP_MIN: 22, GAP_MAX: 45 } as const;
 
 export function decodeEchoSnap(s: EchoSnap): EchoPeerState[] {
   return s.p.map((r) => ({ n: r[0], t: s.t, x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000, pitch: r[5] / 1000, torch: (r[6] & 1) === 1, crouch: (r[6] & 2) === 2, talk: (r[6] & 8) === 8, radio: (r[6] & 16) === 16, hidden: (r[6] & 32) === 32, armed: (r[6] & 64) === 64 }));
@@ -496,7 +496,7 @@ export const COPY = {
   /** A grabbed player is back in reception after this long (s). */
   BACK_SEC: 15,
   /** Fuses it may move per match. */
-  STEALS: 2,
+  STEALS: 5,
 } as const;
 
 /** What a voice piece is about. Text tags need the optional speech-to-text; the others come from the sound itself. */
@@ -547,6 +547,8 @@ export type EchoEvent =
   /** The Copy tore a locker open with someone inside. */
   | { type: "yank"; n: number; mimic: number; locker: number }
   | { type: "gun"; n: number }
+  /** v39: the Copy pulled a fuse back out of the box. */
+  | { type: "unplug"; fuse: number }
   /** A shot: from (x, z), toward (hx, hz) where it stopped; what it hit. */
   | { type: "shot"; n: number; x: number; z: number; hx: number; hz: number; hy: number; ammo: number; hit: null | { copy: number } | { n: number; gone: boolean } }
   | { type: "restart"; spawns: [number, number, number][] };

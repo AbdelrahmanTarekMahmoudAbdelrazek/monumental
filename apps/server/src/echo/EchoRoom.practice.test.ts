@@ -124,3 +124,31 @@ describe("v37 practice attacks", () => {
     expect(x.events.some((e) => e.type === "taken" || e.type === "reveal")).toBe(true);
   });
 });
+
+import { GOAL } from "@monumental/shared";
+describe("v39 fuses", () => {
+  it("pulls a fuse back out of the box when nobody is near it, and drops a carried fuse when shot", () => {
+    const x = solo();
+    x.r.act("a", { type: "practice" }); x.r.act("a", { type: "enter" });
+    x.run(20);
+    const d = x.r.debug();
+    const [me] = d.members, mm = d.mimics[0];
+    const g = x.r.goal;
+    // one fuse is in the box; I am far away
+    Object.assign(g.fuses[0], { placed: true, by: null, x: GOAL.BOX.x, y: 1.4, z: GOAL.BOX.z }); g.placed = 1;
+    g.fuses[1].by = 99; g.fuses[2].by = 99; // the others are in someone's hands
+    Object.assign(me, { x: 7.5, z: 13.5 });
+    Object.assign(mm, { x: GOAL.BOX.x + 1, z: GOAL.BOX.z, state: "wander", path: [], nextHunt: x.now() + 999_999, nextFetch: 0 });
+    let unplugged = false;
+    for (let i = 0; i < 40 && !unplugged; i++) { x.run(1); unplugged = x.events.some((e) => e.type === "unplug"); if (process.env.DBG) console.log(i, mm.state, JSON.stringify(mm.fetch), mm.x.toFixed(1), mm.z.toFixed(1), mm.path.length, mm.nextFetch! - x.now()); }
+    expect(unplugged).toBe(true);
+    expect(g.placed).toBe(0);
+    expect(mm.carry).toBe(0);
+    // shoot it: the fuse falls where it stands
+    Object.assign(me, { x: mm.x, z: mm.z + 3, yaw: 0, crouch: false });
+    x.r.act("a", { type: "shoot", yaw: 0, pitch: -0.25 });
+    expect(mm.carry).toBe(null);
+    expect(g.fuses[0].by).toBe(null);
+    expect(g.fuses[0].placed).toBe(false);
+  });
+});

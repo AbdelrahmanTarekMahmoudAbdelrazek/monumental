@@ -484,6 +484,7 @@ export class EchoEngine {
       const d = Math.hypot(lx - this.cur.x, lz - this.cur.z); if (d < 14) this.shake = Math.max(this.shake, 1 - d / 14);
     }
     if (e.type === "gun" && e.n === this.opts.me) { this.sounds.click(); this.hospital?.rack(); }
+    if (e.type === "unplug") this.hospital?.sfx("powerdown");
     if (e.type === "shot") {
       const d = Math.hypot(e.x - this.cur.x, e.z - this.cur.z);
       if (e.n !== this.opts.me) { this.hospital?.gunshot(e.x, 1.5, e.z, d); if (d < 10) this.shake = Math.max(this.shake, 0.3 * (1 - d / 10)); }

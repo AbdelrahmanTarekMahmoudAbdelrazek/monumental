@@ -130,6 +130,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       else if (e.type === "call") toast(`${you(e.n, "called", "called")} the lift. It takes ${GOAL.LIFT_CALL_SEC} seconds. Stay together.`);
       else if (e.type === "lift") toast("The lift is here. Everyone in. Count heads.", true);
       if (e.type === "wake") toast("Something in the building is awake.", true);
+      else if (e.type === "unplug") toast("A fuse was pulled back out of the box. Something took it to hide.", true);
       else if (e.type === "free") toast(e.n === meRef.current ? "You cut yourself free! The cutters are spent." : `${nm(e.n)} cut free with the bolt cutters.`);
       else if (e.type === "exposed") toast(`${e.by === meRef.current ? "You" : nm(e.by)} unmasked the Copy. It ran.`);
       else if (e.type === "taken" && e.n !== meRef.current) toast(e.gone ? `${nm(e.n)} is gone.` : `${nm(e.n)} was grabbed.`, true);

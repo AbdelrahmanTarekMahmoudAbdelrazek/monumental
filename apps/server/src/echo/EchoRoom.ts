@@ -1,3 +1,4 @@
+import { MotionStyle, defaultLook, defaultStop, MOTION_HZ, type LookSnippet, type StopSnippet } from "./motion";
 import {
   COPY, ECHO, ECHO_ARMED, ECHO_COLORS, ECHO_HIDDEN, ECHO_LOCKERS, ECHO_RADIO, ECHO_ROOMS, GOAL, HIDE, RADIO, ECHO_TAKEN, ECHO_TALK, ECHO_H, ECHO_TEENS, ECHO_W, MIMIC, MIMIC_STATES, PERK, TEEN_LOOKS, cleanLook,
   lockerFront, echoFree, echoPassable, echoPath, echoSpawns, echoTile, echoTileOf, echoWallsBetween, mimicOpen, mimicRevealed,
@@ -97,6 +98,11 @@ interface Mimic {
   speed: number;
   /** This walk's pace (people don't all walk at exactly the same speed). */
   gait: number;
+  /** v39: the real movement it is replaying (see motion.ts). */
+  /** v39: a fuse it is going for (loose on the floor, or one already in the box). */
+  fetch?: { fuse: number; box: boolean } | null;
+  nextFetch?: number;
+  mirror?: { look: LookSnippet; li: number; pace: number; paceUntil: number; stop: StopSnippet | null; si: number; stopYaw: number };
   /** Players it watched climb into a locker. */
   saw: Set<number>;
 }
@@ -143,6 +149,8 @@ export class EchoRoom {
   private moments: { at: number; text: string; w: number }[] = [];
   private names = new Map<number, string>();
   private lifted = false;
+  /** v39: every player's own movement habits (positions and view only), for the Copy to copy. */
+  private styles = new Map<number, MotionStyle>();
   /** Practice alone: the Copy may wear your own face and use your own voice, the pistol never runs dry, nobody is gone for good. */
   practice = false;
   /** Can this Copy go after `m`? Normally never the one whose face it wears; in practice that is the only one there is. */
@@ -585,6 +593,8 @@ export class EchoRoom {
     m.y = Math.max(-0.5, Math.min(1, s.y));
     m.z = s.z;
     m.at = t;
+    let st = this.styles.get(m.n); if (!st) { st = new MotionStyle(); this.styles.set(m.n, st); }
+    st.add({ t, x: m.x, z: m.z, yaw: m.yaw, pitch: m.pitch, crouch: m.crouch });
     return true;
   }
 
@@ -847,6 +857,8 @@ export class EchoRoom {
           if (prey) { this.hunt(mm, prey, t); if ((mm.state as MimicState) === "stalk") break; }
           mm.nextHunt = t + 5000;
         }
+        // v39: it goes for fuses — a loose one nobody is guarding, or one already in the box when nobody is near it
+        if (this.fetchStep(mm, t, dt)) break;
         if (!mm.path.length) {
           if (mm.stealTo) {
             // arrived where it hides the stolen fuse
@@ -865,6 +877,11 @@ export class EchoRoom {
           } else this.startSearch(mm, t);
           break;
         }
+        // v39: out of sight but within earshot it talks like a player calling out to the others
+        if (!mm.pendingSay && t > mm.speakingUntil + 14_000 && this.rnd() < dt / 5) {
+          const ear = this.open().filter((m) => this.other(mm, m) && Math.hypot(m.x - mm.x, m.z - mm.z) < 16 && !this.los(m.x, m.z, mm.x, mm.z, 16)).sort((a, b) => Math.hypot(a.x - mm.x, a.z - mm.z) - Math.hypot(b.x - mm.x, b.z - mm.z))[0];
+          if (ear) this.say(mm, t, this.pick(ear, mm.as, "call", true, mm), 200);
+        }
         // hurries only where nobody can see it
         this.walk(mm, this.watched(mm.x, mm.z, 22) ? COPY.WALK : COPY.HURRY, dt);
         break;
@@ -881,19 +898,7 @@ export class EchoRoom {
         // a loose fuse here and nobody watching: it takes it to hide somewhere else
         if (mm.carry === null && this.stolen < COPY.STEALS && this.goal.startedAt && k > 0.5) {
           const f = this.goal.fuses.find((x) => !x.placed && x.by === null && !this.moved.has(x.id) && !this.goal.pry.some((p) => p[1] === x.id) && Math.hypot(x.x - mm.x, x.z - mm.z) < 2.2);
-          if (f && !this.watched(mm.x, mm.z, 18)) {
-            f.by = -mm.id; mm.carry = f.id;
-            mm.stealFrom = roomName(f.x, f.z);
-            // somewhere in another room, away from the fuse box
-            const far = GOAL.SPOTS.filter(([x, , z]) => Math.hypot(x - f.x, z - f.z) > 12 && roomName(x, z) !== mm.stealFrom && Math.hypot(x - GOAL.BOX.x, z - GOAL.BOX.z) > 12 && !this.goal.fuses.some((o) => o !== f && Math.hypot(o.x - x, o.z - z) < 1));
-            const [sx, , sz] = far.length ? far[Math.floor(this.rnd() * far.length)] : GOAL.SPOTS[0];
-            mm.stealTo = [echoTileOf(sx), echoTileOf(sz)];
-            mm.path = echoPath(this.tileOf(mm), mm.stealTo);
-            mm.state = "wander";
-            crouchTo(false);
-            this.pushMeta();
-            break;
-          }
+          if (f && !this.watched(mm.x, mm.z, 18)) { this.carryAway(mm, f); crouchTo(false); break; }
         }
         if (t >= mm.look.to) {
           // a locker right here: sometimes it opens it
@@ -910,7 +915,7 @@ export class EchoRoom {
         // close and in sight: walk up like a friend would
         if (d < 8 && seen) { mm.state = "follow"; mm.followSince = t; mm.path = []; break; }
         // calls out in the stolen voice from around the corner
-        if (!seen && d < 13 && !mm.pendingSay && t > mm.speakingUntil + 9000) this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 300);
+        if (!seen && d < 16 && !mm.pendingSay && t > mm.speakingUntil + 5000) this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 300);
         const goal: [number, number] = [echoTileOf(target.x), echoTileOf(target.z)];
         const last = mm.path[mm.path.length - 1];
         if (!last || last[0] !== goal[0] || last[1] !== goal[1]) mm.path = echoPath(this.tileOf(mm), goal);
@@ -955,10 +960,13 @@ export class EchoRoom {
         if (target.askedAt > t - 1500 && !mm.pendingSay && t > mm.speakingUntil + 1500) {
           this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), (MIMIC.REPLY_MIN + this.rnd() * (MIMIC.REPLY_MAX - MIMIC.REPLY_MIN)) * 1000);
           target.askedAt = 0;
-        } else if ((target.spokeAt ?? 0) > t - 900 && !target.talk && !mm.pendingSay && t > mm.speakingUntil + 9000) {
-          // v36: they said something (no words known): now and then it answers, the way a friend says "yeah" back (decided once per thing said)
-          if (this.rnd() < (this.practice ? 0.5 : 0.25)) this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), 500 + this.rnd() * 500);
+        } else if ((target.spokeAt ?? 0) > t - 900 && !target.talk && !mm.pendingSay && t > mm.speakingUntil + 4500) {
+          // v36: they said something (no words known): it answers, the way a friend says "yeah" back (decided once per thing said)
+          if (this.rnd() < (this.practice ? 0.75 : 0.6)) this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), 450 + this.rnd() * 500);
           target.spokeAt = 0;
+        } else if (!target.talk && !mm.pendingSay && t > mm.speakingUntil + 11_000 && t - (target.spokeAt || 0) > 2500 && this.rnd() < dt / 4) {
+          // v39: a friend walking with you talks now and then on their own ("come on", "this way", your name)
+          this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 200);
         }
         break;
       }
@@ -1063,6 +1071,57 @@ export class EchoRoom {
     mm.until = t + sec * 1000;
     mm.path = echoPath(this.tileOf(mm), this.farTile(12));
     mm.lit.clear();
+  }
+
+  /** Take fuse `f` and walk it somewhere far from the box to hide it. */
+  private carryAway(mm: Mimic, f: EchoGoal["fuses"][number]) {
+    f.by = -mm.id; mm.carry = f.id;
+    mm.stealFrom = roomName(f.x, f.z);
+    const far = GOAL.SPOTS.filter(([x, , z]) => Math.hypot(x - f.x, z - f.z) > 12 && roomName(x, z) !== mm.stealFrom && Math.hypot(x - GOAL.BOX.x, z - GOAL.BOX.z) > 12 && !this.goal.fuses.some((o) => o !== f && Math.hypot(o.x - x, o.z - z) < 1));
+    const [sx, , sz] = far.length ? far[Math.floor(this.rnd() * far.length)] : GOAL.SPOTS[0];
+    mm.stealTo = [echoTileOf(sx), echoTileOf(sz)];
+    mm.path = echoPath(this.tileOf(mm), mm.stealTo);
+    mm.state = "wander";
+    mm.fetch = null;
+    this.pushMeta();
+  }
+
+  /** v39: choose a fuse to go for, walk to it, and take it when nobody is watching. True while busy with it. */
+  private fetchStep(mm: Mimic, t: number, dt: number): boolean {
+    const g = this.goal;
+    if (mm.carry !== null || mm.stealTo || !g.startedAt || this.stolen >= COPY.STEALS) { mm.fetch = null; return false; }
+    if (!mm.fetch) {
+      if (t < (mm.nextFetch ?? 0)) return false;
+      mm.nextFetch = t + 6000 + this.rnd() * 6000;
+      const near = (x: number, z: number, r: number) => this.open().some((m) => Math.hypot(m.x - x, m.z - z) < r);
+      const loose = g.fuses.filter((f) => !f.placed && f.by === null && !g.pry.some((p) => p[1] === f.id) && !near(f.x, f.z, 7));
+      const boxed = !g.power && !near(GOAL.BOX.x, GOAL.BOX.z, 12) && !this.watched(GOAL.BOX.x, GOAL.BOX.z, 16) ? g.fuses.filter((f) => f.placed) : [];
+      const pick = [...loose.map((f) => ({ f, box: false })), ...boxed.map((f) => ({ f, box: true }))]
+        .map((o) => ({ ...o, d: Math.hypot(o.f.x - mm.x, o.f.z - mm.z) + (o.box ? -15 : 0) })) // the box is the cruellest place to take one from
+        .filter((o) => o.d < 45).sort((a, b) => a.d - b.d)[0];
+      if (!pick || this.rnd() < 0.35) return false;
+      mm.fetch = { fuse: pick.f.id, box: pick.box };
+      mm.path = echoPath(this.tileOf(mm), [echoTileOf(pick.f.x), echoTileOf(pick.f.z)]);
+    }
+    const f = g.fuses[mm.fetch.fuse];
+    // gone, picked up, or (for the box) someone is there now: give up
+    if (!f || f.by !== null || f.placed !== mm.fetch.box || (mm.fetch.box && g.power)) { mm.fetch = null; return false; }
+    const d = Math.hypot(f.x - mm.x, f.z - mm.z);
+    if (d > 1.3) {
+      if (!mm.path.length) mm.path = echoPath(this.tileOf(mm), [echoTileOf(f.x), echoTileOf(f.z)]);
+      if (!mm.path.length) { mm.fetch = null; return false; }
+      this.walk(mm, this.watched(mm.x, mm.z, 22) ? COPY.WALK : COPY.HURRY, dt);
+      return true;
+    }
+    if (this.watched(mm.x, mm.z, 14)) { mm.fetch = null; mm.nextFetch = t + 8000; return false; } // someone can see: not now
+    if (mm.fetch.box) {
+      Object.assign(f, { placed: false, x: GOAL.BOX.x, y: 0.05, z: GOAL.BOX.z });
+      g.placed = Math.max(0, g.placed - 1);
+      this.ev.event({ type: "unplug", fuse: f.id });
+      this.moment(t, `The Copy, wearing ${this.nameOf(mm.as)}'s face, pulled a fuse back out of the box and hid it.`, 3);
+    }
+    this.carryAway(mm, f);
+    return true;
   }
 
   private startSearch(mm: Mimic, t: number) {
@@ -1242,8 +1301,28 @@ export class EchoRoom {
     return echoWallsBetween(ax, az, bx, bz) === 0 && echoWallsBetween(ax + ox, az + oz, bx + ox, bz + oz) === 0 && echoWallsBetween(ax - ox, az - oz, bx - ox, bz - oz) === 0;
   }
 
+  /** v39: the movement it replays — the face it wears decides whose habits. */
+  private mirrorOf(mm: Mimic, t: number) {
+    const st = this.styles.get(mm.as);
+    if (!mm.mirror) mm.mirror = { look: st?.look(t, this.rnd) ?? defaultLook(this.rnd), li: 0, pace: 0, paceUntil: 0, stop: null, si: 0, stopYaw: 0 };
+    const mr = mm.mirror;
+    if (t >= mr.paceUntil) { mr.pace = Math.max(1.1, Math.min(3, st?.speed(t, this.rnd) ?? 1.7 + this.rnd() * 0.8)); mr.paceUntil = t + 2500 + this.rnd() * 4000; }
+    return mr;
+  }
+
   /** Follow the path like a person: cut corners when the way is clear, glide through doors, ease into the last step. */
   private walk(mm: Mimic, speed: number, dt: number) {
+    const t = this.now();
+    // v39: in a friend's skin it walks, pauses and looks around the way that friend really does
+    const human = !mimicRevealed(mm.state);
+    const mr = human ? this.mirrorOf(mm, t) : null;
+    if (mr?.stop) {
+      const i = Math.floor(mr.si);
+      mm.speed = Math.max(0, mm.speed - 6 * dt);
+      if (i >= mr.stop.yaw.length || mm.state !== "wander" && mm.state !== "search") { mr.stop = null; mm.head = mm.yaw; }
+      else { mm.yaw = Math.atan2(Math.sin(mr.stopYaw + mr.stop.yaw[i]), Math.cos(mr.stopYaw + mr.stop.yaw[i])); mm.pitch = mr.stop.pitch[i]; mr.si += dt * MOTION_HZ; return; }
+    }
+    if (mr && speed <= COPY.WALK * 1.05) speed = mr.pace;
     while (mm.path.length >= 2) {
       const [nx, nz] = this.pt(mm, mm.path[1]);
       if (!this.clearLine(mm.x, mm.z, nx, nz)) break;
@@ -1255,6 +1334,17 @@ export class EchoRoom {
     if (Math.hypot(px - mm.x, pz - mm.z) < (last ? 0.25 : 0.8)) { mm.path.shift(); if (!mm.path.length) return; }
     const [qx, qz] = this.pt(mm, mm.path[0]);
     this.steer(mm, qx, qz, speed * mm.gait, dt, mm.path.length === 1 ? 1.4 : 0);
+    if (mr) {
+      // the view wanders off the heading like a real player's mouse (less of it when hurrying)
+      const i = Math.floor(mr.li), k = speed > COPY.WALK * 1.2 ? 0.35 : 1;
+      if (i >= mr.look.yaw.length) { mr.look = this.styles.get(mm.as)?.look(t, this.rnd) ?? defaultLook(this.rnd); mr.li = 0; }
+      else { mm.yaw = Math.atan2(Math.sin(mm.head + mr.look.yaw[i] * k), Math.cos(mm.head + mr.look.yaw[i] * k)); mm.pitch = mr.look.pitch[i] * k; mr.li += dt * MOTION_HZ; }
+      // and now and then it stops to look around, as often as that friend stops
+      if ((mm.state === "wander" || mm.state === "search") && mm.carry === null) {
+        const rate = this.styles.get(mm.as)?.stopRate(t) ?? 1 / 22;
+        if (this.rnd() < Math.min(0.2, rate * mm.speed * dt)) { mr.stop = this.styles.get(mm.as)?.stop(t, this.rnd) ?? defaultStop(this.rnd); mr.si = 0; mr.stopYaw = mm.yaw; }
+      }
+    }
   }
 
   /** Head for (x, z) like a body: turns at a human rate (slowing for sharp turns), speeds up and eases off. */

@@ -174,7 +174,7 @@ describe("ECHO HALLS the Copy", () => {
     mm.nextHunt = x.now() + 600_000;
     const states = new Set<string>();
     let fastest = 0, crouched = false, lx = mm.x, lz = mm.z;
-    x.run(60, () => { states.add(mm.state); crouched ||= mm.crouch; fastest = Math.max(fastest, Math.hypot(mm.x - lx, mm.z - lz) / 0.05); lx = mm.x; lz = mm.z; });
+    x.run(150, () => { states.add(mm.state); crouched ||= mm.crouch; fastest = Math.max(fastest, Math.hypot(mm.x - lx, mm.z - lz) / 0.05); lx = mm.x; lz = mm.z; });
     expect(states.has("search")).toBe(true);
     expect(fastest).toBeLessThanOrEqual(COPY.HURRY * 1.07);
     expect(crouched).toBe(true);
