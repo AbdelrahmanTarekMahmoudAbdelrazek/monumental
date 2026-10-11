@@ -137,8 +137,9 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       else if (e.type === "yank") toast(e.n === meRef.current ? "It knew where you were." : "Something tore a locker open.", true);
       else if (e.type === "shot") {
         const who = e.n === meRef.current ? "You" : nm(e.n);
-        if (!e.hit) toast(`${who} fired. Missed. ${e.ammo} left.`, true);
-        else if ("copy" in e.hit) toast(`${who} shot the Copy! Its face came apart and it ran. ${e.ammo} left.`);
+        const left = latestMeta.current?.practice ? "" : ` ${e.ammo} left.`;
+        if (!e.hit) toast(`${who} fired. Missed.${left}`, true);
+        else if ("copy" in e.hit) toast(`${who} shot the Copy! Its face came apart and it ran.${left}`);
         else toast(e.hit.n === meRef.current ? (e.hit.gone ? `${who} shot you. It really was you.` : `${who} shot you. You're bleeding — one more hit and you're gone.`) : `${who} shot ${nm(e.hit.n)}. It was really ${nm(e.hit.n)}.${e.hit.gone ? " They're gone." : ""}`, true);
       }
     };
@@ -220,15 +221,25 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   // walk or look away and the note closes
   useEffect(() => { if (reading !== null && hud && hud.note !== reading) setReading(null); }, [hud, reading]);
 
-  const enter = async () => {
+  const enter = async (practice = false) => {
     const eng = engineRef.current;
     if (!eng || !consent) return;
+    if (practice) {
+      const ok = await new Promise<boolean>((done) => getSocket().emit("eh_act", { type: "practice" }, (a: { ok: boolean; error?: string }) => { if (!a.ok) toastRef.current(a.error ?? "Can't practice now", true); done(a.ok); }));
+      if (!ok) return;
+    }
     try { localStorage.setItem("eh:consent", "1"); localStorage.setItem("eh:smart", smart); } catch { /* private mode */ }
     eng.smartLang = smart === "off" ? null : smart;
     setEntered(true);
-    requestAnimationFrame(() => eng.resize());
+    // the button may be far down the lobby: the page and the game box (overflow hidden, but still scrollable by focus) go back to the top
+    window.scrollTo(0, 0);
+    const box = canvasRef.current?.parentElement; if (box) box.scrollTop = 0;
+    requestAnimationFrame(() => { if (box) box.scrollTop = 0; eng.resize(); });
+    setTimeout(() => { if (box) box.scrollTop = 0; }, 400);
     await eng.enter();
-    getSocket().emit("eh_act", { type: "enter" }, () => {});
+    // the server rate-limits actions (120 ms): straight after "practice" the enter can bounce, so it retries
+    const sendEnter = (tries: number) => getSocket().emit("eh_act", { type: "enter" }, (r: { ok: boolean; error?: string }) => { if (!r?.ok && tries > 0) setTimeout(() => sendEnter(tries - 1), 250); });
+    sendEnter(4);
     if (mobile) document.documentElement.requestFullscreen?.().catch(() => {});
   };
 
@@ -236,6 +247,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
   const copy = () => { void navigator.clipboard?.writeText(invite).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); };
   const nameOf = (n: number) => meta?.players.find((p) => p.n === n);
   const over = !!meta?.goal?.result;
+  const alone = meta?.players.length === 1 && !meta?.goal?.startedAt;
   const paused = entered && !mobile && hud && !hud.locked && !over;
   // at the end of a match, give the mouse back so the buttons can be clicked
   useEffect(() => { if (over && document.pointerLockElement) document.exitPointerLock?.(); }, [over]);
@@ -312,10 +324,16 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
                   <option value="ar-EG">On · العربية (مصر)</option>
                   <option value="ar-SA">On · العربية (السعودية)</option>
                 </select>
-                <span className="w-full text-xs text-[#6E786E]">Uses your browser's speech-to-text (in Chrome this sends your audio to Google). Off: the Copy still works, just less clever.</span>
+                <span className="w-full text-xs text-[#6E786E]">Runs speech-to-text on your own device (recent Chrome, a one-time language download). If your browser can only do it in the cloud, Smart Copy stays off — your voice is never sent anywhere. Off: the Copy still works, just less clever.</span>
               </div>
               <p className="text-sm text-[#7E887E]">Your browser will ask for the microphone. Without one you can still listen.</p>
               <button disabled={!ready || !consent} onClick={() => void enter()} data-testid="eh-enter" className={`${TITLE} h-16 rounded-2xl bg-[#E9E4D6] text-2xl text-black disabled:opacity-50`}>{!ready ? "Building the hospital…" : consent ? "Enter the halls" : "Agree above to enter"}</button>
+              {alone && (
+                <button disabled={!ready || !consent} onClick={() => void enter(true)} data-testid="eh-practice" className="rounded-2xl border border-[#5A2621] bg-[#160E0D] px-4 py-3 text-left disabled:opacity-50">
+                  <div className="font-semibold text-[#F1C9C4]">Practice alone</div>
+                  <div className="text-xs leading-relaxed text-[#C7A7A2]">A Copy wakes after 15 seconds wearing your face and your name, and talks back in your own voice. You start with the pistol and it never runs out.</div>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -387,7 +405,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
       {entered && hud && hud.ammo !== null && (
         <div className="pointer-events-none absolute bottom-16 right-4 flex items-center gap-2 rounded-full border border-[#3A433D] bg-black/60 px-3 py-1.5 text-sm text-[#E9E4D6] md:bottom-4" data-testid="eh-ammo">
           <span className="text-xs uppercase tracking-wider text-[#9FA89F]">Pistol</span>
-          {Array.from({ length: GOAL.AMMO }).map((_, i) => <span key={i} className={`h-3.5 w-1.5 rounded-sm ${i < hud.ammo! ? "bg-[#D9B86A]" : "bg-[#2A2F2B]"}`} />)}
+          {meta?.practice ? <span className="font-bold text-[#D9B86A]">∞</span> : Array.from({ length: GOAL.AMMO }).map((_, i) => <span key={i} className={`h-3.5 w-1.5 rounded-sm ${i < hud.ammo! ? "bg-[#D9B86A]" : "bg-[#2A2F2B]"}`} />)}
           {!mobile && <span className="text-xs text-[#7E887E]">click</span>}
         </div>
       )}
@@ -398,7 +416,7 @@ export default function EchoGame({ code, userToken, onStory }: { code: string; u
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/90" data-testid="eh-taken">
           <div className="px-6 text-center">
             <div className={`${TITLE} text-6xl text-[#D9463B]`}>{hud.gone ? "Gone" : "Grabbed"}</div>
-            <p className="mt-2 text-[#A6AFA6]">{hud.gone ? "It got you twice. Your friends are on their own now." : `It wasn't who you thought. Back in reception in ${hud.taken}… Next time, it keeps you.`}</p>
+            <p className="mt-2 text-[#A6AFA6]">{hud.gone ? "It got you twice. Your friends are on their own now." : `It wasn't who you thought. Back in reception in ${hud.taken}…${meta?.practice ? " (Practice: it never keeps you.)" : " Next time, it keeps you."}`}</p>
           </div>
         </div>
       )}

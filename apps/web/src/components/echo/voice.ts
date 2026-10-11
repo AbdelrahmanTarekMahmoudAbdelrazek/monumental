@@ -1,4 +1,4 @@
-import { ECHO, MIMIC, echoWallsBetween, pcmEncode, type ClipTag } from "@monumental/shared";
+import { ECHO, MIMIC, echoPath, echoTileOf, echoWallsBetween, pcmEncode, type ClipTag } from "@monumental/shared";
 import type { SoundBank } from "./sound";
 import { RadioFx } from "./radio";
 
@@ -10,12 +10,40 @@ export interface BankClip { bytes: Uint8Array; ms: number; tags: ClipTag[] }
  * quieter and muffled through walls. Real voices and the mimic's copies both use this, so nothing gives the copy away.
  * Everything is also capped at 11 kHz — the band the copies are recorded in.
  */
-export function voiceMix(me: { x: number; z: number }, o: { x: number; z: number }) {
+export function voiceMix(me: { x: number; z: number }, o: { x: number; z: number }): { gain: number; cutoff: number; x: number; z: number } {
   const d = Math.hypot(o.x - me.x, o.z - me.z);
-  let v = d <= ECHO.VOICE_NEAR ? 1 : Math.max(0, 1 - (d - ECHO.VOICE_NEAR) / (ECHO.VOICE_RANGE - ECHO.VOICE_NEAR)) ** 1.6;
+  const fall = (L: number) => (L <= ECHO.VOICE_NEAR ? 1 : Math.max(0, 1 - (L - ECHO.VOICE_NEAR) / (ECHO.VOICE_RANGE - ECHO.VOICE_NEAR)) ** 1.6);
+  let v = fall(d);
   const walls = d < ECHO.VOICE_RANGE ? echoWallsBetween(me.x, me.z, o.x, o.z) : 0;
   v *= walls === 0 ? 1 : walls === 1 ? 0.55 : 0.28;
-  return { gain: v * 1.4, cutoff: walls === 0 ? 11000 : walls === 1 ? 1300 : 650 };
+  const through = { gain: v * 1.4, cutoff: walls === 0 ? 11000 : walls === 1 ? 1300 : 650, x: o.x, z: o.z };
+  if (walls === 0 || d > ECHO.VOICE_RANGE * 1.2) return through;
+  // v36: sound also goes the long way round, through the doors. If that way is short enough it is louder and clearer
+  // than through the wall, and it comes from the doorway you can see — "round the corner", like a real voice.
+  const way = doorWay(me, o);
+  if (!way || way.len > d * 1.8 || way.len >= ECHO.VOICE_RANGE) return through;
+  const vd = fall(way.len) * 0.8 * Math.pow(0.85, Math.max(0, way.turns - 1));
+  if (vd * 1.4 <= through.gain) return through;
+  const dx = way.seeX - me.x, dz = way.seeZ - me.z, k = way.len / Math.max(0.01, Math.hypot(dx, dz));
+  return { gain: vd * 1.4, cutoff: Math.max(1800, 4500 - 700 * (way.turns - 1)), x: me.x + dx * k, z: me.z + dz * k };
+}
+
+/** The walk between two points through doors: its length, how many corners, and the furthest point of it I can see. Cached per tile pair. */
+const wayCache = new Map<number, [number, number][]>();
+function doorWay(me: { x: number; z: number }, o: { x: number; z: number }) {
+  const a: [number, number] = [echoTileOf(me.x), echoTileOf(me.z)], b: [number, number] = [echoTileOf(o.x), echoTileOf(o.z)];
+  const key = ((a[1] * 64 + a[0]) * 4096) + b[1] * 64 + b[0];
+  let tiles = wayCache.get(key);
+  if (!tiles) { if (wayCache.size > 6000) wayCache.clear(); tiles = echoPath(a, b); wayCache.set(key, tiles); }
+  if (!tiles.length) return null;
+  const pts: { x: number; z: number }[] = [me, ...tiles.slice(0, -1).map(([tx, tz]) => ({ x: (tx + 0.5) * ECHO.TILE, z: (tz + 0.5) * ECHO.TILE })), o];
+  let len = 0, turns = 0, see = pts[1];
+  for (let i = 1; i < pts.length; i++) {
+    len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+    if (i >= 2) { const ax = pts[i - 1].x - pts[i - 2].x, az = pts[i - 1].z - pts[i - 2].z, bx = pts[i].x - pts[i - 1].x, bz = pts[i].z - pts[i - 1].z; if (Math.abs(ax * bz - az * bx) > 1e-3) turns++; }
+  }
+  for (let i = 1; i < pts.length; i++) { if (echoWallsBetween(me.x, me.z, pts[i].x, pts[i].z) === 0) see = pts[i]; else break; }
+  return { len, turns, seeX: see.x, seeZ: see.z };
 }
 
 const CHUNK = 16 * 1024;
@@ -38,6 +66,9 @@ interface Peer {
   panner: PannerNode;
   /** Their voice on Channel 4 (open while they hold the talk button). */
   radio: GainNode;
+  /** v36: the echo send, and which room's echo it feeds. */
+  send: GainNode;
+  roomNow: ConvolverNode;
   onAir: boolean;
   offeredAt: number;
   failedAt: number;
@@ -276,10 +307,11 @@ export class Voice {
     const send = ctx.createGain();
     send.gain.value = 0.2;
     gain.connect(send).connect(this.sounds.room);
+    const roomNow = this.sounds.room;
     const radio = ctx.createGain();
     radio.gain.value = 0;
     radio.connect(this.radio.input);
-    const peer: Peer = { n, pc, offerer: this.me < n, filter, gain, panner, radio, onAir: false, sinks: [], sources: [], offeredAt: 0, failedAt: 0, queued: [], dc: pc.createDataChannel("clips", { negotiated: true, id: 5 }), incoming: null, gen: 0, remoteGen: -1 };
+    const peer: Peer = { n, pc, offerer: this.me < n, filter, gain, panner, radio, send, roomNow, onAir: false, sinks: [], sources: [], offeredAt: 0, failedAt: 0, queued: [], dc: pc.createDataChannel("clips", { negotiated: true, id: 5 }), incoming: null, gen: 0, remoteGen: -1 };
     this.peers.set(n, peer);
     peer.dc.binaryType = "arraybuffer";
     peer.dc.onmessage = (e) => this.onData(peer, e.data);
@@ -373,7 +405,9 @@ export class Voice {
       const mix = voiceMix(me, o);
       p.gain.gain.setTargetAtTime(mix.gain, t, 0.08);
       p.filter.frequency.setTargetAtTime(mix.cutoff, t, 0.1);
-      this.sounds.place(p.panner, o.x, o.y + 1.5, o.z);
+      this.sounds.place(p.panner, mix.x, o.y + 1.5, mix.z); // v36: from the doorway when the voice comes round a corner
+      const rm = this.sounds.roomAt(o.x, o.z);
+      if (rm !== p.roomNow) { try { p.send.disconnect(); } catch { /* fine */ } p.send.connect(rm); p.roomNow = rm; }
     }
   }
 

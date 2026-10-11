@@ -357,7 +357,9 @@ export interface EchoGoal {
 }
 export type EchoAct =
   | { type: "enter" } | { type: "pickup"; fuse: number } | { type: "install" } | { type: "call" } | { type: "restart" }
-  | { type: "hide"; locker: number } | { type: "unhide" } | { type: "gun" } | { type: "shoot"; yaw: number; pitch: number };
+  | { type: "hide"; locker: number } | { type: "unhide" } | { type: "gun" } | { type: "shoot"; yaw: number; pitch: number }
+  /** Host alone, before the match: practice against a Copy of yourself. */
+  | { type: "practice" };
 
 export interface EchoMeta {
   code: string;
@@ -367,6 +369,8 @@ export interface EchoMeta {
   goal?: EchoGoal;
   /** Phase 2: are the mimics awake, and how the night is going. */
   night?: { awake: boolean; wakeAt: number; exposed: number; taken: number };
+  /** Practice alone: the Copy wears your face, the pistol never runs dry. */
+  practice?: boolean;
 }
 
 /** What a client sends about itself (positions in metres, angles in radians). */
@@ -558,17 +562,31 @@ export const CLIP_WORDS: Record<"call" | "here" | "found" | "panic" | "question"
   here: ["i'm here", "im here", "i am here", "here", "انا هنا", "أنا هنا", "هنا", "جنبك"],
   found: ["found", "key", "fuse", "got it", "لقيت", "لقيته", "المفتاح", "معايا", "معي"],
   panic: ["run", "help", "go go", "اجري", "الحق", "ساعدني", "ساعدوني", "يا لهوي", "اهرب"],
-  question: ["where", "who", "what", "are you", "فين", "وين", "مين", "ايه", "إيه", "شو", "انت فين", "إنت فين"],
+  question: ["where", "who", "what", "huh", "are you", "you there", "is that you", "فين", "وين", "مين", "ايه", "إيه", "شو", "انت فين", "إنت فين"],
 };
 
-/** Labels a transcript. `names` maps player number → lowercase name. */
+/** Lowercase word tokens (letters, digits, apostrophes; any script). */
+export function clipTokens(text: string): string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+}
+
+/**
+ * Labels a transcript. `names` maps player number → lowercase name.
+ * Whole words only (v36): "where" is not "here", "same" is not "Sam", "monkey" has no "key".
+ */
 export function tagText(text: string, names: Record<number, string>): ClipTag[] {
-  const t = ` ${text.toLowerCase()} `;
+  const toks = clipTokens(text);
+  const has = (phrase: string) => {
+    const p = clipTokens(phrase);
+    if (!p.length) return false;
+    for (let i = 0; i + p.length <= toks.length; i++) if (p.every((w, k) => toks[i + k] === w)) return true;
+    return false;
+  };
   const tags: ClipTag[] = [];
   for (const [tag, words] of Object.entries(CLIP_WORDS) as [keyof typeof CLIP_WORDS, string[]][]) {
-    if (words.some((w) => t.includes(w))) tags.push(tag);
+    if (words.some(has)) tags.push(tag);
   }
-  for (const [n, name] of Object.entries(names)) if (name.length >= 2 && t.includes(name.toLowerCase())) tags.push(`name:${Number(n)}`);
+  for (const [n, name] of Object.entries(names)) if (name.length >= 2 && has(name)) tags.push(`name:${Number(n)}`);
   return tags;
 }
 

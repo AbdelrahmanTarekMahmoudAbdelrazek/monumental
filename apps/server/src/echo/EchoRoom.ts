@@ -30,6 +30,8 @@ interface Member {
   heard: { n: number; at: number } | null;
   /** When this player last asked a question ("where are you?"). */
   askedAt: number;
+  /** v36: when their last voice piece ended (the server hears no words without speech-to-text, only that they spoke). */
+  spokeAt?: number;
   /** Sam has used his one escape this match. */
   freed: boolean;
   /** Times grabbed this match; at COPY.STRIKES they are gone. */
@@ -51,6 +53,9 @@ interface Clip extends ClipInfo {
   at: number;
   have: Set<number>;
   used: boolean;
+  /** v36: who heard this take live (they would recognise it), and how many fuses were in when it was said. */
+  heardBy?: Set<number>;
+  placedThen?: number;
 }
 
 interface Mimic {
@@ -70,7 +75,7 @@ interface Mimic {
   crouch: boolean;
   torch: boolean;
   speakingUntil: number;
-  pendingSay: { at: number; clips: string[] } | null;
+  pendingSay: { at: number; clips: string[]; born?: number } | null;
   /** Torch time on it, per player. */
   lit: Map<number, number>;
   /** Busy walking out of a torch beam until then. */
@@ -138,6 +143,10 @@ export class EchoRoom {
   private moments: { at: number; text: string; w: number }[] = [];
   private names = new Map<number, string>();
   private lifted = false;
+  /** Practice alone: the Copy may wear your own face and use your own voice, the pistol never runs dry, nobody is gone for good. */
+  practice = false;
+  /** Can this Copy go after `m`? Normally never the one whose face it wears; in practice that is the only one there is. */
+  private other(mm: Mimic, m: Member) { return this.practice || m.n !== mm.as; }
 
   constructor(public readonly code: string, private hostId: string, private ev: EchoEvents, private now: () => number = Date.now, private rnd: () => number = Math.random) {
     this.goal = this.newGoal();
@@ -148,6 +157,7 @@ export class EchoRoom {
   join(id: string, name: string): { ok: true; n: number; spawn: { x: number; z: number } } | { ok: false; error: string } {
     let m = this.members.find((x) => x.id === id);
     if (!m) {
+      if (this.practice) return { ok: false, error: "This is a practice room for one — start your own" };
       if (this.members.length >= ECHO.MAX_PLAYERS) return { ok: false, error: `Room is full (${ECHO.MAX_PLAYERS} players)` };
       const spawns = echoSpawns();
       const s = spawns[this.members.length % spawns.length];
@@ -282,6 +292,15 @@ export class EchoRoom {
       this.restart(t);
       return { ok: true };
     }
+    if (a.type === "practice") {
+      if (this.members.length !== 1) return { ok: false, error: "Practice is for one player alone" };
+      if (g.startedAt) return { ok: false, error: "The match has already started" };
+      this.practice = true;
+      this.wakeSec = Math.min(this.wakeSec, 15);
+      this.armPractice(m);
+      this.pushMeta();
+      return { ok: true };
+    }
     if (a.type === "enter") {
       m.entered = true;
       if (!g.startedAt && !g.result) { g.startedAt = t; g.endsAt = t + this.matchSec * 1000; }
@@ -329,7 +348,7 @@ export class EchoRoom {
       if (gun.by !== m.n) return { ok: false, error: "You have no gun" };
       if (gun.ammo <= 0) return { ok: false, error: "Click. It's empty." };
       if (!Number.isFinite(a.yaw) || !Number.isFinite(a.pitch)) return { ok: false, error: "Invalid" };
-      gun.ammo--;
+      if (!this.practice) gun.ammo--;
       this.shoot(m, a.yaw, Math.max(-1.5, Math.min(1.5, a.pitch)), t);
       this.pushMeta();
       return { ok: true };
@@ -345,7 +364,7 @@ export class EchoRoom {
       this.ev.event({ type: "pry", n: m.n, fuse: f.id });
       // the scrape carries: a Copy nearby comes to see
       for (const mm of this.mimics) {
-        if ((mm.state === "wander" || mm.state === "search") && mm.carry === null && mm.as !== m.n && Math.hypot(mm.x - m.x, mm.z - m.z) < 25) this.hunt(mm, m, t);
+        if ((mm.state === "wander" || mm.state === "search") && mm.carry === null && this.other(mm, m) && Math.hypot(mm.x - m.x, mm.z - m.z) < 25) this.hunt(mm, m, t);
       }
       this.pushMeta();
       return { ok: true };
@@ -427,7 +446,7 @@ export class EchoRoom {
     for (const mm of this.mimics) {
       if (mimicRevealed(mm.state) || mm.carry !== null || mm === h?.copy) continue;
       if (Math.hypot(mm.x - m.x, mm.z - m.z) > GOAL.GUN_HEAR) continue;
-      if (mm.as !== m.n && (mm.state === "wander" || mm.state === "search")) this.hunt(mm, m, t);
+      if (this.other(mm, m) && (mm.state === "wander" || mm.state === "search")) this.hunt(mm, m, t);
     }
   }
 
@@ -515,6 +534,12 @@ export class EchoRoom {
   }
 
   /** Another round in the same room: new fuse spots, everyone back to reception, the Copies asleep again. */
+  /** Practice: the pistol starts in your hand, full. */
+  private armPractice(m: Member | undefined) {
+    if (!this.practice || !m) return;
+    Object.assign(this.goal.gun, { by: m.n, ammo: 99 });
+  }
+
   private restart(t: number) {
     this.goal = this.newGoal();
     this.liftHold = 0; this.lifted = false;
@@ -530,6 +555,7 @@ export class EchoRoom {
       spawns.push([m.n, s.x, s.z]);
     });
     if (this.members.some((m) => m.entered)) { this.goal.startedAt = t; this.goal.endsAt = t + this.matchSec * 1000; }
+    this.armPractice(this.members[0]);
     this.armWake();
     this.ev.event({ type: "restart", spawns });
     this.pushMeta();
@@ -569,13 +595,15 @@ export class EchoRoom {
     if (!m) return;
     const key = `${m.n}:${pieceId}`;
     if (this.clips.has(key)) return;
-    this.clips.set(key, { key, owner: m.n, ms, tags, at: this.now(), have: new Set([m.n]), used: false });
+    const heardBy = new Set(this.members.filter((o) => o !== m && Math.hypot(o.x - m.x, o.z - m.z) <= ECHO.VOICE_RANGE).map((o) => o.n));
+    this.clips.set(key, { key, owner: m.n, ms, tags, at: this.now(), have: new Set([m.n]), used: false, heardBy, placedThen: this.goal.placed });
     if (this.clips.size > 400) { const oldest = [...this.clips.values()].sort((a, b) => a.at - b.at)[0]; this.clips.delete(oldest.key); }
     for (const o of this.members) {
       if (o.n === m.n) continue;
       if (Math.hypot(o.x - m.x, o.z - m.z) <= ECHO.VOICE_RANGE) o.heard = { n: m.n, at: this.now() };
     }
     if (tags.includes("question")) m.askedAt = this.now();
+    m.spokeAt = this.now();
   }
 
   /** Speech-to-text finished for a piece: better labels. */
@@ -585,6 +613,33 @@ export class EchoRoom {
     if (!m || !c) return;
     c.tags = [...new Set([...c.tags, ...tags])];
     if (tags.includes("question")) m.askedAt = this.now();
+    this.nameCalled(m, c, tags);
+  }
+
+  /**
+   * v36: somebody calls the name of the friend a Copy is wearing. If it is close enough to have heard, and the real
+   * friend is not in earshot to answer, it answers — at the speed a person would (about half a second), plus a hair.
+   */
+  private nameCalled(m: Member, c: Clip, tags: ClipTag[]) {
+    const t = this.now();
+    if (this.goal.result || t - c.at > 1500) return; // the moment has passed: a late "yes?" gives it away
+    for (const tag of tags) {
+      if (!tag.startsWith("name:")) continue;
+      const who = Number(tag.slice(5));
+      for (const mm of this.mimics) {
+        if (mm.as !== who || mimicRevealed(mm.state) || mm.pendingSay || mm.carry !== null || t < mm.speakingUntil + 2000) continue;
+        if (Math.hypot(m.x - mm.x, m.z - mm.z) > ECHO.VOICE_RANGE) continue;
+        const real = this.members.find((o) => o.n === who && !o.taken && !o.gone);
+        if (!this.practice && real && (real === m || Math.hypot(real.x - m.x, real.z - m.z) < ECHO.VOICE_RANGE + 3)) continue;
+        if (this.rnd() < 0.15) continue; // people don't always answer
+        const clips = this.pick(m, who, "answer", true, mm);
+        if (!clips.length) continue;
+        const g = Math.sqrt(-2 * Math.log(Math.max(1e-6, this.rnd()))) * Math.cos(2 * Math.PI * this.rnd());
+        const lat = Math.min(1300, Math.max(300, Math.exp(Math.log(550) + 0.35 * g))) + 250;
+        this.say(mm, t, clips, Math.max(0, lat - (t - c.at)));
+        return;
+      }
+    }
   }
 
   /** A player's device received a piece from its owner. */
@@ -626,7 +681,7 @@ export class EchoRoom {
 
   /** The night starts counting once two people are here and the match has begun. */
   private armWake() {
-    if (this.wakeAt || this.members.length < 2 || !this.goal.startedAt) return;
+    if (this.wakeAt || this.members.length < (this.practice ? 1 : 2) || !this.goal.startedAt) return;
     this.wakeAt = this.now() + this.wakeSec * 1000;
   }
 
@@ -699,7 +754,7 @@ export class EchoRoom {
   private canChangeFace(mm: Mimic) { return !this.watched(mm.x, mm.z, 24); }
 
   private hunt(mm: Mimic, prey: Member, t: number) {
-    if (prey.n === mm.as) {
+    if (prey.n === mm.as && !this.practice) {
       if (!this.canChangeFace(mm)) return;
       this.disguise(mm, prey);
       if (prey.n === mm.as) return;
@@ -746,12 +801,22 @@ export class EchoRoom {
 
   private say(mm: Mimic, t: number, clips: string[], delayMs: number) {
     if (!clips.length) return;
-    mm.pendingSay = { at: t + delayMs, clips };
+    mm.pendingSay = { at: t + delayMs, clips, born: t };
   }
 
   private think(mm: Mimic, dt: number, t: number) {
+    // v36 turn-taking: never over the person it talks to, never while the real owner of that voice is talking where someone could hear both
+    if (mm.pendingSay && t >= mm.pendingSay.at && !this.practice) {
+      const owner = this.members.find((m) => m.n === mm.as && !m.taken && !m.gone);
+      const tgt = this.members.find((m) => m.n === mm.target);
+      if (owner?.talk && this.open().some((l) => l !== owner && Math.hypot(l.x - owner.x, l.z - owner.z) < ECHO.VOICE_RANGE + 3 && Math.hypot(l.x - mm.x, l.z - mm.z) < ECHO.VOICE_RANGE + 3)) mm.pendingSay = null;
+      else if (tgt?.talk) {
+        if (t - (mm.pendingSay.born ?? t) > 4000) mm.pendingSay = null; // the moment has passed
+        else mm.pendingSay.at = t + 350 + this.rnd() * 300; // let them finish, then a human-sized gap
+      }
+    }
     if (mm.pendingSay && t >= mm.pendingSay.at) {
-      const ms = mm.pendingSay.clips.reduce((a, k) => a + (this.clips.get(k)?.ms ?? 0) + 150, 0);
+      const ms = 220 + mm.pendingSay.clips.reduce((a, k) => a + (this.clips.get(k)?.ms ?? 0) + 350, 0); // matches the client: a short lead-in and a breath between phrases
       mm.speakingUntil = t + ms;
       for (const k of mm.pendingSay.clips) { const c = this.clips.get(k); if (c) this.voices.set(c.owner, (this.voices.get(c.owner) ?? 0) + 1); }
       this.ev.event({ type: "say", mimic: mm.id, clips: mm.pendingSay.clips });
@@ -778,7 +843,7 @@ export class EchoRoom {
         mm.pitch = 0;
         crouchTo(false);
         if (t >= mm.nextHunt && mm.carry === null) {
-          const prey = this.alive().filter((m) => m.n !== mm.as && this.findable(mm, m) && !this.mimics.some((o) => o !== mm && o.target === m.n) && this.loneliness(m) > 6).sort((a, b) => this.loneliness(b) - this.loneliness(a))[0];
+          const prey = this.alive().filter((m) => this.other(mm, m) && this.findable(mm, m) && !this.mimics.some((o) => o !== mm && o.target === m.n) && this.loneliness(m) > 6).sort((a, b) => this.loneliness(b) - this.loneliness(a))[0];
           if (prey) { this.hunt(mm, prey, t); if ((mm.state as MimicState) === "stalk") break; }
           mm.nextHunt = t + 5000;
         }
@@ -845,7 +910,7 @@ export class EchoRoom {
         // close and in sight: walk up like a friend would
         if (d < 8 && seen) { mm.state = "follow"; mm.followSince = t; mm.path = []; break; }
         // calls out in the stolen voice from around the corner
-        if (!seen && d < 13 && !mm.pendingSay && t > mm.speakingUntil + 9000) this.say(mm, t, this.pick(target, mm.as, "call"), 300);
+        if (!seen && d < 13 && !mm.pendingSay && t > mm.speakingUntil + 9000) this.say(mm, t, this.pick(target, mm.as, "call", true, mm), 300);
         const goal: [number, number] = [echoTileOf(target.x), echoTileOf(target.z)];
         const last = mm.path[mm.path.length - 1];
         if (!last || last[0] !== goal[0] || last[1] !== goal[1]) mm.path = echoPath(this.tileOf(mm), goal);
@@ -857,7 +922,7 @@ export class EchoRoom {
         const d = Math.hypot(target.x - mm.x, target.z - mm.z);
         if (d > 11 || !this.los(target.x, target.z, mm.x, mm.z, 40)) { mm.state = "stalk"; mm.path = []; break; }
         // the friend it is pretending to be turns up: it slips away before anyone sees two of them
-        const real = this.alive().find((m) => m.n === mm.as);
+        const real = this.practice ? undefined : this.alive().find((m) => m.n === mm.as);
         if (real && this.los(real.x, real.z, mm.x, mm.z, 16)) { this.calm(mm, t); mm.path = echoPath(this.tileOf(mm), this.farTile(10)); break; }
         if (t - mm.followSince > COPY.PATIENCE_SEC * 1000) { this.calm(mm, t); mm.path = echoPath(this.tileOf(mm), this.farTile(10)); break; }
         // their back is turned and nobody else is watching: it closes in, quietly
@@ -887,8 +952,12 @@ export class EchoRoom {
         mm.pitch = 0;
         // they asked something: a late answer in the friend's voice
         if (target.askedAt > t - 1500 && !mm.pendingSay && t > mm.speakingUntil + 1500) {
-          this.say(mm, t, this.pick(target, mm.as, "answer"), (MIMIC.REPLY_MIN + this.rnd() * (MIMIC.REPLY_MAX - MIMIC.REPLY_MIN)) * 1000);
+          this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), (MIMIC.REPLY_MIN + this.rnd() * (MIMIC.REPLY_MAX - MIMIC.REPLY_MIN)) * 1000);
           target.askedAt = 0;
+        } else if ((target.spokeAt ?? 0) > t - 900 && !target.talk && !mm.pendingSay && t > mm.speakingUntil + 9000) {
+          // v36: they said something (no words known): now and then it answers, the way a friend says "yeah" back (decided once per thing said)
+          if (this.rnd() < (this.practice ? 0.5 : 0.25)) this.say(mm, t, this.pick(target, mm.as, "answer", true, mm), 500 + this.rnd() * 500);
+          target.spokeAt = 0;
         }
         break;
       }
@@ -908,7 +977,7 @@ export class EchoRoom {
           if (near) this.face(mm, Math.atan2(-(near.x - mm.x), -(near.z - mm.z)) + Math.sin(t / 1300) * 0.5, dt, 2.5);
         }
         // someone wanders off alone while waiting: easy prey
-        const lone = this.open().find((m) => m.n !== mm.as && this.loneliness(m) > 10 && Math.hypot(m.x - mm.x, m.z - mm.z) < 6 && this.lookAway(m, mm.x, mm.z) > 1.75);
+        const lone = this.open().find((m) => this.other(mm, m) && this.loneliness(m) > 10 && Math.hypot(m.x - mm.x, m.z - mm.z) < 6 && this.lookAway(m, mm.x, mm.z) > 1.75);
         if (lone && !this.open().some((m) => m !== lone && this.los(m.x, m.z, mm.x, mm.z, 14))) this.reveal(mm, lone, t);
         break;
       }
@@ -943,7 +1012,7 @@ export class EchoRoom {
   private listen(mm: Mimic, t: number) {
     if ((mm.state !== "wander" && mm.state !== "search") || mm.carry !== null) return;
     for (const m of this.alive()) {
-      if (m.n === mm.as) continue;
+      if (!this.other(mm, m)) continue;
       const d = Math.hypot(m.x - mm.x, m.z - mm.z);
       if (d > 16) continue;
       const walls = echoWallsBetween(mm.x, mm.z, m.x, m.z);
@@ -1041,12 +1110,12 @@ export class EchoRoom {
   private takeFor(mm: Mimic, target: Member, t: number, forGood: boolean) {
     target.strikes++;
     target.taken = true;
-    const gone = forGood || target.strikes >= COPY.STRIKES;
+    const gone = !this.practice && (forGood || target.strikes >= COPY.STRIKES);
     target.takenUntil = gone ? Infinity : t + COPY.BACK_SEC * 1000;
     if (gone) { target.gone = true; this.goal.gone = [...new Set([...this.goal.gone, target.n])]; }
     this.takenCount++;
     this.dropFuse(target);
-    this.dropGun(target);
+    if (!this.practice) this.dropGun(target);
     this.unhide(target, false);
     this.goal.pry = this.goal.pry.filter((p) => p[0] !== target.n);
     this.ev.event({ type: "taken", n: target.n, mimic: mm.id, lure: null, gone });
@@ -1085,7 +1154,7 @@ export class EchoRoom {
       // a disguised Copy feels the light on it: alone with you and close, it attacks; otherwise it walks out of the beam
       if (!revealed && v >= COPY.NOTICE_SEC && t > mm.slipUntil) {
         const witness = this.open().some((o) => o !== m && this.los(o.x, o.z, mm.x, mm.z, 14));
-        if (d < 5 && !witness && m.n !== mm.as) { this.reveal(mm, m, t); return true; }
+        if (d < 5 && !witness && this.other(mm, m)) { this.reveal(mm, m, t); return true; }
         mm.slipUntil = t + 3500;
         if (mm.state !== "lift") {
           if (mm.state === "follow" || mm.state === "stalk") { mm.state = "wander"; mm.target = null; mm.nextHunt = t + 10_000; }
@@ -1115,22 +1184,40 @@ export class EchoRoom {
    * Which voice pieces to play at `target`, in `owner`'s voice (the face it wears). Only pieces the target's device holds, never reused.
    * call: their name + "come here" / a call / "found it"; answer: "here" / a short phrase.
    */
-  private pick(target: Member, owner: number, kind: "call" | "answer", commit = true): string[] {
-    const pool = [...this.clips.values()].filter((c) => !c.used && c.owner === owner && c.owner !== target.n && c.have.has(target.n));
+  private pick(target: Member, owner: number, kind: "call" | "answer", commit = true, from?: { x: number; z: number }): string[] {
+    // v36: everyone close enough to hear it must hold the piece — a friend beside the target must not see a mouth move in silence
+    const ears = from ? this.open().filter((m) => m === target || Math.hypot(m.x - from.x, m.z - from.z) < ECHO.VOICE_RANGE + 2) : [target];
+    const pool = [...this.clips.values()].filter((c) => (!c.used || this.practice) && c.owner === owner && (this.practice || c.owner !== target.n) && ears.every((e) => c.have.has(e.n)));
     if (!pool.length) return [];
-    const has = (tag: ClipTag) => pool.filter((c) => c.tags.includes(tag));
-    // the best "plain" pieces sound like a full short phrase: the closer to 1.5 s the better
-    const short = pool.filter((c) => c.ms >= 700).sort((a, b) => Math.abs(a.ms - 1500) - Math.abs(b.ms - 1500));
-    let chosen: Clip[] = [];
-    if (kind === "answer") chosen = [has("here")[0] ?? has("call")[0] ?? short[0]].filter(Boolean) as Clip[];
-    else {
-      const name = has(`name:${target.n}`)[0];
-      const call = has("call").find((c) => c !== name);
+    // v36: score every piece for what it has to do, and stay quiet rather than play a bad one
+    const t = this.now();
+    const W: Record<string, number> = kind === "answer" ? { here: 4, short: 2, call: 1, question: -3, panic: -2, laugh: -2 } : { call: 3, found: 2, here: 1, question: 1, panic: -1, laugh: -2 };
+    const ideal = kind === "answer" ? 900 : 1500;
+    const score = (c: Clip) => {
+      let v = 0;
+      for (const tag of c.tags) v += W[tag] ?? 0;
+      if (c.tags.includes(`name:${target.n}`)) v += kind === "call" ? 4 : 1;
+      if (c.tags.some((x) => x.startsWith("name:") && x !== `name:${target.n}`)) v -= 2; // talking to somebody else
+      if (c.tags.includes(`name:${owner}`)) v -= 3; // people rarely say their own name
+      v -= Math.abs(c.ms - ideal) / 600;
+      const age = (t - c.at) / 1000;
+      if (c.heardBy?.has(target.n) && !this.practice) v -= age < 60 ? 3 : 1; // they heard that exact take
+      v += age > 20 && age < 240 ? 1 : age > 480 ? -1 : 0;
+      if (c.used) v -= 2.5; // practice may reuse pieces, but not the same one every time
+      if (c.tags.includes("found") && (c.placedThen ?? 0) < this.goal.placed) v -= 2; // old news
+      if (c.tags.includes("found") && this.goal.placed >= GOAL.FUSES) v -= 3;
+      return v + this.rnd() * 0.6;
+    };
+    const ranked = pool.map((c) => ({ c, v: score(c) })).sort((a, b) => b.v - a.v);
+    const best = ranked[0];
+    if (!best || best.v < (this.practice ? -99 : -1.5)) return [];
+    let chosen: Clip[] = [best.c];
+    // a name and a call said in the same breath can be joined (same moment, same mood); never two unrelated takes
+    if (kind === "call") {
+      const name = ranked.find((r) => r.v > 1 && r.c.tags.includes(`name:${target.n}`) && !r.c.tags.includes("call"))?.c;
+      const call = name ? ranked.find((r) => r.v > 1 && r.c !== name && r.c.tags.includes("call") && Math.abs(r.c.at - name.at) < 20_000 && name.ms + r.c.ms < 4000)?.c : null;
       if (name && call) chosen = [name, call];
-      // tiny fragments ("ah", a breath) give it away: better to stay quiet than play one
-      else chosen = [call ?? has("found")[0] ?? short[Math.floor(this.rnd() * Math.min(3, short.length))]].filter(Boolean) as Clip[];
     }
-    if (!chosen.length) return [];
     if (commit) chosen.forEach((c) => { c.used = true; });
     return chosen.map((c) => c.key);
   }
@@ -1235,6 +1322,7 @@ export class EchoRoom {
       players: this.members.map((m) => ({ id: m.id, n: m.n, name: m.name, color: m.color, look: m.look })),
       night: { awake: this.awake, wakeAt: this.wakeAt, exposed: this.exposed, taken: this.takenCount },
       goal: this.goal,
+      practice: this.practice || undefined,
     };
   }
 

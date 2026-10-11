@@ -9,6 +9,23 @@ export interface SiteVersion {
 }
 export const SITE_VERSIONS: readonly SiteVersion[] = [
   {
+    v: 36, name: "Practice Alone", date: "2026-10",
+    big: "Practice alone: a Copy of you, with your face, your name and your own voice, hunts you — and your pistol never runs out.",
+    more: [
+      "\"Practice alone\" in the lobby when you're the only one in the room: the Copy wakes after 15 seconds",
+      "It wears your face and name, moves like a player and talks back in your own recorded voice",
+      "Start with the pistol, unlimited bullets; you're never gone for good",
+      "Dust hangs in your torch beam, and the beam shows in the air",
+      "Smarter Copy voice: it waits for you to finish talking, never talks while the real friend is talking nearby, and its voice comes from mouth height",
+      "Smart Copy now listens on your device only — your voice is never sent to anyone's servers",
+      "The Copy answers when someone calls the name it is wearing, picks its words better and avoids lines you just heard it say live",
+      "Voices come round corners through doorways instead of through walls, with the echo of the room they're in",
+      "Word tags fixed: \"where\" no longer counts as \"here\", \"same\" no longer counts as \"Sam\"",
+      "Real recorded horror sounds (crying, screams, doors, the creature) play as soon as they're added",
+      "Nora's headlamp is really brighter again; the game view no longer opens cut off at the bottom",
+    ],
+  },
+  {
     v: 35, name: "Real Halls", date: "2026-10",
     big: "Echo Halls goes real: photo-scanned hospital, real people, a real pistol and recorded gunshots.",
     more: [

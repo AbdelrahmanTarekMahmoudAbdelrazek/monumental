@@ -64,7 +64,7 @@ export class RadioFx {
       const b = c.createBuffer(1, pcm.length, MIMIC.RATE);
       b.getChannelData(0).set(pcm);
       const s = c.createBufferSource(); s.buffer = b;
-      const g = c.createGain(); g.gain.value = 1.3;
+      const g = c.createGain(); g.gain.value = 1.0; // v36: same level as a real voice on the radio
       s.connect(g).connect(this.input); s.start(t);
       t += b.duration + 0.1;
     }

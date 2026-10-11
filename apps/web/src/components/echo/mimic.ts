@@ -1,3 +1,4 @@
+import { playHorror } from "./realAssets";
 import * as THREE from "three";
 import { pcmDecode, MIMIC } from "@monumental/shared";
 import type { SoundBank } from "./sound";
@@ -154,6 +155,8 @@ export class MimicSound {
   private growl: GainNode;
   private growlOsc: OscillatorNode;
   private playing: AudioBufferSourceNode[] = [];
+  private send: GainNode;
+  private roomNow: ConvolverNode;
 
   constructor(private sounds: SoundBank) {
     const ctx = sounds.ctx;
@@ -168,6 +171,7 @@ export class MimicSound {
     const send = ctx.createGain();
     send.gain.value = 0.2;
     this.gain.connect(send).connect(sounds.room);
+    this.send = send; this.roomNow = sounds.room;
 
     // slow, wet breathing: noise through a band filter, swelling in and out
     const len = ctx.sampleRate * 2;
@@ -210,25 +214,48 @@ export class MimicSound {
   /** Play stolen pieces one after another, as if a friend said them. */
   say(clips: BankClip[]) {
     const ctx = this.sounds.ctx;
-    let at = ctx.currentTime + 0.02;
+    const start = ctx.currentTime + 0.22;
+    let at = start, floor = 0;
     for (const c of clips) {
       const pcm = pcmDecode(c.bytes);
+      // the first 60 ms are the owner's room before they spoke: that is their mic's noise floor
+      const n = Math.min(pcm.length, Math.floor(MIMIC.RATE * 0.06));
+      let e = 0; for (let i = 0; i < n; i++) e += pcm[i] * pcm[i];
+      floor = Math.max(floor, Math.sqrt(e / Math.max(1, n)));
       const buf = ctx.createBuffer(1, pcm.length, MIMIC.RATE);
       buf.getChannelData(0).set(pcm);
       const src = ctx.createBufferSource();
       src.buffer = buf;
-      src.connect(this.filter);
+      src.playbackRate.value = 1 + (Math.random() - 0.5) * 0.024; // never exactly the same twice
+      const g = ctx.createGain(), dur = buf.duration / src.playbackRate.value;
+      g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(1, at + 0.012);
+      g.gain.setValueAtTime(1, at + dur - 0.03); g.gain.linearRampToValueAtTime(0, at + dur);
+      src.connect(g).connect(this.filter);
       src.start(at);
-      at += buf.duration + 0.15;
+      at += dur + 0.25 + Math.random() * 0.2; // a breath between phrases, not a machine gap
       this.playing.push(src);
       src.onended = () => { this.playing = this.playing.filter((x) => x !== src); };
+    }
+    // v36: a live mic is never digitally silent — a bed of that mic's own hiss around the words hides the edit
+    const lvl = Math.min(0.02, floor * 0.8);
+    if (lvl > 0.0005) {
+      const len = at - start + 0.4, nb = ctx.createBuffer(1, Math.ceil(len * ctx.sampleRate), ctx.sampleRate), d = nb.getChannelData(0);
+      let b = 0; for (let i = 0; i < d.length; i++) { b = 0.97 * b + 0.03 * (Math.random() * 2 - 1); d[i] = (Math.random() * 2 - 1) * 0.6 + b * 4; }
+      const ns = ctx.createBufferSource(); ns.buffer = nb;
+      const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 5000;
+      const ng = ctx.createGain(); const t0 = start - 0.2;
+      ng.gain.setValueAtTime(0, t0); ng.gain.linearRampToValueAtTime(lvl, t0 + 0.08); ng.gain.setValueAtTime(lvl, at - 0.1); ng.gain.linearRampToValueAtTime(0, at + 0.15);
+      ns.connect(lp).connect(ng).connect(this.filter); ns.start(t0); ns.stop(at + 0.2);
     }
   }
 
   /** Every frame: where it is, how loud its voice and breath are for me. */
-  update(x: number, z: number, voiceGain: number, cutoff: number, distance: number, walls: number, chasing: boolean, revealed = true) {
+  update(x: number, z: number, voiceGain: number, cutoff: number, distance: number, walls: number, chasing: boolean, revealed = true, crouch = false) {
     const t = this.sounds.ctx.currentTime;
-    this.sounds.place(this.panner, x, 2.1, z);
+    // v36: the mouth of whoever it is wearing (real voices come from 1.5 m; crouched 1.0); revealed, the creature is taller
+    this.sounds.place(this.panner, x, revealed ? 2.1 : crouch ? 1.0 : 1.5, z);
+    const rm = this.sounds.roomAt(x, z);
+    if (rm !== this.roomNow) { try { this.send.disconnect(); } catch { /* fine */ } this.send.connect(rm); this.roomNow = rm; }
     this.gain.gain.setTargetAtTime(voiceGain, t, 0.08);
     this.filter.frequency.setTargetAtTime(cutoff, t, 0.1);
     // in a friend's skin it breathes like nobody: no sound gives it away
@@ -242,6 +269,8 @@ export class MimicSound {
   /** The scream when a torch catches it. */
   shriek() {
     const ctx = this.sounds.ctx, t = ctx.currentTime;
+    // v36: a recorded creature when we have one
+    if (playHorror(ctx, "creature", this.panner, 0.9, 2.6, 0.92)) return;
     const out = ctx.createGain();
     out.gain.setValueAtTime(0, t);
     out.gain.linearRampToValueAtTime(0.5, t + 0.05);

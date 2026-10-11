@@ -1,9 +1,12 @@
+import { echoTile, echoTileOf } from "@monumental/shared";
 /** All game audio shares one AudioContext: footsteps, the building's hum, and (in voice.ts) friends' voices. */
 export class SoundBank {
   readonly ctx: AudioContext;
   readonly master: GainNode;
   /** The hospital's acoustics: every voice (real or copied) gets the same tiled-room echo, so a copy can't sound "drier" than a friend. */
   readonly room: ConvolverNode;
+  /** v36: the three room acoustics (`room` is the ward one). */
+  readonly rooms: Record<"small" | "ward" | "hall", ConvolverNode>;
   private noise: AudioBuffer;
   private ambience: AudioNode[] = [];
 
@@ -13,26 +16,37 @@ export class SoundBank {
     this.master = this.ctx.createGain();
     this.master.gain.value = 0.9;
     this.master.connect(this.ctx.destination);
-    this.room = this.ctx.createConvolver();
-    const sr = this.ctx.sampleRate, n = Math.floor(sr * 1.3);
-    const ir = this.ctx.createBuffer(2, n, sr);
-    for (let c = 0; c < 2; c++) {
-      const d = ir.getChannelData(c);
-      for (let i = 0; i < n; i++) {
-        const t = i / sr;
-        // a few early reflections off the tiles, then a damped tail
-        const early = [0.011, 0.019, 0.027, 0.041].some((e) => Math.abs(t - e - c * 0.002) < 0.0006) ? 0.5 : 0;
-        d[i] = (Math.random() * 2 - 1) * Math.exp(-t * 5.2) * (t < 0.008 ? t / 0.008 : 1) * 0.45 + early;
+    // v36: three acoustics. A voice gets the echo of the room it is IN (small tiled rooms ring short and bright,
+    // wards are medium, the halls and chapel are long), so a voice next door sounds like it is next door.
+    const make = (sec: number, decay: number, early: number[], wetGain: number) => {
+      const conv = this.ctx.createConvolver();
+      const sr = this.ctx.sampleRate, n = Math.floor(sr * sec);
+      const ir = this.ctx.createBuffer(2, n, sr);
+      for (let c = 0; c < 2; c++) {
+        const d = ir.getChannelData(c);
+        for (let i = 0; i < n; i++) {
+          const t = i / sr;
+          const e = early.some((x) => Math.abs(t - x - c * 0.002) < 0.0006) ? 0.5 : 0;
+          d[i] = (Math.random() * 2 - 1) * Math.exp(-t * decay) * (t < 0.008 ? t / 0.008 : 1) * 0.45 + e;
+        }
       }
-    }
-    this.room.buffer = ir;
-    const wet = this.ctx.createGain();
-    wet.gain.value = 0.55;
-    this.room.connect(wet).connect(this.master);
+      conv.buffer = ir;
+      const wet = this.ctx.createGain(); wet.gain.value = wetGain;
+      conv.connect(wet).connect(this.master);
+      return conv;
+    };
+    this.room = make(1.3, 5.2, [0.011, 0.019, 0.027, 0.041], 0.55);
+    this.rooms = { ward: this.room, small: make(0.8, 8.5, [0.006, 0.011, 0.016], 0.6), hall: make(2.4, 2.9, [0.027, 0.039, 0.052], 0.5) };
     const len = Math.floor(this.ctx.sampleRate * 0.4);
     this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  }
+
+  /** The acoustics of the room at (x, z). */
+  roomAt(x: number, z: number): ConvolverNode {
+    const k = echoTile(echoTileOf(x), echoTileOf(z));
+    return "wtmikpoxsj".includes(k) ? this.rooms.small : "chfrqldv".includes(k) ? this.rooms.hall : this.rooms.ward;
   }
 
   /** Must run inside a click / tap (browsers start audio paused). */

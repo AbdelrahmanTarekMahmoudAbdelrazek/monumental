@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { TorchAir } from "./atmosphere";
 import type RAPIER_NS from "@dimforge/rapier3d-compat";
 import { COPY, ECHO, ECHO_LOCKERS, ECHO_ROOMS, GOAL, HIDE, lockerFront, type EchoGoal, ECHO_TAKEN, ECHO_TEENS, MIMIC_STATES, TEEN_LOOKS, decodeEchoSnap, echoPath, type EchoTeenId, echoTile, echoTileOf, echoWallsBetween, tagText, type ClipTag, type EchoEvent, type EchoMeta, type EchoPeerState, type EchoSnap2 } from "@monumental/shared";
 import { makeTextures } from "./textures";
@@ -140,6 +141,10 @@ export class EchoEngine {
   private camera: THREE.PerspectiveCamera;
   private torch!: THREE.SpotLight;
   private torchRig = new THREE.Group();
+  private air: TorchAir | null = null;
+  /** Torch brightness: Nora's headlamp is brighter (the flicker multiplies this). */
+  private torchBase = 75;
+  private airDir = new THREE.Vector3();
   private lights: HospitalLights = { sources: [], pool: [] };
   private hospital: HospitalAudio | null = null;
   private goalView: ReturnType<typeof buildLevel>["goal"] | null = null;
@@ -294,6 +299,10 @@ export class EchoEngine {
     this.applyPerk();
     this.torchRig.add(this.torch, this.torch.target);
     this.scene.add(this.torchRig);
+    // v36: dust that shows only in the beam, and the beam itself in the air
+    this.air = new TorchAir(mobile ? 300 : 800);
+    this.scene.add(this.air.dust);
+    this.torchRig.add(this.air.beam);
     // a very faint glow around me so total darkness still shows the nearest walls
     const fill = new THREE.PointLight(0x9fb0c0, 0.35, 3.5, 2);
     this.camera.add(fill);
@@ -360,7 +369,7 @@ export class EchoEngine {
     await this.capture.start();
     if (this.smartLang && Transcriber.available()) {
       this.transcriber = new Transcriber();
-      this.transcriber.start(this.smartLang, (text) => {
+      void this.transcriber.start(this.smartLang, (text) => {
         // the words belong to the piece that just ended
         const now = performance.now();
         const piece = [...this.myPieces].reverse().find((x) => now - x.endedAt < 3000);
@@ -474,7 +483,7 @@ export class EchoEngine {
       this.hospital?.locker(lx, lz, true);
       const d = Math.hypot(lx - this.cur.x, lz - this.cur.z); if (d < 14) this.shake = Math.max(this.shake, 1 - d / 14);
     }
-    if (e.type === "gun" && e.n === this.opts.me) this.sounds.click();
+    if (e.type === "gun" && e.n === this.opts.me) { this.sounds.click(); this.hospital?.rack(); }
     if (e.type === "shot") {
       const d = Math.hypot(e.x - this.cur.x, e.z - this.cur.z);
       if (e.n !== this.opts.me) { this.hospital?.gunshot(e.x, 1.5, e.z, d); if (d < 10) this.shake = Math.max(this.shake, 0.3 * (1 - d / 10)); }
@@ -595,6 +604,8 @@ export class EchoEngine {
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(w, h, false);
     this.composer?.setPixelRatio(this.pixelRatio); this.composer?.setSize(w, h);
+    // the composer resizes the canvas with inline pixel sizes; give the size back to the page so the next resize measures the real box
+    this.renderer.domElement.style.width = "100%"; this.renderer.domElement.style.height = "100%";
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
   }
@@ -693,7 +704,8 @@ export class EchoEngine {
     const off = new THREE.Vector3(-0.1, -0.05, -0.55).applyQuaternion(this.camera.quaternion); // ahead of the hand, so the pistol isn't lit white
     this.torchRig.position.copy(this.camera.position).add(off);
     this.torchRig.quaternion.slerp(this.camera.quaternion, 1 - Math.exp(-dt * 16));
-    this.torch.intensity = this.torchOn && this.hiddenIn === null ? 75 * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
+    this.torch.intensity = this.torchOn && this.hiddenIn === null ? this.torchBase * (0.97 + Math.sin(now * 0.013) * 0.015 + Math.sin(now * 0.0071) * 0.015) : 0;
+    if (this.air) { this.airDir.set(0, 0, -1).applyQuaternion(this.torchRig.quaternion); this.air.update(this.torchRig.position, this.airDir, now / 1000, this.torch.intensity > 0, this.pixelRatio); }
 
     if (this.meta?.night?.awake && !this.goal?.result) {
       if (now > this.blackoutNext) {
@@ -761,7 +773,7 @@ export class EchoEngine {
       v.fig.root.visible = revealed;
       v.fig.update(m.x, m.z, m.yaw, m.state, m.speaking, dt, now / 1000);
       const mix = voiceMix({ x: px, z: pz }, m);
-      v.snd.update(m.x, m.z, this.isTaken ? 0 : mix.gain, mix.cutoff, d, walls, m.state === "chase", revealed);
+      v.snd.update(mix.x, mix.z, this.isTaken ? 0 : mix.gain, mix.cutoff, d, walls, m.state === "chase", revealed, m.crouch);
       // footsteps like anyone's (a friend who makes no sound would give it away)
       if (disguised && v.av) {
         const st = v.steps;
@@ -867,7 +879,8 @@ export class EchoEngine {
   private applyPerk() {
     if (!this.torch) return;
     const nora = this.myTeen() === "nora";
-    this.torch.intensity = nora ? 115 : 75;
+    this.torchBase = nora ? 115 : 75;
+    this.torch.intensity = this.torchBase;
     this.torch.distance = nora ? 38 : 30;
     this.torch.angle = nora ? 0.56 : 0.5;
   }
@@ -1135,6 +1148,7 @@ export class EchoEngine {
     this.transcriber?.stop();
     for (const [id, v] of [...this.mimics]) this.dropMimic(id, v);
     this.scareFig?.dispose();
+    this.air?.dispose();
     this.voice.destroy();
     this.hospital?.stop();
     this.sounds.close();

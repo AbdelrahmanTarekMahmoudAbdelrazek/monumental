@@ -156,11 +156,34 @@ export class Transcriber {
     return typeof window !== "undefined" && !!((window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition);
   }
 
-  start(lang: string, onText: (text: string) => void) {
+  /**
+   * On-device only (v36). Chrome can recognise speech on the device itself (`processLocally`), after a one-time
+   * language-pack download. If the browser can't, Smart Copy stays off: the voice is never sent to anyone's servers.
+   */
+  static async onDevice(lang: string): Promise<"available" | "downloadable" | "unavailable"> {
+    const C = Transcriber.ctor() as unknown as { available?: (o: { langs: string[]; processLocally: boolean }) => Promise<string> } | null;
+    if (!C?.available) return "unavailable";
+    try {
+      const a = await C.available({ langs: [lang], processLocally: true });
+      return a === "available" ? "available" : a === "downloadable" || a === "downloading" ? "downloadable" : "unavailable";
+    } catch { return "unavailable"; }
+  }
+  private static ctor() {
     const W = window as unknown as { SpeechRecognition?: new () => Rec; webkitSpeechRecognition?: new () => Rec };
-    const C = W.SpeechRecognition ?? W.webkitSpeechRecognition;
+    return W.SpeechRecognition ?? W.webkitSpeechRecognition ?? null;
+  }
+
+  async start(lang: string, onText: (text: string) => void): Promise<boolean> {
+    const C = Transcriber.ctor();
     if (!C) return false;
+    let state = await Transcriber.onDevice(lang);
+    if (state === "downloadable") {
+      const I = C as unknown as { install?: (o: { langs: string[]; processLocally: boolean }) => Promise<boolean> };
+      try { if (await I.install?.({ langs: [lang], processLocally: true })) state = "available"; } catch { /* needs a click, or not allowed */ }
+    }
+    if (state !== "available" || this.stopped) return false;
     const rec = new C();
+    (rec as unknown as { processLocally: boolean }).processLocally = true;
     rec.lang = lang;
     rec.continuous = true;
     rec.interimResults = false;
@@ -168,7 +191,8 @@ export class Transcriber {
       for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) onText(e.results[i][0].transcript);
     };
     rec.onend = () => { if (!this.stopped) { try { rec.start(); } catch { /* restarting too fast */ } } };
-    rec.onerror = () => {};
+    // never fall back to the cloud: any error ends Smart Copy for this match
+    rec.onerror = () => { this.stopped = true; try { rec.stop(); } catch { /* gone */ } };
     try { rec.start(); } catch { return false; }
     this.rec = rec;
     return true;

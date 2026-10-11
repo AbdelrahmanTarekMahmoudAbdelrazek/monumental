@@ -66,3 +66,65 @@ export async function loadRealSounds(ctx: BaseAudioContext): Promise<Partial<Rec
   }));
   return out;
 }
+
+/**
+ * v36: recorded horror sounds (Freesound, CC0) in /public/echo/real/h/<name>.mp3.
+ * Every one is optional: whatever is missing keeps its synthesized stand-in.
+ */
+export const HORROR_GROUPS = {
+  child: ["baby_cry_corridor_582341", "ghost_child_crying_216051", "child_scared_172731", "children_crying_203508", "child_giggle_203230", "creepy_girl_laugh_652992"],
+  moan: ["woman_moan_384214", "breathing_heavy_534473", "boy_frightened_260186"],
+  scream: ["woman_scream_219856", "woman_shriek_320740", "woman_fear_319258", "man_scream_221544", "weird_scream_353086"],
+  door: ["door_creak_219499", "door_creak2_219492", "door_creak_long_168650"],
+  slam: ["metal_door_slam_48980", "heavy_door_406197", "jail_door_80449", "metal_impact_530486", "body_fall_heavy_504626"],
+  rattle: ["chains_370877", "glass_break_141563", "body_fall_417994"],
+  behind: ["ghost_whispers_175944", "child_whisper_350763", "frightened_breathing_112557"],
+  music: ["music_box_creepy_274379", "music_box_338986"],
+  radio: ["radio_static_17804", "radio_noise_50750"],
+  creature: ["monster_screech_565024", "zombie_attack_213509", "monster_roar_398908", "growl_20208"],
+  bed: ["room_tone_144046", "terror_ambience_155142", "wind_graveyard_159509", "horror_inside_42203"],
+  buzz: ["faulty_fluorescent_125064", "fluorescent_119910"],
+  flicker: ["lights_flicker_on_232447", "neon_flicker_500693"],
+  gun: ["reload_1911_396331", "pistol_cock_405538", "shell_bounce_210102", "bullet_flesh_423301"],
+  far: ["distant_siren_469363", "heart_monitor_148897", "water_drip_cave_177958"],
+} as const;
+export type HorrorGroup = keyof typeof HORROR_GROUPS;
+let horrorBufs: Map<string, AudioBuffer> | null = null;
+let horrorLoading: Promise<Map<string, AudioBuffer>> | null = null;
+/** Load what exists (once per page). */
+export function loadHorror(ctx: BaseAudioContext): Promise<Map<string, AudioBuffer>> {
+  if (horrorLoading) return horrorLoading;
+  horrorLoading = (async () => {
+    const out = new Map<string, AudioBuffer>();
+    const names = [...new Set(Object.values(HORROR_GROUPS).flat())];
+    await Promise.all(names.map(async (n) => {
+      try { const r = await fetch(`${BASE}h/${n}.mp3`); if (!r.ok) return; out.set(n, await ctx.decodeAudioData(await r.arrayBuffer())); } catch { /* not downloaded yet */ }
+    }));
+    horrorBufs = out;
+    return out;
+  })();
+  return horrorLoading;
+}
+/** A random loaded recording from a group, or null (then the synth plays). */
+export function horror(group: HorrorGroup, rnd = Math.random): { name: string; buf: AudioBuffer } | null {
+  if (!horrorBufs) return null;
+  const have = HORROR_GROUPS[group].filter((n) => horrorBufs!.has(n));
+  if (!have.length) return null;
+  const name = have[Math.floor(rnd() * have.length)];
+  return { name, buf: horrorBufs.get(name)! };
+}
+/**
+ * Play a recording into `to`. Long files play a random slice (`maxSec`) with soft edges, so a 2-minute
+ * recording of a crying child gives many different short cries. Returns the source (or null).
+ */
+export function playHorror(ctx: BaseAudioContext, group: HorrorGroup, to: AudioNode, gain: number, maxSec = 6, rate = 1, at = 0): AudioBufferSourceNode | null {
+  const h = horror(group); if (!h) return null;
+  const s = ctx.createBufferSource(); s.buffer = h.buf; s.playbackRate.value = rate * (0.97 + Math.random() * 0.06);
+  const g = ctx.createGain();
+  const t0 = ctx.currentTime + at, len = h.buf.duration;
+  const dur = Math.min(len, maxSec), start = len > maxSec ? Math.random() * (len - dur) : 0, fade = Math.min(0.4, dur * 0.2);
+  g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(gain, t0 + (start > 0 ? fade : 0.005));
+  g.gain.setValueAtTime(gain, t0 + dur / s.playbackRate.value - fade); g.gain.linearRampToValueAtTime(0, t0 + dur / s.playbackRate.value);
+  s.connect(g).connect(to); s.start(t0, start, dur + 0.05);
+  return s;
+}

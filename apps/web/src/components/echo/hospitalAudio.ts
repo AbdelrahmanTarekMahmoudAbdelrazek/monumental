@@ -1,6 +1,6 @@
 import { ECHO } from "@monumental/shared";
 import type { LightSource } from "./hospital";
-import { loadRealSounds, type SoundName } from "./realAssets";
+import { loadRealSounds, loadHorror, playHorror, type HorrorGroup, type SoundName } from "./realAssets";
 
 const T = ECHO.TILE;
 const HT = 3.2;
@@ -76,9 +76,20 @@ export class HospitalAudio {
     this.next = { event: now + 4, music: now + 30, drip: now + 1, voice: now + 12, cry: now + 22, zone: now + 6, gliss: now + 25, boom: now + 40, pad: now, scream: now + 70 };
     this.startScore();
     void loadRealSounds(ac).then((r) => { this.rec = r; });
+    // v36: recorded horror (optional): a real room-tone bed under the drone once it has loaded
+    void loadHorror(ac).then(() => { if (this.started) this.bedLoop(); });
     for (const name of CLIPS) {
       fetch(`/echo/sfx/${name}.mp3`).then((r) => r.arrayBuffer()).then((b) => ac.decodeAudioData(b)).then((b) => { this.buf[name] = b; }).catch(() => {});
     }
+  }
+
+  /** A recording if we have one (true), else the caller plays its synth. */
+  private h(group: HorrorGroup, p: AudioNode, gain: number, maxSec = 6, rate = 1, at = 0) { return !!playHorror(this.ctx, group, p, gain, maxSec, rate, at); }
+  /** Endless real air: overlapping slices of room tone / wind / distant terror, very low. */
+  private bedLoop() {
+    if (!this.started) return;
+    const ok = this.h("bed", this.bus, 0.05 + Math.random() * 0.04, 14);
+    if (ok) this.timers.push(window.setTimeout(() => this.bedLoop(), 11000 + Math.random() * 2000));
   }
 
   stop() {
@@ -120,8 +131,8 @@ export class HospitalAudio {
       if (z) {
         const a = Math.random() * Math.PI * 2, r = Math.random() * 3;
         const p = this.panner(z.q.x + Math.cos(a) * r, z.q.kind === "child" ? 0.9 : 0.6, z.q.z + Math.sin(a) * r, 2.2);
-        if (z.q.kind === "child") { if (Math.random() < 0.35) this.clip("cry", p, 1.2, 0.95 + Math.random() * 0.15); else this.childCry(p); }
-        else if (z.q.kind === "moan") this.moan(p);
+        if (z.q.kind === "child") { if (Math.random() < 0.7 && this.h("child", p, 0.9, 5)) { /* a real child */ } else if (Math.random() < 0.35) this.clip("cry", p, 1.2, 0.95 + Math.random() * 0.15); else this.childCry(p); }
+        else if (z.q.kind === "moan") { if (!(Math.random() < 0.65 && this.h("moan", p, 0.8, 5))) this.moan(p); }
         else { this.staticBurst(p); if (Math.random() < 0.5) this.timers.push(window.setTimeout(() => this.clip("v_look_radio", p, 1.6, 0.9), 600)); }
         this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 9000));
       }
@@ -131,7 +142,7 @@ export class HospitalAudio {
       this.next.scream = now + 55 + Math.random() * 70;
       const a = Math.random() * Math.PI * 2, far = 22 + Math.random() * 14;
       const p = this.panner(ears.x + Math.cos(a) * far, 1.4, ears.z + Math.sin(a) * far, 4);
-      this.scream(p);
+      if (!(Math.random() < 0.75 && this.h("scream", p, 1.1, 3.5))) this.scream(p);
     }
     if (now > this.next.drip) { this.next.drip = now + 0.8 + Math.random() * 3; this.drip(ears); }
     if (now > this.next.music) { this.next.music = now + 45 + Math.random() * 40; this.musicBox(); }
@@ -140,16 +151,19 @@ export class HospitalAudio {
       this.next.cry = now + 35 + Math.random() * 30;
       const far = CRY_SPOTS.filter((q) => Math.hypot(q[0] - ears.x, q[1] - ears.z) > 9);
       const q = far[Math.floor(Math.random() * far.length)];
-      if (q) { const p = this.panner(q[0], 1.0, q[1], 3); if (Math.random() < 0.5) this.clip("cry", p, 1.4, 0.92 + Math.random() * 0.12); else this.childCry(p); }
+      if (q) { const p = this.panner(q[0], 1.0, q[1], 3); if (Math.random() < 0.7 && this.h("child", p, 1.0, 6)) { /* real */ } else if (Math.random() < 0.5) this.clip("cry", p, 1.4, 0.92 + Math.random() * 0.12); else this.childCry(p); }
     }
     if (now > this.next.event) {
       this.next.event = now + 6 + Math.random() * 10;
       const a = Math.random() * Math.PI * 2, far = 7 + Math.random() * 12;
       const p = this.panner(ears.x + Math.cos(a) * far, 1.2, ears.z + Math.sin(a) * far, 2.5);
       const r = Math.random();
-      if (r < 0.2) this.knocks(p); else if (r < 0.34) this.groan(p); else if (r < 0.44) this.moan(p); else if (r < 0.58) this.squeak(p); else if (r < 0.7) this.slam(p);
-      else if (r < 0.82) this.staticBurst(this.panner(RADIO.x, RADIO.y, RADIO.z, 2));
-      else { const b = ears.yaw; this.breath(this.panner(ears.x + Math.sin(b) * 1.6, 1.55, ears.z + Math.cos(b) * 1.6, 1)); } // right behind you
+      if (r < 0.16) this.knocks(p); else if (r < 0.28) { if (!this.h("door", p, 0.7, 4)) this.groan(p); } else if (r < 0.38) { if (!(Math.random() < 0.6 && this.h("moan", p, 0.7, 4))) this.moan(p); }
+      else if (r < 0.5) { if (!this.h("door", p, 0.6, 3)) this.squeak(p); } else if (r < 0.62) { if (!this.h("slam", p, 0.9, 3)) this.slam(p); }
+      else if (r < 0.68) { if (!this.h("rattle", p, 0.6, 4)) this.knocks(p); }
+      else if (r < 0.74) { if (!this.h("far", this.panner(ears.x + Math.cos(a) * 25, 1.5, ears.z + Math.sin(a) * 25, 6), 0.5, 6)) this.groan(p); }
+      else if (r < 0.84) { const rp = this.panner(RADIO.x, RADIO.y, RADIO.z, 2); if (!this.h("radio", rp, 0.25, 1.8)) this.staticBurst(rp); }
+      else { const b = ears.yaw, bp = this.panner(ears.x + Math.sin(b) * 1.6, 1.55, ears.z + Math.cos(b) * 1.6, 1); if (!(Math.random() < 0.6 && this.h("behind", bp, 0.55, 3.5))) this.breath(bp); } // right behind you
     }
   }
 
@@ -206,6 +220,8 @@ export class HospitalAudio {
     const g = this.ctx.createGain(); g.gain.value = gain; s.connect(g).connect(p); s.start(this.ctx.currentTime + at); return true;
   }
   /** A spent case hitting the floor. */
+  /** Pistol handling: the slide racked when you pick it up. */
+  rack() { if (!this.started) return; if (!this.h("gun", this.bus, 0.5, 1.5)) this.tone("square", 1800, this.bus, this.ctx.currentTime, 0.05, 0.05); }
   casing(x: number, z: number, v: number) { if (!this.started) return; const p = this.panner(x, 0.05, z, 1); this.playRec("metal_fall_259553", p, 0.08 * v, 1.6 + Math.random() * 0.4); this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 3000)); }
   gunshot(x: number, y: number, z: number, d: number) {
     if (!this.started) return;
@@ -235,7 +251,7 @@ export class HospitalAudio {
     const p = this.panner(x, 1.2, z, hard ? 4 : 1.5), t0 = this.ctx.currentTime;
     for (const [f, a] of [[318, 1], [547, 0.6], [893, 0.45], [1311, 0.3], [2033, 0.2]]) this.tone("triangle", f * (hard ? 0.9 : 1), p, t0, (hard ? 0.18 : 0.05) * a, hard ? 1.6 : 0.5);
     this.thud(p, t0, hard ? 60 : 120, hard ? 1 : 0.25);
-    if (hard) this.burst(p, t0, 0.6, "bandpass", 2600, 2, 0.3, 0.004);
+    if (hard) { this.burst(p, t0, 0.6, "bandpass", 2600, 2, 0.3, 0.004); this.h("slam", p, 0.7, 2); }
     this.timers.push(window.setTimeout(() => { try { p.disconnect(); } catch { /* gone */ } }, 3000));
   }
 
@@ -372,6 +388,7 @@ export class HospitalAudio {
   private drip(ears: Ears) { const ac = this.ctx, t0 = ac.currentTime, a = Math.random() * Math.PI * 2, r = 3 + Math.random() * 10; const p = this.panner(ears.x + Math.cos(a) * r, 0.2, ears.z + Math.sin(a) * r, 1); const o = ac.createOscillator(); o.frequency.setValueAtTime(1600 + Math.random() * 1600, t0); o.frequency.exponentialRampToValueAtTime(600, t0 + 0.08); const g = ac.createGain(); this.env(g, t0, 0.003, 0.18, 0.15); o.connect(g).connect(p); o.start(t0); o.stop(t0 + 0.25); }
   private musicBox() {
     const ac = this.ctx, p = this.panner(13 * T, 1.0, 3 * T, 1.5); let tt = ac.currentTime;
+    if (Math.random() < 0.6 && this.h("music", p, 0.5, 12, 0.94)) return;
     TUNE.forEach((m, i) => { const f = 440 * Math.pow(2, (m - 69) / 12) * (1 + (Math.random() - 0.5) * 0.012); this.tone("triangle", f, p, tt, 0.11, 1.6); this.tone("sine", f * 2.01, p, tt, 0.03, 1.2); tt += 0.42 + i * i * 0.004; });
   }
   private voiceEvent(ears: Ears) {
